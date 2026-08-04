@@ -1,0 +1,6 @@
+.DS_Store
+.codegraph
+.omx/
+/bin/
+/coverage.out
+/tnew7.txt
