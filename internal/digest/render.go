@@ -1,3 +1,4 @@
+// Package digest renders Telegram-safe message chunks.
 package digest
 
 import (
@@ -10,6 +11,7 @@ import (
 	"github.com/kemmko/alib-fetcher/internal/alib"
 )
 
+// ErrMessageTooLong indicates that one listing cannot fit into a message.
 var ErrMessageTooLong = errors.New("digest item exceeds message limit")
 
 const titleLimit = 80

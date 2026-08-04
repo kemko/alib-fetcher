@@ -1,0 +1,137 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+  modules-download-mode: readonly
+
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - contextcheck
+    - copyloopvar
+    - dupl
+    - dupword
+    - durationcheck
+    - errcheck
+    - errorlint
+    - exhaustive
+    - fatcontext
+    - funlen
+    - gocognit
+    - gocyclo
+    - gosec
+    - govet
+    - ineffassign
+    - intrange
+    - lll
+    - makezero
+    - misspell
+    - musttag
+    - nestif
+    - nilerr
+    - nilnil
+    - noctx
+    - nolintlint
+    - perfsprint
+    - prealloc
+    - reassign
+    - recvcheck
+    - revive
+    - sloglint
+    - staticcheck
+    - testifylint
+    - unconvert
+    - unparam
+    - unused
+    - usestdlibvars
+    - usetesting
+    - wastedassign
+    - whitespace
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+    exhaustive:
+      default-signifies-exhaustive: false
+      check:
+        - switch
+        - map
+    funlen:
+      lines: 90
+      statements: 60
+      ignore-comments: true
+    gocognit:
+      min-complexity: 25
+    gocyclo:
+      min-complexity: 15
+    gosec:
+      excludes:
+        - G104
+    govet:
+      enable-all: true
+      settings:
+        shadow:
+          strict: true
+    lll:
+      line-length: 120
+      tab-width: 4
+    nestif:
+      min-complexity: 4
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    perfsprint:
+      integer-format: true
+      error-format: true
+      bool-format: true
+      string-format: true
+    revive:
+      severity: warning
+      rules:
+        - name: error-naming
+        - name: error-return
+        - name: errorf
+        - name: exported
+        - name: if-return
+        - name: indent-error-flow
+        - name: package-comments
+        - name: range-val-in-closure
+        - name: redefines-builtin-id
+        - name: superfluous-else
+        - name: unhandled-error
+        - name: var-naming
+    sloglint:
+      attr-only: true
+      context: scope
+      key-naming-case: snake
+      no-global: all
+      no-mixed-args: true
+      no-raw-keys: true
+      static-msg: true
+    testifylint:
+      enable-all: true
+      disable:
+        - require-error
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - dupl
+          - funlen
+          - gosec
+          - lll
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/kemmko/alib-fetcher
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

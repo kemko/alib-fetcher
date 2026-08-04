@@ -13,10 +13,12 @@ import (
 )
 
 var (
-	ErrNoBooks       = errors.New("page contains no book listings")
 	pricePattern     = regexp.MustCompile(`Цена:\s*([0-9][0-9\s]*\s*руб\.)`)
 	conditionPattern = regexp.MustCompile(`Состояние:\s*(.*?)(?:\s+Смотрите:|$)`)
 )
+
+// ErrNoBooks indicates that the source page contained no recognizable listings.
+var ErrNoBooks = errors.New("page contains no book listings")
 
 // Parse decodes an Alib.ru page and extracts unique sale listings.
 func Parse(reader io.Reader, baseURL *url.URL, contentType string) ([]Book, error) {

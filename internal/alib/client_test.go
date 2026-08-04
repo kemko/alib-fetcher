@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/kemmko/alib-fetcher/internal/alib"
+
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -16,10 +18,10 @@ func Test_Client_fetches_and_parses_page(t *testing.T) {
 
 	// Given
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		require.Equal(t, "alib-fetcher/1.0", request.Header.Get("User-Agent"))
+		assert.Equal(t, "alib-fetcher/1.0", request.Header.Get("User-Agent"))
 		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, err := writer.Write([]byte(`<p><b>Книга.</b> Цена: 100 руб. <a href="/book.html"><b>Купить</b></a></p>`))
-		require.NoError(t, err)
+		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
 	client, err := alib.NewClient(server.URL, time.Second)

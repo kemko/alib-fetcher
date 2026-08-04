@@ -7,6 +7,7 @@ import (
 
 	"github.com/kemmko/alib-fetcher/internal/alib"
 	"github.com/kemmko/alib-fetcher/internal/app"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -82,9 +83,9 @@ func (f *fakeState) MarkSent(_ context.Context, books []alib.Book) error {
 }
 
 type fakeSender struct {
+	err      error
 	messages []string
 	failAt   int
-	err      error
 }
 
 func (f *fakeSender) Send(_ context.Context, text string) error {

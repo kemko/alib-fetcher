@@ -1,3 +1,4 @@
+// Package app coordinates the daily digest use case.
 package app
 
 import (
@@ -71,11 +72,11 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 		return result, fmt.Errorf("render digest: %w", err)
 	}
 	for _, chunk := range chunks {
-		if err := s.dependencies.Sender.Send(ctx, chunk.Text); err != nil {
-			return result, fmt.Errorf("send digest: %w", err)
+		if sendErr := s.dependencies.Sender.Send(ctx, chunk.Text); sendErr != nil {
+			return result, fmt.Errorf("send digest: %w", sendErr)
 		}
-		if err := s.dependencies.State.MarkSent(ctx, chunk.Books); err != nil {
-			return result, fmt.Errorf("record delivered listings: %w", err)
+		if markErr := s.dependencies.State.MarkSent(ctx, chunk.Books); markErr != nil {
+			return result, fmt.Errorf("record delivered listings: %w", markErr)
 		}
 		result.Sent += len(chunk.Books)
 	}

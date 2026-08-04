@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/kemmko/alib-fetcher/internal/config"
+
 	"github.com/stretchr/testify/require"
 )
 

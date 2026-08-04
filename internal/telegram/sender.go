@@ -1,3 +1,4 @@
+// Package telegram sends digest messages through the Telegram Bot API.
 package telegram
 
 import (
@@ -13,10 +14,11 @@ import (
 	"time"
 )
 
-var (
-	ErrRejected = errors.New("telegram rejected the message")
-	ErrRequest  = errors.New("telegram request failed")
-)
+// ErrRejected indicates that Telegram returned an unsuccessful API response.
+var ErrRejected = errors.New("telegram rejected the message")
+
+// ErrRequest indicates that the Bot API could not be reached.
+var ErrRequest = errors.New("telegram request failed")
 
 // Config contains the Telegram Bot API connection settings.
 type Config struct {
@@ -58,7 +60,7 @@ func NewSender(config Config) (*Sender, error) {
 }
 
 // Send posts one HTML-formatted digest message.
-func (s *Sender) Send(ctx context.Context, text string) error {
+func (s *Sender) Send(ctx context.Context, text string) (sendErr error) {
 	payload := struct {
 		ChatID             string             `json:"chat_id"`
 		Text               string             `json:"text"`
@@ -90,11 +92,15 @@ func (s *Sender) Send(ctx context.Context, text string) error {
 		}
 		return ErrRequest
 	}
-	defer response.Body.Close()
+	defer func() {
+		if closeErr := response.Body.Close(); closeErr != nil {
+			sendErr = errors.Join(sendErr, fmt.Errorf("close Telegram response: %w", closeErr))
+		}
+	}()
 
 	var result apiResponse
-	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&result); err != nil {
-		return fmt.Errorf("decode Telegram response: %w", err)
+	if decodeErr := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&result); decodeErr != nil {
+		return fmt.Errorf("decode Telegram response: %w", decodeErr)
 	}
 	if response.StatusCode != http.StatusOK || !result.OK {
 		if result.Description == "" {
@@ -111,6 +117,6 @@ type linkPreviewOptions struct {
 }
 
 type apiResponse struct {
-	OK          bool   `json:"ok"`
 	Description string `json:"description"`
+	OK          bool   `json:"ok"`
 }

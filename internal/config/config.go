@@ -1,3 +1,4 @@
+// Package config parses and validates process environment configuration.
 package config
 
 import (
@@ -8,6 +9,7 @@ import (
 	"time"
 )
 
+// ErrInvalid indicates that one or more environment values are unusable.
 var ErrInvalid = errors.New("invalid configuration")
 
 const (
@@ -23,12 +25,12 @@ const (
 
 // Config contains validated process configuration.
 type Config struct {
+	Location        *time.Location
 	TelegramToken   string
 	TelegramChatID  string
 	TelegramAPIBase string
 	AlibURL         string
 	StatePath       string
-	Location        *time.Location
 	HTTPTimeout     time.Duration
 	MessageLimit    int
 	hour            int
@@ -45,11 +47,11 @@ func Load() (Config, error) {
 
 	runAt, err := time.Parse("15:04", valueOrDefault("RUN_AT", defaultRunAt))
 	if err != nil {
-		return Config{}, fmt.Errorf("%w: RUN_AT must use HH:MM: %v", ErrInvalid, err)
+		return Config{}, fmt.Errorf("%w: RUN_AT must use HH:MM: %w", ErrInvalid, err)
 	}
 	location, err := time.LoadLocation(valueOrDefault("TIMEZONE", defaultTimezone))
 	if err != nil {
-		return Config{}, fmt.Errorf("%w: load TIMEZONE: %v", ErrInvalid, err)
+		return Config{}, fmt.Errorf("%w: load TIMEZONE: %w", ErrInvalid, err)
 	}
 	timeout, err := time.ParseDuration(valueOrDefault("HTTP_TIMEOUT", defaultHTTPTimeout.String()))
 	if err != nil || timeout <= 0 {

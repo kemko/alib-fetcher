@@ -1,3 +1,4 @@
+// Package main wires the alib-fetcher service process.
 package main
 
 import (
@@ -15,13 +16,23 @@ import (
 	"github.com/kemmko/alib-fetcher/internal/config"
 	"github.com/kemmko/alib-fetcher/internal/store"
 	"github.com/kemmko/alib-fetcher/internal/telegram"
+
 	"github.com/robfig/cron/v3"
+)
+
+const (
+	logKeyError    = "error"
+	logKeyFetched  = "fetched"
+	logKeyNew      = "new"
+	logKeyRunAt    = "run_at"
+	logKeySent     = "sent"
+	logKeyTimezone = "timezone"
 )
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	if err := run(logger); err != nil {
-		logger.Error("service.failed", slog.Any("error", err))
+		logger.Error("service.failed", slog.Any(logKeyError, err))
 		os.Exit(1)
 	}
 }
@@ -52,8 +63,8 @@ func run(logger *slog.Logger) (runErr error) {
 		return err
 	}
 	defer func() {
-		if err := state.Close(); err != nil {
-			runErr = errors.Join(runErr, err)
+		if closeErr := state.Close(); closeErr != nil {
+			runErr = errors.Join(runErr, closeErr)
 		}
 	}()
 
@@ -74,18 +85,18 @@ func run(logger *slog.Logger) (runErr error) {
 		cron.WithLocation(settings.Location),
 		cron.WithChain(cron.SkipIfStillRunning(cron.DiscardLogger)),
 	)
-	if _, err := scheduler.AddFunc(settings.CronSpec(), func() {
-		if err := executeJob(ctx, service, logger); err != nil {
-			logger.ErrorContext(ctx, "digest.failed", slog.Any("error", err))
+	if _, scheduleErr := scheduler.AddFunc(settings.CronSpec(), func() {
+		if jobErr := executeJob(ctx, service, logger); jobErr != nil {
+			logger.ErrorContext(ctx, "digest.failed", slog.Any(logKeyError, jobErr))
 		}
-	}); err != nil {
-		return fmt.Errorf("schedule digest: %w", err)
+	}); scheduleErr != nil {
+		return fmt.Errorf("schedule digest: %w", scheduleErr)
 	}
 
 	scheduler.Start()
 	logger.InfoContext(ctx, "scheduler.started",
-		slog.String("run_at", settings.CronSpec()),
-		slog.String("timezone", settings.Location.String()),
+		slog.String(logKeyRunAt, settings.CronSpec()),
+		slog.String(logKeyTimezone, settings.Location.String()),
 	)
 	<-ctx.Done()
 	<-scheduler.Stop().Done()
@@ -101,9 +112,9 @@ func executeJob(ctx context.Context, service *app.Service, logger *slog.Logger) 
 		return err
 	}
 	logger.InfoContext(ctx, "digest.completed",
-		slog.Int("fetched", result.Fetched),
-		slog.Int("new", result.New),
-		slog.Int("sent", result.Sent),
+		slog.Int(logKeyFetched, result.Fetched),
+		slog.Int(logKeyNew, result.New),
+		slog.Int(logKeySent, result.Sent),
 	)
 
 	return nil

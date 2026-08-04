@@ -7,6 +7,7 @@ import (
 
 	"github.com/kemmko/alib-fetcher/internal/alib"
 	"github.com/kemmko/alib-fetcher/internal/store"
+
 	"github.com/stretchr/testify/require"
 )
 

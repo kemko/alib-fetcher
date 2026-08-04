@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.12.2
+          args: --timeout=5m
+      - name: Test
+        run: go test -race -shuffle=on -count=1 ./...
+      - name: Build
+        run: go build -trimpath ./cmd/alib-fetcher
+      - name: Scan Go vulnerabilities
+        uses: golang/govulncheck-action@v1
+        with:
+          go-package: ./...

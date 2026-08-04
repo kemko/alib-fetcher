@@ -9,6 +9,7 @@ import (
 	"time"
 )
 
+// ErrUnexpectedStatus indicates that Alib.ru did not return an HTTP 200 response.
 var ErrUnexpectedStatus = errors.New("alib returned an unexpected status")
 
 // Client fetches book listings from a configured Alib.ru page.
@@ -40,7 +41,7 @@ func NewClient(rawURL string, timeout time.Duration) (*Client, error) {
 }
 
 // Fetch downloads and parses the current listings page.
-func (c *Client) Fetch(ctx context.Context) ([]Book, error) {
+func (c *Client) Fetch(ctx context.Context) (books []Book, fetchErr error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint.String(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("create alib request: %w", err)
@@ -51,13 +52,17 @@ func (c *Client) Fetch(ctx context.Context) ([]Book, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fetch alib page: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		if closeErr := response.Body.Close(); closeErr != nil {
+			fetchErr = errors.Join(fetchErr, fmt.Errorf("close alib response: %w", closeErr))
+		}
+	}()
 
 	if response.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%w: %s", ErrUnexpectedStatus, response.Status)
 	}
 
-	books, err := Parse(response.Body, c.endpoint, response.Header.Get("Content-Type"))
+	books, err = Parse(response.Body, c.endpoint, response.Header.Get("Content-Type"))
 	if err != nil {
 		return nil, fmt.Errorf("parse alib response: %w", err)
 	}

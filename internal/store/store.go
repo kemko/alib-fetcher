@@ -1,3 +1,4 @@
+// Package store persists delivered listing identifiers.
 package store
 
 import (
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kemmko/alib-fetcher/internal/alib"
+
 	bolt "go.etcd.io/bbolt"
 )
 
@@ -31,11 +33,11 @@ func Open(path string) (*Store, error) {
 	}
 
 	store := &Store{db: db}
-	if err := db.Update(func(tx *bolt.Tx) error {
+	if initializationErr := db.Update(func(tx *bolt.Tx) error {
 		_, createErr := tx.CreateBucketIfNotExists(sentBucket)
 		return createErr
-	}); err != nil {
-		initializationErr := fmt.Errorf("initialize state database: %w", err)
+	}); initializationErr != nil {
+		initializationErr = fmt.Errorf("initialize state database: %w", initializationErr)
 		if closeErr := db.Close(); closeErr != nil {
 			return nil, errors.Join(initializationErr, fmt.Errorf("close state database: %w", closeErr))
 		}

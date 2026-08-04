@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/kemmko/alib-fetcher/internal/telegram"
+
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -17,7 +19,7 @@ func Test_Sender_posts_HTML_message_with_preview_disabled(t *testing.T) {
 
 	// Given
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		require.Equal(t, "/bottest-token/sendMessage", request.URL.Path)
+		assert.Equal(t, "/bottest-token/sendMessage", request.URL.Path)
 		var payload struct {
 			ChatID             string `json:"chat_id"`
 			Text               string `json:"text"`
@@ -26,14 +28,14 @@ func Test_Sender_posts_HTML_message_with_preview_disabled(t *testing.T) {
 				Disabled bool `json:"is_disabled"`
 			} `json:"link_preview_options"`
 		}
-		require.NoError(t, json.NewDecoder(request.Body).Decode(&payload))
-		require.Equal(t, "-100123", payload.ChatID)
-		require.Equal(t, "<b>digest</b>", payload.Text)
-		require.Equal(t, "HTML", payload.ParseMode)
-		require.True(t, payload.LinkPreviewOptions.Disabled)
+		assert.NoError(t, json.NewDecoder(request.Body).Decode(&payload))
+		assert.Equal(t, "-100123", payload.ChatID)
+		assert.Equal(t, "<b>digest</b>", payload.Text)
+		assert.Equal(t, "HTML", payload.ParseMode)
+		assert.True(t, payload.LinkPreviewOptions.Disabled)
 		writer.Header().Set("Content-Type", "application/json")
 		_, err := writer.Write([]byte(`{"ok":true,"result":{}}`))
-		require.NoError(t, err)
+		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
 	sender, err := telegram.NewSender(telegram.Config{
@@ -58,7 +60,7 @@ func Test_Sender_returns_API_description_on_rejection(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		_, err := writer.Write([]byte(`{"ok":false,"description":"chat not found"}`))
-		require.NoError(t, err)
+		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
 	sender, err := telegram.NewSender(telegram.Config{

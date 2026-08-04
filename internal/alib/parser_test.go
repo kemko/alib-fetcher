@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/kemmko/alib-fetcher/internal/alib"
+
 	"github.com/stretchr/testify/require"
 	"golang.org/x/text/encoding/charmap"
 )
