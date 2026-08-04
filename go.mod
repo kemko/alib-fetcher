@@ -1,13 +1,13 @@
 module github.com/kemmko/alib-fetcher
 
-go 1.26.0
+go 1.26.5
 
 require (
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/stretchr/testify v1.11.1
 	go.etcd.io/bbolt v1.4.3
-	golang.org/x/net v0.50.0
-	golang.org/x/text v0.34.0
+	golang.org/x/net v0.55.0
+	golang.org/x/text v0.37.0
 )
 
 require (

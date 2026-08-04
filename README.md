@@ -61,7 +61,7 @@ docker run -d --name alib-fetcher \
 
 ## Development
 
-Go 1.26 and golangci-lint v2 are required.
+Go 1.26.5 and golangci-lint v2 are required.
 
 ```bash
 make verify

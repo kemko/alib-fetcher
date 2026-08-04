@@ -98,15 +98,14 @@ func parseBook(node *html.Node, baseURL *url.URL) (Book, bool) {
 }
 
 func normalizedText(node *html.Node) string {
-	var builder strings.Builder
+	parts := make([]string, 0)
 	for descendant := range node.Descendants() {
 		if descendant.Type == html.TextNode {
-			builder.WriteString(descendant.Data)
-			builder.WriteByte(' ')
+			parts = append(parts, descendant.Data)
 		}
 	}
 
-	return strings.Join(strings.Fields(builder.String()), " ")
+	return strings.Join(strings.Fields(strings.Join(parts, " ")), " ")
 }
 
 func attribute(node *html.Node, key string) string {
