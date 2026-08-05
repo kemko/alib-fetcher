@@ -109,7 +109,7 @@ func parseBook(node *html.Node, baseURL *url.URL) (Book, bool) {
 }
 
 func listingFragments(node, titleNode, sellerNode, buyNode *html.Node) [3]string {
-	var fragments [3]strings.Builder
+	var fragments [3][]string
 	section := -1
 	var visit func(*html.Node)
 	visit = func(current *html.Node) {
@@ -127,11 +127,11 @@ func listingFragments(node, titleNode, sellerNode, buyNode *html.Node) [3]string
 			}
 
 			if section >= 0 && child.Type == html.ElementNode && child.Data == "br" {
-				fragments[section].WriteString(lineBreakMarker)
+				fragments[section] = append(fragments[section], lineBreakMarker)
 				continue
 			}
 			if section >= 0 && child.Type == html.TextNode {
-				fragments[section].WriteString(child.Data)
+				fragments[section] = append(fragments[section], child.Data)
 				continue
 			}
 
@@ -140,7 +140,11 @@ func listingFragments(node, titleNode, sellerNode, buyNode *html.Node) [3]string
 	}
 	visit(node)
 
-	return [3]string{fragments[0].String(), fragments[1].String(), fragments[2].String()}
+	return [3]string{
+		strings.Join(fragments[0], ""),
+		strings.Join(fragments[1], ""),
+		strings.Join(fragments[2], ""),
+	}
 }
 
 func normalizedFragment(fragment string) string {

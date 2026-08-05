@@ -57,8 +57,7 @@ func Render(books []alib.Book, limit int) ([]Chunk, error) {
 }
 
 func renderBook(book alib.Book) string {
-	var rendered strings.Builder
-	rendered.WriteString("<b>" + html.EscapeString(strings.TrimSpace(book.Title)) + "</b>")
+	rendered := "<b>" + html.EscapeString(strings.TrimSpace(book.Title)) + "</b>"
 	appendText(&rendered, book.TextBeforeSeller)
 	if book.Seller != "" {
 		appendLink(&rendered, book.SellerURL, book.Seller)
@@ -66,38 +65,38 @@ func renderBook(book alib.Book) string {
 	appendText(&rendered, book.TextBeforeBuy)
 	appendLink(&rendered, book.BuyURL, "Купить")
 	appendText(&rendered, book.TextAfterBuy)
-	if !strings.HasSuffix(rendered.String(), "\n") {
-		rendered.WriteByte('\n')
+	if !strings.HasSuffix(rendered, "\n") {
+		rendered += "\n"
 	}
 	if book.HasPhotos {
-		rendered.WriteString("Фото: есть")
+		rendered += "Фото: есть"
 	} else {
-		rendered.WriteString("Фото: нет")
+		rendered += "Фото: нет"
 	}
 
-	return rendered.String()
+	return rendered
 }
 
-func appendText(rendered *strings.Builder, value string) {
+func appendText(rendered *string, value string) {
 	if value == "" {
 		return
 	}
 	appendSeparator(rendered, value)
-	rendered.WriteString(html.EscapeString(value))
+	*rendered += html.EscapeString(value)
 }
 
-func appendLink(rendered *strings.Builder, target, label string) {
+func appendLink(rendered *string, target, label string) {
 	appendSeparator(rendered, label)
 	if target == "" {
-		rendered.WriteString(html.EscapeString(label))
+		*rendered += html.EscapeString(label)
 		return
 	}
 
-	rendered.WriteString(`<a href="` + html.EscapeString(target) + `">` + html.EscapeString(label) + `</a>`)
+	*rendered += `<a href="` + html.EscapeString(target) + `">` + html.EscapeString(label) + `</a>`
 }
 
-func appendSeparator(rendered *strings.Builder, next string) {
-	current := rendered.String()
+func appendSeparator(rendered *string, next string) {
+	current := *rendered
 	last, _ := utf8.DecodeLastRuneInString(current)
 	first, _ := utf8.DecodeRuneInString(next)
 	if current == "" || next == "" || unicode.IsSpace(last) || unicode.IsSpace(first) {
@@ -107,5 +106,5 @@ func appendSeparator(rendered *strings.Builder, next string) {
 		return
 	}
 
-	rendered.WriteByte(' ')
+	*rendered += " "
 }
