@@ -173,6 +173,11 @@ binaries.
 
 ## Change and commit policy
 
+- For every task that modifies repository files, the default deliverable is one
+  or more commits. After verification, stage all and only task-related changes
+  and commit them before handoff without waiting for a separate request. Skip
+  the commit only when the user explicitly asks not to commit or verification
+  cannot complete; in that case, report the exact worktree and index state.
 - Keep changes focused and commit them in coherent, independently understandable
   parts. Do not combine unrelated refactors, behavior changes, and dependency
   updates in one commit.
