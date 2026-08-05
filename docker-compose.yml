@@ -1,0 +1,26 @@
+---
+
+services:
+  alib-fetcher:
+    image: ${ALIB_FETCHER_IMAGE:-ghcr.io/kemko/alib-fetcher:latest}
+    restart: unless-stopped
+    read_only: true
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN is required}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:?TELEGRAM_CHAT_ID is required}
+      RUN_AT: ${RUN_AT:-00:00}
+      TIMEZONE: ${TIMEZONE:-Europe/Moscow}
+      STATE_PATH: /var/lib/alib-fetcher/state.db
+      ALIB_URL: ${ALIB_URL:-https://www.alib.ru/tramka.phtml?tnew=7}
+      TELEGRAM_API_BASE: ${TELEGRAM_API_BASE:-https://api.telegram.org}
+      HTTP_TIMEOUT: ${HTTP_TIMEOUT:-30s}
+      MESSAGE_LIMIT: ${MESSAGE_LIMIT:-4000}
+    volumes:
+      - alib-fetcher-state:/var/lib/alib-fetcher
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  alib-fetcher-state:

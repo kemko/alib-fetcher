@@ -62,6 +62,18 @@ docker run -d --name alib-fetcher \
   ghcr.io/<owner>/<repository>:latest
 ```
 
+Alternatively, start the service with the Compose v3.8 configuration:
+
+```bash
+export TELEGRAM_BOT_TOKEN=...
+export TELEGRAM_CHAT_ID=...
+docker compose up -d
+```
+
+With Podman Desktop, use `podman compose up -d`. Compose stores the database in
+the persistent named volume `alib-fetcher-state`. Set `ALIB_FETCHER_IMAGE` to
+override the default `ghcr.io/kemmko/alib-fetcher:latest` image.
+
 ## Development
 
 Go 1.26.5 and golangci-lint v2 are required.
