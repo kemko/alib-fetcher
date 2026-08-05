@@ -133,15 +133,20 @@ cycle, including from a clean checkout:
 - `make test` runs the complete test suite with the race detector, shuffled
   order, and no result cache.
 - `make build` compiles `bin/alib-fetcher` with reproducible path trimming.
-- `make tools` installs the exact golangci-lint version used by CI.
+- `make tools` installs the exact golangci-lint version used by CI under the
+  ignored project-local `bin/tools` tree.
 - `make verify` runs `fmt-check`, `lint`, `test`, and `build`; it is also the
-  default `make` target.
+  default `make` target and provisions the pinned tool automatically.
 
 When requirements change, update Makefile targets so these commands keep doing
 what their names promise. CI and agent workflows must call the Make targets,
 not duplicate their underlying `go` or `golangci-lint` commands. Any
 environment-specific setup belongs inside or under the Make targets rather
 than in undocumented one-off verification commands.
+
+Quality targets must invoke repository-managed tools by explicit paths. Never
+accept a successful verification from an arbitrary same-named executable found
+earlier in `PATH`; `make tools` and `make verify` must use the same binary.
 
 The lint configuration is intentionally strict. Important local constraints
 include 120-column lines, gofumpt/goimports formatting, exhaustive error

@@ -18,8 +18,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Install golangci-lint
-        run: make tools
       - name: Verify
         run: make verify
       - name: Scan Go vulnerabilities
