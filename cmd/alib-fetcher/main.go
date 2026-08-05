@@ -88,24 +88,30 @@ func run(logger *slog.Logger) (runErr error) {
 		cron.WithLocation(settings.Location),
 		cron.WithChain(cron.SkipIfStillRunning(cron.DiscardLogger)),
 	)
-	if _, scheduleErr := scheduler.AddFunc(settings.CronSpec(), func() {
+	job := func() {
 		if jobErr := executeJob(ctx, service, logger); jobErr != nil {
 			logger.ErrorContext(ctx, "digest.failed", slog.Any(logKeyError, jobErr))
 		}
-	}); scheduleErr != nil {
+	}
+	if _, scheduleErr := scheduler.AddFunc(settings.CronSpec(), job); scheduleErr != nil {
 		return fmt.Errorf("schedule digest: %w", scheduleErr)
 	}
 
-	scheduler.Start()
 	logger.InfoContext(ctx, "scheduler.started",
 		slog.String(logKeyRunAt, settings.CronSpec()),
 		slog.String(logKeyTimezone, settings.Location.String()),
 	)
-	<-ctx.Done()
-	<-scheduler.Stop().Done()
+	runScheduler(ctx, scheduler, job)
 	logger.Info("scheduler.stopped")
 
 	return nil
+}
+
+func runScheduler(ctx context.Context, scheduler *cron.Cron, initialJob func()) {
+	initialJob()
+	scheduler.Start()
+	<-ctx.Done()
+	<-scheduler.Stop().Done()
 }
 
 func executeJob(ctx context.Context, service *app.Service, logger *slog.Logger) error {

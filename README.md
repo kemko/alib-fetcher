@@ -44,6 +44,9 @@ STATE_PATH=./data/state.db \
 go run ./cmd/alib-fetcher
 ```
 
+Service mode runs one digest cycle immediately after startup and then continues
+at the configured `RUN_AT` time each day.
+
 The process emits structured JSON logs and stops gracefully on `SIGINT` or
 `SIGTERM`.
 
