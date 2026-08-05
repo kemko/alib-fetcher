@@ -59,9 +59,10 @@ The process emits structured JSON logs and stops gracefully on `SIGINT` or
 
 ## Container
 
-Images built from `master` are published as
-`ghcr.io/<owner>/<repository>:latest`. The final image runs as the distroless
-`nonroot` user. Keep the state directory on a named volume:
+Successful CI runs for pushes to `master` publish images as
+`ghcr.io/<owner>/<repository>:latest`. Pull requests and failed quality or
+vulnerability checks never publish an image. The final image runs as the
+distroless `nonroot` user. Keep the state directory on a named volume:
 
 ```bash
 docker run -d --name alib-fetcher \
