@@ -78,3 +78,38 @@ func Test_Sender_returns_API_description_on_rejection(t *testing.T) {
 	require.ErrorIs(t, err, telegram.ErrRejected)
 	require.Contains(t, err.Error(), "chat not found")
 }
+
+func Test_Sender_exposes_Telegram_retry_delay(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusTooManyRequests)
+		_, err := writer.Write([]byte(`{
+			"ok":false,
+			"description":"Too Many Requests: retry after 1",
+			"parameters":{"retry_after":1}
+		}`))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+	sender, err := telegram.NewSender(telegram.Config{
+		APIBase: server.URL,
+		Token:   "test-token",
+		ChatID:  "-100123",
+		Timeout: time.Second,
+	})
+	require.NoError(t, err)
+
+	// When
+	err = sender.Send(context.Background(), "digest")
+
+	// Then
+	require.ErrorIs(t, err, telegram.ErrRejected)
+	var retryable interface {
+		RetryAfter() time.Duration
+	}
+	require.ErrorAs(t, err, &retryable)
+	require.Equal(t, time.Second, retryable.RetryAfter())
+}

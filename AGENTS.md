@@ -30,6 +30,10 @@ Preserve these semantics:
   are not stable deduplication keys.
 - A failed Telegram chunk must remain unseen so a later cycle can retry it.
   Earlier successfully sent chunks stay acknowledged.
+- A Telegram flood-control response with a positive `retry_after` waits for the
+  specified duration and retries the same chunk before later chunks. The wait
+  honors context cancellation, and the chunk remains unacknowledged until a
+  retry succeeds.
 - An empty or structurally changed Alib page is an error (`alib.ErrNoBooks`),
   not a successful empty digest. This protects against silently accepting a
   broken parser.
@@ -105,7 +109,7 @@ The Alib client accepts only HTTP(S), sends `User-Agent: alib-fetcher/1.0`, and
 requires HTTP 200. The Telegram sender accepts only HTTP(S), caps response
 decoding at 1 MiB, returns `telegram.ErrRequest` for transport failures and
 `telegram.ErrRejected` for unsuccessful API responses, and includes Telegram's
-description in rejection errors.
+description and optional `retry_after` delay in rejection errors.
 
 Structured logs go to stdout. Stable event names are `scheduler.started`,
 `scheduler.stopped`, `digest.started`, `digest.completed`, `digest.failed`, and

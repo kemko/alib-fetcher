@@ -28,6 +28,11 @@ Each Telegram listing keeps the full Alib announcement text and its seller and
 purchase links. The source photo-link section is replaced with `Фото: есть` or
 `Фото: нет`.
 
+When Telegram returns a flood-control `retry_after`, the service waits for the
+specified duration and retries the same message before continuing with later
+chunks. Waiting stops promptly when the service context is canceled. Books are
+recorded as delivered only after their containing chunk is accepted.
+
 ## Run
 
 Run one cycle locally:

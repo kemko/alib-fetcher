@@ -106,7 +106,10 @@ func (s *Sender) Send(ctx context.Context, text string) (sendErr error) {
 		if result.Description == "" {
 			result.Description = response.Status
 		}
-		return fmt.Errorf("%w: %s", ErrRejected, result.Description)
+		return &rejectedError{
+			description: result.Description,
+			retryAfter:  time.Duration(result.Parameters.RetryAfter) * time.Second,
+		}
 	}
 
 	return nil
@@ -118,5 +121,25 @@ type linkPreviewOptions struct {
 
 type apiResponse struct {
 	Description string `json:"description"`
-	OK          bool   `json:"ok"`
+	Parameters  struct {
+		RetryAfter int `json:"retry_after"`
+	} `json:"parameters"`
+	OK bool `json:"ok"`
+}
+
+type rejectedError struct {
+	description string
+	retryAfter  time.Duration
+}
+
+func (e *rejectedError) Error() string {
+	return fmt.Sprintf("%s: %s", ErrRejected, e.description)
+}
+
+func (e *rejectedError) Unwrap() error {
+	return ErrRejected
+}
+
+func (e *rejectedError) RetryAfter() time.Duration {
+	return e.retryAfter
 }

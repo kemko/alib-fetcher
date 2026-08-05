@@ -3,6 +3,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -27,12 +28,13 @@ type Sender interface {
 	Send(context.Context, string) error
 }
 
-// Dependencies contains the service adapters and Telegram message limit.
+// Dependencies contains the service adapters, retry wait function, and Telegram message limit.
 type Dependencies struct {
 	Fetcher      Fetcher
 	State        State
 	Sender       Sender
 	Now          func() time.Time
+	Wait         func(context.Context, time.Duration) error
 	MessageLimit int
 }
 
@@ -51,6 +53,9 @@ type Service struct {
 
 // NewService builds the daily digest service.
 func NewService(dependencies Dependencies) *Service {
+	if dependencies.Wait == nil {
+		dependencies.Wait = wait
+	}
 	return &Service{dependencies: dependencies}
 }
 
@@ -83,7 +88,7 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 		return result, fmt.Errorf("render digest: %w", err)
 	}
 	for _, chunk := range chunks {
-		if sendErr := s.dependencies.Sender.Send(ctx, chunk.Text); sendErr != nil {
+		if sendErr := s.send(ctx, chunk.Text); sendErr != nil {
 			return result, fmt.Errorf("send digest: %w", sendErr)
 		}
 		if markErr := s.dependencies.State.MarkSent(ctx, chunk.Books, cycleTime); markErr != nil {
@@ -93,4 +98,45 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 	}
 
 	return result, nil
+}
+
+func (s *Service) send(ctx context.Context, text string) error {
+	for {
+		err := s.dependencies.Sender.Send(ctx, text)
+		if err == nil {
+			return nil
+		}
+
+		delay, retry := retryDelay(err)
+		if !retry {
+			return err
+		}
+		if waitErr := s.dependencies.Wait(ctx, delay); waitErr != nil {
+			return fmt.Errorf("wait to retry delivery: %w", waitErr)
+		}
+	}
+}
+
+func retryDelay(err error) (time.Duration, bool) {
+	var retryable interface {
+		RetryAfter() time.Duration
+	}
+	if !errors.As(err, &retryable) {
+		return 0, false
+	}
+
+	delay := retryable.RetryAfter()
+	return delay, delay > 0
+}
+
+func wait(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
