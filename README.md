@@ -24,6 +24,9 @@ The first successful run sends every listing currently present on the source
 page. Later runs send only links that have not been acknowledged in the state
 database. A chunk is acknowledged only after Telegram accepts it. State entries
 older than 14 days are removed once at the beginning of every digest cycle.
+Each Telegram listing keeps the full Alib announcement text and its seller and
+purchase links. The source photo-link section is replaced with `Фото: есть` or
+`Фото: нет`.
 
 ## Run
 

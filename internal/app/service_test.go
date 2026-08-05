@@ -27,7 +27,7 @@ func Test_Service_marks_each_chunk_only_after_delivery(t *testing.T) {
 		Fetcher:      fakeFetcher{books: books},
 		State:        state,
 		Sender:       &fakeSender{failAt: 2, err: sendErr},
-		MessageLimit: 100,
+		MessageLimit: 120,
 		Now:          func() time.Time { return now },
 	})
 

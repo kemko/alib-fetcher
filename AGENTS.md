@@ -53,7 +53,7 @@ Preserve these semantics:
 - `internal/app`: use-case orchestration through small `Fetcher`, `State`, and
   `Sender` interfaces. Keep policy here and transport/storage details in their
   adapter packages.
-- `internal/digest`: Telegram HTML escaping, title truncation, and chunking only
+- `internal/digest`: full-listing Telegram HTML rendering and chunking only
   between complete listings.
 - `internal/store`: bbolt storage in bucket `sent_books`; keys are buy URLs and
   values are UTC RFC3339Nano delivery timestamps.
@@ -94,12 +94,12 @@ token; note that the sender internally puts it in the Bot API URL.
 
 ## Digest and transport details
 
-Messages start with `<b>Новые книги на Alib.ru</b>`. Each listing contains a
-bold title, optional price/seller/condition details, and a `Купить` link. All
-dynamic text and URLs must be HTML-escaped. Titles are trimmed and capped at 80
-runes with an ellipsis. Limits are counted in Unicode runes, and chunks may
-split only between listings. A single listing that cannot fit returns
-`digest.ErrMessageTooLong`.
+Messages start with `<b>Новые книги на Alib.ru</b>`. Each listing contains its
+full source text with a bold title plus seller and `Купить` links. The source
+`Смотрите` section is omitted and replaced with `Фото: есть` or `Фото: нет`.
+All dynamic text and URLs must be HTML-escaped. Limits are counted in Unicode
+runes, and chunks may split only between listings. A single listing that cannot
+fit returns `digest.ErrMessageTooLong`.
 
 The Alib client accepts only HTTP(S), sends `User-Agent: alib-fetcher/1.0`, and
 requires HTTP 200. The Telegram sender accepts only HTTP(S), caps response
