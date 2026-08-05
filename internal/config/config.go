@@ -7,6 +7,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/robfig/cron/v3"
 )
 
 // ErrInvalid indicates that one or more environment values are unusable.
@@ -14,9 +16,9 @@ var ErrInvalid = errors.New("invalid configuration")
 
 const (
 	defaultAlibURL           = "https://www.alib.ru/tramka.phtml?tnew=7"
+	defaultCronSchedule      = "0 0 * * *"
 	defaultHTTPTimeout       = 30 * time.Second
 	defaultMessageLimit      = 4000
-	defaultRunAt             = "00:00"
 	defaultStatePath         = "/var/lib/alib-fetcher/state.db"
 	defaultTelegramAPIBase   = "https://api.telegram.org"
 	defaultTimezone          = "Europe/Moscow"
@@ -31,10 +33,9 @@ type Config struct {
 	TelegramAPIBase string
 	AlibURL         string
 	StatePath       string
+	cronSpec        string
 	HTTPTimeout     time.Duration
 	MessageLimit    int
-	hour            int
-	minute          int
 }
 
 // Load reads and validates process environment variables.
@@ -45,9 +46,9 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("%w: TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required", ErrInvalid)
 	}
 
-	runAt, err := time.Parse("15:04", valueOrDefault("RUN_AT", defaultRunAt))
-	if err != nil {
-		return Config{}, fmt.Errorf("%w: RUN_AT must use HH:MM: %w", ErrInvalid, err)
+	cronSpec := valueOrDefault("CRON_SCHEDULE", defaultCronSchedule)
+	if _, err := cron.ParseStandard(cronSpec); err != nil {
+		return Config{}, fmt.Errorf("%w: CRON_SCHEDULE must be a valid cron expression: %w", ErrInvalid, err)
 	}
 	location, err := time.LoadLocation(valueOrDefault("TIMEZONE", defaultTimezone))
 	if err != nil {
@@ -71,14 +72,13 @@ func Load() (Config, error) {
 		Location:        location,
 		HTTPTimeout:     timeout,
 		MessageLimit:    messageLimit,
-		hour:            runAt.Hour(),
-		minute:          runAt.Minute(),
+		cronSpec:        cronSpec,
 	}, nil
 }
 
-// CronSpec returns a five-field daily cron expression.
+// CronSpec returns the validated cron schedule.
 func (c Config) CronSpec() string {
-	return fmt.Sprintf("%d %d * * *", c.minute, c.hour)
+	return c.cronSpec
 }
 
 func valueOrDefault(key, fallback string) string {

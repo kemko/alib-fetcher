@@ -8,7 +8,7 @@ services:
     environment:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN is required}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:?TELEGRAM_CHAT_ID is required}
-      RUN_AT: ${RUN_AT:-00:00}
+      CRON_SCHEDULE: "${CRON_SCHEDULE:-0 0 * * *}"
       TIMEZONE: ${TIMEZONE:-Europe/Moscow}
       STATE_PATH: /var/lib/alib-fetcher/state.db
       ALIB_URL: ${ALIB_URL:-https://www.alib.ru/tramka.phtml?tnew=7}

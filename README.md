@@ -2,8 +2,9 @@
 
 Always-on Go service that fetches the latest listings from
 [`alib.ru/tramka.phtml?tnew=7`](https://www.alib.ru/tramka.phtml?tnew=7) and
-sends unseen books to a Telegram chat once per day. Delivered listings are
-deduplicated by their unique `Купить` link in an embedded bbolt database.
+sends unseen books to a Telegram chat on a configurable cron schedule. Delivered
+listings are deduplicated by their unique `Купить` link in an embedded bbolt
+database.
 
 ## Configuration
 
@@ -11,7 +12,7 @@ deduplicated by their unique `Купить` link in an embedded bbolt database.
 | --- | --- | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | yes | - | Bot token from BotFather |
 | `TELEGRAM_CHAT_ID` | yes | - | Numeric chat ID or `@channel` username |
-| `RUN_AT` | no | `00:00` | Daily run time in `HH:MM` format |
+| `CRON_SCHEDULE` | no | `0 0 * * *` | Standard five-field cron expression |
 | `TIMEZONE` | no | `Europe/Moscow` | IANA timezone used by the scheduler |
 | `STATE_PATH` | no | `/var/lib/alib-fetcher/state.db` | bbolt state database |
 | `ALIB_URL` | no | source URL above | Listing page, also useful for testing |
@@ -40,12 +41,15 @@ Run the scheduler:
 ```bash
 TELEGRAM_BOT_TOKEN=... \
 TELEGRAM_CHAT_ID=... \
+CRON_SCHEDULE='*/30 * * * *' \
 STATE_PATH=./data/state.db \
 go run ./cmd/alib-fetcher
 ```
 
 Service mode runs one digest cycle immediately after startup and then continues
-at the configured `RUN_AT` time each day.
+using `CRON_SCHEDULE` in the configured timezone. The five fields are minute,
+hour, day of month, month, and day of week; descriptors such as `@hourly` are
+also accepted.
 
 The process emits structured JSON logs and stops gracefully on `SIGINT` or
 `SIGTERM`.

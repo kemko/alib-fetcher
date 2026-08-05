@@ -14,7 +14,7 @@ func Test_Load_applies_service_defaults(t *testing.T) {
 	setEnvironment(t, map[string]string{
 		"TELEGRAM_BOT_TOKEN": "token",
 		"TELEGRAM_CHAT_ID":   "-100123",
-		"RUN_AT":             "",
+		"CRON_SCHEDULE":      "",
 		"TIMEZONE":           "",
 		"STATE_PATH":         "",
 		"ALIB_URL":           "",
@@ -42,7 +42,7 @@ func Test_Load_parses_custom_schedule(t *testing.T) {
 	setEnvironment(t, map[string]string{
 		"TELEGRAM_BOT_TOKEN": "token",
 		"TELEGRAM_CHAT_ID":   "@books",
-		"RUN_AT":             "23:45",
+		"CRON_SCHEDULE":      "*/15 8-18 * * 1-5",
 		"TIMEZONE":           "Asia/Tbilisi",
 		"STATE_PATH":         "/tmp/custom.db",
 		"ALIB_URL":           "https://example.com/books",
@@ -56,7 +56,7 @@ func Test_Load_parses_custom_schedule(t *testing.T) {
 
 	// Then
 	require.NoError(t, err)
-	require.Equal(t, "45 23 * * *", loaded.CronSpec())
+	require.Equal(t, "*/15 8-18 * * 1-5", loaded.CronSpec())
 	require.Equal(t, "Asia/Tbilisi", loaded.Location.String())
 	require.Equal(t, 15*time.Second, loaded.HTTPTimeout)
 	require.Equal(t, 3500, loaded.MessageLimit)
@@ -67,7 +67,7 @@ func Test_Load_rejects_invalid_schedule(t *testing.T) {
 	setEnvironment(t, map[string]string{
 		"TELEGRAM_BOT_TOKEN": "token",
 		"TELEGRAM_CHAT_ID":   "chat",
-		"RUN_AT":             "24:00",
+		"CRON_SCHEDULE":      "not a cron expression",
 	})
 
 	// When
@@ -76,6 +76,22 @@ func Test_Load_rejects_invalid_schedule(t *testing.T) {
 	// Then
 	require.ErrorIs(t, err, config.ErrInvalid)
 	require.Empty(t, loaded)
+}
+
+func Test_Load_accepts_cron_descriptor(t *testing.T) {
+	// Given
+	setEnvironment(t, map[string]string{
+		"TELEGRAM_BOT_TOKEN": "token",
+		"TELEGRAM_CHAT_ID":   "chat",
+		"CRON_SCHEDULE":      "@every 6h",
+	})
+
+	// When
+	loaded, err := config.Load()
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, "@every 6h", loaded.CronSpec())
 }
 
 func setEnvironment(t *testing.T, values map[string]string) {

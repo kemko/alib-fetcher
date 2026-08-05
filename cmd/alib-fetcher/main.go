@@ -26,7 +26,7 @@ const (
 	logKeyFetched  = "fetched"
 	logKeyNew      = "new"
 	logKeyPruned   = "pruned"
-	logKeyRunAt    = "run_at"
+	logKeySchedule = "cron_schedule"
 	logKeySent     = "sent"
 	logKeyTimezone = "timezone"
 )
@@ -98,7 +98,7 @@ func run(logger *slog.Logger) (runErr error) {
 	}
 
 	logger.InfoContext(ctx, "scheduler.started",
-		slog.String(logKeyRunAt, settings.CronSpec()),
+		slog.String(logKeySchedule, settings.CronSpec()),
 		slog.String(logKeyTimezone, settings.Location.String()),
 	)
 	runScheduler(ctx, scheduler, job)
