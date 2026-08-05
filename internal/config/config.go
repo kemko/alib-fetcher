@@ -17,7 +17,7 @@ const (
 	defaultHTTPTimeout       = 30 * time.Second
 	defaultMessageLimit      = 4000
 	defaultRunAt             = "00:00"
-	defaultStatePath         = "/tmp/alib-fetcher/state.db"
+	defaultStatePath         = "/var/lib/alib-fetcher/state.db"
 	defaultTelegramAPIBase   = "https://api.telegram.org"
 	defaultTimezone          = "Europe/Moscow"
 	telegramHardMessageLimit = 4096

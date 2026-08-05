@@ -30,7 +30,7 @@ func Test_Load_applies_service_defaults(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "0 0 * * *", loaded.CronSpec())
 	require.Equal(t, "Europe/Moscow", loaded.Location.String())
-	require.Equal(t, "/tmp/alib-fetcher/state.db", loaded.StatePath)
+	require.Equal(t, "/var/lib/alib-fetcher/state.db", loaded.StatePath)
 	require.Equal(t, "https://www.alib.ru/tramka.phtml?tnew=7", loaded.AlibURL)
 	require.Equal(t, "https://api.telegram.org", loaded.TelegramAPIBase)
 	require.Equal(t, 30*time.Second, loaded.HTTPTimeout)

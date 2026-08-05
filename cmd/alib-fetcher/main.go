@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/kemmko/alib-fetcher/internal/alib"
 	"github.com/kemmko/alib-fetcher/internal/app"
@@ -24,6 +25,7 @@ const (
 	logKeyError    = "error"
 	logKeyFetched  = "fetched"
 	logKeyNew      = "new"
+	logKeyPruned   = "pruned"
 	logKeyRunAt    = "run_at"
 	logKeySent     = "sent"
 	logKeyTimezone = "timezone"
@@ -58,7 +60,7 @@ func run(logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return err
 	}
-	state, err := store.Open(settings.StatePath)
+	state, err := store.Open(settings.StatePath, time.Now())
 	if err != nil {
 		return err
 	}
@@ -73,6 +75,7 @@ func run(logger *slog.Logger) (runErr error) {
 		State:        state,
 		Sender:       sender,
 		MessageLimit: settings.MessageLimit,
+		Now:          time.Now,
 	})
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -114,6 +117,7 @@ func executeJob(ctx context.Context, service *app.Service, logger *slog.Logger) 
 	logger.InfoContext(ctx, "digest.completed",
 		slog.Int(logKeyFetched, result.Fetched),
 		slog.Int(logKeyNew, result.New),
+		slog.Int(logKeyPruned, result.Pruned),
 		slog.Int(logKeySent, result.Sent),
 	)
 

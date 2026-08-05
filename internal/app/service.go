@@ -4,6 +4,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/kemmko/alib-fetcher/internal/alib"
 	"github.com/kemmko/alib-fetcher/internal/digest"
@@ -16,8 +17,9 @@ type Fetcher interface {
 
 // State tracks which listings have already been delivered.
 type State interface {
+	Prune(context.Context, time.Time) (int, error)
 	Unseen(context.Context, []alib.Book) ([]alib.Book, error)
-	MarkSent(context.Context, []alib.Book) error
+	MarkSent(context.Context, []alib.Book, time.Time) error
 }
 
 // Sender delivers one rendered message.
@@ -30,6 +32,7 @@ type Dependencies struct {
 	Fetcher      Fetcher
 	State        State
 	Sender       Sender
+	Now          func() time.Time
 	MessageLimit int
 }
 
@@ -38,6 +41,7 @@ type Result struct {
 	Fetched int
 	New     int
 	Sent    int
+	Pruned  int
 }
 
 // Service coordinates fetching, deduplication, delivery, and acknowledgement.
@@ -52,11 +56,18 @@ func NewService(dependencies Dependencies) *Service {
 
 // Run executes one complete digest cycle.
 func (s *Service) Run(ctx context.Context) (Result, error) {
+	cycleTime := s.dependencies.Now()
+	pruned, err := s.dependencies.State.Prune(ctx, cycleTime.Add(-14*24*time.Hour))
+	if err != nil {
+		return Result{}, fmt.Errorf("prune delivered listings: %w", err)
+	}
+	result := Result{Pruned: pruned}
+
 	books, err := s.dependencies.Fetcher.Fetch(ctx)
 	if err != nil {
-		return Result{}, fmt.Errorf("fetch listings: %w", err)
+		return result, fmt.Errorf("fetch listings: %w", err)
 	}
-	result := Result{Fetched: len(books)}
+	result.Fetched = len(books)
 
 	unseen, err := s.dependencies.State.Unseen(ctx, books)
 	if err != nil {
@@ -75,7 +86,7 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 		if sendErr := s.dependencies.Sender.Send(ctx, chunk.Text); sendErr != nil {
 			return result, fmt.Errorf("send digest: %w", sendErr)
 		}
-		if markErr := s.dependencies.State.MarkSent(ctx, chunk.Books); markErr != nil {
+		if markErr := s.dependencies.State.MarkSent(ctx, chunk.Books, cycleTime); markErr != nil {
 			return result, fmt.Errorf("record delivered listings: %w", markErr)
 		}
 		result.Sent += len(chunk.Books)

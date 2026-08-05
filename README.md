@@ -13,7 +13,7 @@ deduplicated by their unique `Купить` link in an embedded bbolt database.
 | `TELEGRAM_CHAT_ID` | yes | - | Numeric chat ID or `@channel` username |
 | `RUN_AT` | no | `00:00` | Daily run time in `HH:MM` format |
 | `TIMEZONE` | no | `Europe/Moscow` | IANA timezone used by the scheduler |
-| `STATE_PATH` | no | `/tmp/alib-fetcher/state.db` | bbolt state database |
+| `STATE_PATH` | no | `/var/lib/alib-fetcher/state.db` | bbolt state database |
 | `ALIB_URL` | no | source URL above | Listing page, also useful for testing |
 | `TELEGRAM_API_BASE` | no | `https://api.telegram.org` | Bot API base URL |
 | `HTTP_TIMEOUT` | no | `30s` | Timeout for each external request |
@@ -21,7 +21,8 @@ deduplicated by their unique `Купить` link in an embedded bbolt database.
 
 The first successful run sends every listing currently present on the source
 page. Later runs send only links that have not been acknowledged in the state
-database. A chunk is acknowledged only after Telegram accepts it.
+database. A chunk is acknowledged only after Telegram accepts it. State entries
+older than 14 days are removed once at the beginning of every digest cycle.
 
 ## Run
 
@@ -30,13 +31,17 @@ Run one cycle locally:
 ```bash
 TELEGRAM_BOT_TOKEN=... \
 TELEGRAM_CHAT_ID=... \
+STATE_PATH=./data/state.db \
 go run ./cmd/alib-fetcher -once
 ```
 
 Run the scheduler:
 
 ```bash
-TELEGRAM_BOT_TOKEN=... TELEGRAM_CHAT_ID=... go run ./cmd/alib-fetcher
+TELEGRAM_BOT_TOKEN=... \
+TELEGRAM_CHAT_ID=... \
+STATE_PATH=./data/state.db \
+go run ./cmd/alib-fetcher
 ```
 
 The process emits structured JSON logs and stops gracefully on `SIGINT` or
@@ -46,14 +51,12 @@ The process emits structured JSON logs and stops gracefully on `SIGINT` or
 
 Images built from `master` are published as
 `ghcr.io/<owner>/<repository>:latest`. The final image runs as the distroless
-`nonroot` user. Keep the state directory on a named volume, even though its
-in-container location is under `/tmp`:
+`nonroot` user. Keep the state directory on a named volume:
 
 ```bash
 docker run -d --name alib-fetcher \
   --read-only \
-  --tmpfs /tmp:rw,noexec,nosuid,size=16m \
-  --mount type=volume,src=alib-fetcher-state,dst=/tmp/alib-fetcher \
+  --mount type=volume,src=alib-fetcher-state,dst=/var/lib/alib-fetcher \
   -e TELEGRAM_BOT_TOKEN=... \
   -e TELEGRAM_CHAT_ID=... \
   ghcr.io/<owner>/<repository>:latest
