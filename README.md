@@ -83,13 +83,17 @@ override the default `ghcr.io/kemmko/alib-fetcher:latest` image.
 
 ## Development
 
-Go 1.26.5 and golangci-lint v2 are required.
+Go 1.26.5 is required. Install the pinned golangci-lint version, then run the
+complete non-mutating quality gate:
 
 ```bash
+make tools
 make verify
 ```
 
-CI runs strict linting, race-enabled tests, a build, and `govulncheck`.
+Use `make fmt` to apply formatting. `make verify` checks formatting, runs strict
+linting and race-enabled tests, and builds `bin/alib-fetcher`. CI uses the same
+Make targets and additionally runs `govulncheck`.
 
 ## Security-only dependency updates
 

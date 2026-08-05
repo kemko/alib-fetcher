@@ -18,14 +18,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - uses: golangci/golangci-lint-action@v8
-        with:
-          version: v2.12.2
-          args: --timeout=5m
-      - name: Test
-        run: go test -race -shuffle=on -count=1 ./...
-      - name: Build
-        run: go build -trimpath ./cmd/alib-fetcher
+      - name: Install golangci-lint
+        run: make tools
+      - name: Verify
+        run: make verify
       - name: Scan Go vulnerabilities
         uses: golang/govulncheck-action@v1
         with:
