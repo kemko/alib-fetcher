@@ -68,9 +68,9 @@ Preserve these semantics:
 - `docker-compose.yml`: read-only, capability-dropped service with a persistent
   named state volume.
 - `.github/workflows/ci.yml`: runs `make verify` and `govulncheck` on pushes/PRs
-  to `master`, then publishes `ghcr.io/${github.repository}:latest` only after a
-  successful push run on `master`; ordinary quality commands must not be
-  duplicated in CI.
+  to `master` in the `verify` job, then publishes
+  `ghcr.io/${github.repository}:latest` only after a successful push run on
+  `master`; ordinary quality commands must not be duplicated in CI.
 - `.github/dependabot.yml`: normal scheduled version PRs are disabled; updates
   are intended to be security-only through repository security settings.
 

@@ -1,4 +1,4 @@
-name: CI
+name: Verify and publish
 
 on:
   push:
@@ -10,7 +10,8 @@ permissions:
   contents: read
 
 jobs:
-  quality:
+  verify:
+    name: Verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -26,7 +27,8 @@ jobs:
           go-package: ./...
 
   publish:
-    needs: quality
+    name: Publish image
+    needs: verify
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     permissions:

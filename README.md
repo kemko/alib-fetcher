@@ -65,7 +65,7 @@ The process emits structured JSON logs and stops gracefully on `SIGINT` or
 ## Container
 
 Successful CI runs for pushes to `master` publish images as
-`ghcr.io/<owner>/<repository>:latest`. Pull requests and failed quality or
+`ghcr.io/<owner>/<repository>:latest`. Pull requests and failed verification or
 vulnerability checks never publish an image. The final image runs as the
 distroless `nonroot` user. Keep the state directory on a named volume:
 
