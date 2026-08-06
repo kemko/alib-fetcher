@@ -30,6 +30,8 @@ Preserve these semantics:
   are not stable deduplication keys.
 - A failed Telegram chunk must remain unseen so a later cycle can retry it.
   Earlier successfully sent chunks stay acknowledged.
+- When a digest has multiple chunks, all but the last are sent silently; the
+  last chunk uses the normal notification sound.
 - A Telegram flood-control response with a positive `retry_after` waits for the
   specified duration and retries the same chunk before later chunks. The wait
   honors context cancellation, and the chunk remains unacknowledged until a

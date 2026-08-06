@@ -59,17 +59,19 @@ func NewSender(config Config) (*Sender, error) {
 	}, nil
 }
 
-// Send posts one HTML-formatted digest message.
-func (s *Sender) Send(ctx context.Context, text string) (sendErr error) {
+// Send posts one HTML-formatted digest message, optionally without a notification sound.
+func (s *Sender) Send(ctx context.Context, text string, silent bool) (sendErr error) {
 	payload := struct {
-		ChatID             string             `json:"chat_id"`
-		Text               string             `json:"text"`
-		ParseMode          string             `json:"parse_mode"`
-		LinkPreviewOptions linkPreviewOptions `json:"link_preview_options"`
+		ChatID              string             `json:"chat_id"`
+		Text                string             `json:"text"`
+		ParseMode           string             `json:"parse_mode"`
+		DisableNotification bool               `json:"disable_notification"`
+		LinkPreviewOptions  linkPreviewOptions `json:"link_preview_options"`
 	}{
-		ChatID:    s.chatID,
-		Text:      text,
-		ParseMode: "HTML",
+		ChatID:              s.chatID,
+		Text:                text,
+		ParseMode:           "HTML",
+		DisableNotification: silent,
 		LinkPreviewOptions: linkPreviewOptions{
 			Disabled: true,
 		},

@@ -14,17 +14,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func Test_Sender_posts_HTML_message_with_preview_disabled(t *testing.T) {
+func Test_Sender_posts_silent_HTML_message_with_preview_disabled(t *testing.T) {
 	t.Parallel()
 
 	// Given
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		assert.Equal(t, "/bottest-token/sendMessage", request.URL.Path)
 		var payload struct {
-			ChatID             string `json:"chat_id"`
-			Text               string `json:"text"`
-			ParseMode          string `json:"parse_mode"`
-			LinkPreviewOptions struct {
+			ChatID              string `json:"chat_id"`
+			Text                string `json:"text"`
+			ParseMode           string `json:"parse_mode"`
+			DisableNotification bool   `json:"disable_notification"`
+			LinkPreviewOptions  struct {
 				Disabled bool `json:"is_disabled"`
 			} `json:"link_preview_options"`
 		}
@@ -32,6 +33,7 @@ func Test_Sender_posts_HTML_message_with_preview_disabled(t *testing.T) {
 		assert.Equal(t, "-100123", payload.ChatID)
 		assert.Equal(t, "<b>digest</b>", payload.Text)
 		assert.Equal(t, "HTML", payload.ParseMode)
+		assert.True(t, payload.DisableNotification)
 		assert.True(t, payload.LinkPreviewOptions.Disabled)
 		writer.Header().Set("Content-Type", "application/json")
 		_, err := writer.Write([]byte(`{"ok":true,"result":{}}`))
@@ -47,7 +49,7 @@ func Test_Sender_posts_HTML_message_with_preview_disabled(t *testing.T) {
 	require.NoError(t, err)
 
 	// When
-	err = sender.Send(context.Background(), "<b>digest</b>")
+	err = sender.Send(context.Background(), "<b>digest</b>", true)
 
 	// Then
 	require.NoError(t, err)
@@ -72,7 +74,7 @@ func Test_Sender_returns_API_description_on_rejection(t *testing.T) {
 	require.NoError(t, err)
 
 	// When
-	err = sender.Send(context.Background(), "digest")
+	err = sender.Send(context.Background(), "digest", false)
 
 	// Then
 	require.ErrorIs(t, err, telegram.ErrRejected)
@@ -103,7 +105,7 @@ func Test_Sender_exposes_Telegram_retry_delay(t *testing.T) {
 	require.NoError(t, err)
 
 	// When
-	err = sender.Send(context.Background(), "digest")
+	err = sender.Send(context.Background(), "digest", false)
 
 	// Then
 	require.ErrorIs(t, err, telegram.ErrRejected)

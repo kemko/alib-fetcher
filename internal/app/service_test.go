@@ -23,10 +23,11 @@ func Test_Service_marks_each_chunk_only_after_delivery(t *testing.T) {
 	}
 	sendErr := errors.New("telegram unavailable")
 	state := &fakeState{unseen: books}
+	sender := &fakeSender{failAt: 2, err: sendErr}
 	service := app.NewService(app.Dependencies{
 		Fetcher:      fakeFetcher{books: books},
 		State:        state,
-		Sender:       &fakeSender{failAt: 2, err: sendErr},
+		Sender:       sender,
 		MessageLimit: 120,
 		Now:          func() time.Time { return now },
 	})
@@ -40,6 +41,30 @@ func Test_Service_marks_each_chunk_only_after_delivery(t *testing.T) {
 	require.Equal(t, 1, result.Sent)
 	require.Equal(t, books[:1], state.marked)
 	require.Equal(t, now, state.markedAt)
+	require.Equal(t, []bool{true, false}, sender.silent)
+}
+
+func Test_Service_sends_single_chunk_with_sound(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	book := alib.Book{Title: "Книга", BuyURL: "https://example.com/1"}
+	sender := &fakeSender{}
+	service := app.NewService(app.Dependencies{
+		Fetcher:      fakeFetcher{books: []alib.Book{book}},
+		State:        &fakeState{unseen: []alib.Book{book}},
+		Sender:       sender,
+		MessageLimit: 4096,
+		Now:          time.Now,
+	})
+
+	// When
+	result, err := service.Run(context.Background())
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Sent)
+	require.Equal(t, []bool{false}, sender.silent)
 }
 
 func Test_Service_waits_and_retries_only_rate_limited_chunk(t *testing.T) {
@@ -81,6 +106,7 @@ func Test_Service_waits_and_retries_only_rate_limited_chunk(t *testing.T) {
 	require.Len(t, sender.messages, 3)
 	require.NotEqual(t, sender.messages[0], sender.messages[1])
 	require.Equal(t, sender.messages[1], sender.messages[2])
+	require.Equal(t, []bool{true, false, false}, sender.silent)
 	require.Equal(t, []string{
 		"send",
 		"mark:https://example.com/1",
@@ -205,11 +231,13 @@ type fakeSender struct {
 	events   *[]string
 	err      error
 	messages []string
+	silent   []bool
 	failAt   int
 }
 
-func (f *fakeSender) Send(_ context.Context, text string) error {
+func (f *fakeSender) Send(_ context.Context, text string, silent bool) error {
 	f.messages = append(f.messages, text)
+	f.silent = append(f.silent, silent)
 	if f.events != nil {
 		*f.events = append(*f.events, "send")
 	}
