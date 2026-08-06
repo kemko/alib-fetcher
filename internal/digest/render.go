@@ -9,7 +9,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/kemmko/alib-fetcher/internal/alib"
+	"github.com/kemko/alib-fetcher/internal/alib"
 )
 
 // ErrMessageTooLong indicates that one listing cannot fit into a message.

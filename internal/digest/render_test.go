@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kemmko/alib-fetcher/internal/alib"
-	"github.com/kemmko/alib-fetcher/internal/digest"
+	"github.com/kemko/alib-fetcher/internal/alib"
+	"github.com/kemko/alib-fetcher/internal/digest"
 
 	"github.com/stretchr/testify/require"
 )

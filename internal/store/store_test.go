@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kemmko/alib-fetcher/internal/alib"
-	"github.com/kemmko/alib-fetcher/internal/store"
+	"github.com/kemko/alib-fetcher/internal/alib"
+	"github.com/kemko/alib-fetcher/internal/store"
 
 	"github.com/stretchr/testify/require"
 	bolt "go.etcd.io/bbolt"

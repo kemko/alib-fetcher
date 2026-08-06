@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kemmko/alib-fetcher/internal/alib"
-	"github.com/kemmko/alib-fetcher/internal/app"
-	"github.com/kemmko/alib-fetcher/internal/store"
+	"github.com/kemko/alib-fetcher/internal/alib"
+	"github.com/kemko/alib-fetcher/internal/app"
+	"github.com/kemko/alib-fetcher/internal/store"
 
 	"github.com/robfig/cron/v3"
 	"github.com/stretchr/testify/require"

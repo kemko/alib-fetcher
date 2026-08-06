@@ -1,4 +1,4 @@
-module github.com/kemmko/alib-fetcher
+module github.com/kemko/alib-fetcher
 
 go 1.26.5
 

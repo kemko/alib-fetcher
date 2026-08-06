@@ -7,7 +7,7 @@ from `https://www.alib.ru/tramka.phtml?tnew=7`, renders unseen books as
 Telegram HTML messages, sends them to one chat, and records successful
 deliveries in an embedded bbolt database.
 
-The module is `github.com/kemmko/alib-fetcher`. The executable entry point is
+The module is `github.com/kemko/alib-fetcher`. The executable entry point is
 `./cmd/alib-fetcher`. Go 1.26.5 is the supported toolchain; `make tools`
 installs the pinned golangci-lint v2 release.
 

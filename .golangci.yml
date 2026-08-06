@@ -130,7 +130,7 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/kemmko/alib-fetcher
+        - github.com/kemko/alib-fetcher
 
 issues:
   max-issues-per-linter: 0

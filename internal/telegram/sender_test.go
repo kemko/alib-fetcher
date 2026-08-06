@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kemmko/alib-fetcher/internal/telegram"
+	"github.com/kemko/alib-fetcher/internal/telegram"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

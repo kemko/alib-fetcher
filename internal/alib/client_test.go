@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kemmko/alib-fetcher/internal/alib"
+	"github.com/kemko/alib-fetcher/internal/alib"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

@@ -90,7 +90,7 @@ docker compose up -d
 
 With Podman Desktop, use `podman compose up -d`. Compose stores the database in
 the persistent named volume `alib-fetcher-state`. Set `ALIB_FETCHER_IMAGE` to
-override the default `ghcr.io/kemmko/alib-fetcher:latest` image.
+override the default `ghcr.io/kemko/alib-fetcher:latest` image.
 
 ## Development
 

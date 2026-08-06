@@ -12,11 +12,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kemmko/alib-fetcher/internal/alib"
-	"github.com/kemmko/alib-fetcher/internal/app"
-	"github.com/kemmko/alib-fetcher/internal/config"
-	"github.com/kemmko/alib-fetcher/internal/store"
-	"github.com/kemmko/alib-fetcher/internal/telegram"
+	"github.com/kemko/alib-fetcher/internal/alib"
+	"github.com/kemko/alib-fetcher/internal/app"
+	"github.com/kemko/alib-fetcher/internal/config"
+	"github.com/kemko/alib-fetcher/internal/store"
+	"github.com/kemko/alib-fetcher/internal/telegram"
 
 	"github.com/robfig/cron/v3"
 )
