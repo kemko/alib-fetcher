@@ -2,12 +2,43 @@ package main
 
 import (
 	"context"
+	"log/slog"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/kemmko/alib-fetcher/internal/alib"
+	"github.com/kemmko/alib-fetcher/internal/app"
+	"github.com/kemmko/alib-fetcher/internal/store"
 
 	"github.com/robfig/cron/v3"
 	"github.com/stretchr/testify/require"
 )
+
+func Test_executeJob_closes_state_database_after_cycle(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	statePath := filepath.Join(t.TempDir(), "state.db")
+	now := time.Date(2026, time.August, 6, 0, 0, 0, 0, time.UTC)
+	dependencies := app.Dependencies{
+		Fetcher:      emptyFetcher{},
+		Sender:       noopSender{},
+		MessageLimit: 4096,
+		Now:          func() time.Time { return now },
+	}
+	logger := slog.New(slog.DiscardHandler)
+
+	// When
+	err := executeJob(context.Background(), dependencies, statePath, logger)
+
+	// Then
+	require.NoError(t, err)
+	reopened, err := store.Open(statePath, now)
+	require.NoError(t, err)
+	require.NoError(t, reopened.Close())
+}
 
 func Test_runScheduler_executes_job_immediately_before_waiting_for_schedule(t *testing.T) {
 	// Given
@@ -26,4 +57,16 @@ func Test_runScheduler_executes_job_immediately_before_waiting_for_schedule(t *t
 
 	// Then
 	require.Equal(t, int32(1), runs.Load())
+}
+
+type emptyFetcher struct{}
+
+func (emptyFetcher) Fetch(context.Context) ([]alib.Book, error) {
+	return nil, nil
+}
+
+type noopSender struct{}
+
+func (noopSender) Send(context.Context, string, bool) error {
+	return nil
 }

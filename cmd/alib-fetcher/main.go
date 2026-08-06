@@ -39,7 +39,7 @@ func main() {
 	}
 }
 
-func run(logger *slog.Logger) (runErr error) {
+func run(logger *slog.Logger) error {
 	once := flag.Bool("once", false, "fetch and send one digest, then exit")
 	flag.Parse()
 
@@ -60,28 +60,17 @@ func run(logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return err
 	}
-	state, err := store.Open(settings.StatePath, time.Now())
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if closeErr := state.Close(); closeErr != nil {
-			runErr = errors.Join(runErr, closeErr)
-		}
-	}()
-
-	service := app.NewService(app.Dependencies{
+	dependencies := app.Dependencies{
 		Fetcher:      fetcher,
-		State:        state,
 		Sender:       sender,
 		MessageLimit: settings.MessageLimit,
 		Now:          time.Now,
-	})
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	if *once {
-		return executeJob(ctx, service, logger)
+		return executeJob(ctx, dependencies, settings.StatePath, logger)
 	}
 
 	scheduler := cron.New(
@@ -89,7 +78,7 @@ func run(logger *slog.Logger) (runErr error) {
 		cron.WithChain(cron.SkipIfStillRunning(cron.DiscardLogger)),
 	)
 	job := func() {
-		if jobErr := executeJob(ctx, service, logger); jobErr != nil {
+		if jobErr := executeJob(ctx, dependencies, settings.StatePath, logger); jobErr != nil {
 			logger.ErrorContext(ctx, "digest.failed", slog.Any(logKeyError, jobErr))
 		}
 	}
@@ -114,8 +103,25 @@ func runScheduler(ctx context.Context, scheduler *cron.Cron, initialJob func()) 
 	<-scheduler.Stop().Done()
 }
 
-func executeJob(ctx context.Context, service *app.Service, logger *slog.Logger) error {
+func executeJob(
+	ctx context.Context,
+	dependencies app.Dependencies,
+	statePath string,
+	logger *slog.Logger,
+) (jobErr error) {
 	logger.InfoContext(ctx, "digest.started")
+	state, err := store.Open(statePath, dependencies.Now())
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := state.Close(); closeErr != nil {
+			jobErr = errors.Join(jobErr, closeErr)
+		}
+	}()
+
+	dependencies.State = state
+	service := app.NewService(dependencies)
 	result, err := service.Run(ctx)
 	if err != nil {
 		return err

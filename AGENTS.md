@@ -45,6 +45,8 @@ Preserve these semantics:
   time and must not be pruned immediately.
 - Service mode runs one cycle immediately after startup, then follows the cron
   schedule. Overlapping cron jobs are skipped.
+- The bbolt database is open only while a digest cycle is running, allowing a
+  separate `-once` process to use it between scheduled cycles.
 - `SIGINT` and `SIGTERM` stop scheduling gracefully and wait for cron shutdown.
 - External requests use the configured timeout and request context.
 

@@ -58,7 +58,8 @@ go run ./cmd/alib-fetcher
 Service mode runs one digest cycle immediately after startup and then continues
 using `CRON_SCHEDULE` in the configured timezone. The five fields are minute,
 hour, day of month, month, and day of week; descriptors such as `@hourly` are
-also accepted.
+also accepted. The state database is open only while a digest cycle is running,
+so a separate `-once` invocation can use it between scheduled cycles.
 
 The process emits structured JSON logs and stops gracefully on `SIGINT` or
 `SIGTERM`.
