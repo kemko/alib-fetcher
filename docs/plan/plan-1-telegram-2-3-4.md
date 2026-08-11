@@ -130,12 +130,12 @@ Files:
 Files:
 
 - Modify: none
-- [ ] Run `make verify`.
-- [ ] Run `go test -coverprofile=coverage.out ./...`.
-- [ ] Run `go tool cover -func=coverage.out`.
-- [ ] Verify total test coverage is at least 80%.
-- [ ] Inspect `git diff` to ensure only task-related files changed.
-- [ ] Confirm DB record contains full `alib.Book` payload plus `Sent bool`.
-- [ ] Confirm fetch records discovered books before send queue build.
-- [ ] Confirm send queue comes from DB pending records.
-- [ ] Confirm `MarkSent` happens only after accepted Telegram chunk.
+- [x] Run `make verify`.
+- [x] Run `go test -coverprofile=coverage.out ./...`.
+- [x] Run `go tool cover -func=coverage.out`.
+- [x] Verify total test coverage is at least 80%.
+- [x] Inspect `git diff` to ensure only task-related files changed.
+- [x] Confirm DB record contains full `alib.Book` payload plus `Sent bool`.
+- [x] Confirm fetch records discovered books before send queue build.
+- [x] Confirm send queue comes from DB pending records.
+- [x] Confirm `MarkSent` happens only after accepted Telegram chunk.

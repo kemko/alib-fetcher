@@ -115,3 +115,172 @@ func Test_Sender_exposes_Telegram_retry_delay(t *testing.T) {
 	require.ErrorAs(t, err, &retryable)
 	require.Equal(t, time.Second, retryable.RetryAfter())
 }
+
+func Test_NewSender_validates_configuration(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		config telegram.Config
+	}{
+		{
+			name: "unsupported scheme",
+			config: telegram.Config{
+				APIBase: "file:///tmp",
+				Token:   "test-token",
+				ChatID:  "-100123",
+				Timeout: time.Second,
+			},
+		},
+		{
+			name: "malformed URL",
+			config: telegram.Config{
+				APIBase: "://",
+				Token:   "test-token",
+				ChatID:  "-100123",
+				Timeout: time.Second,
+			},
+		},
+		{
+			name: "missing host",
+			config: telegram.Config{
+				APIBase: "https:///telegram",
+				Token:   "test-token",
+				ChatID:  "-100123",
+				Timeout: time.Second,
+			},
+		},
+		{
+			name: "missing token",
+			config: telegram.Config{
+				APIBase: "https://api.telegram.org",
+				ChatID:  "-100123",
+				Timeout: time.Second,
+			},
+		},
+		{
+			name: "missing chat",
+			config: telegram.Config{
+				APIBase: "https://api.telegram.org",
+				Token:   "test-token",
+				Timeout: time.Second,
+			},
+		},
+		{
+			name: "non-positive timeout",
+			config: telegram.Config{
+				APIBase: "https://api.telegram.org",
+				Token:   "test-token",
+				ChatID:  "-100123",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// When
+			sender, err := telegram.NewSender(tt.config)
+
+			// Then
+			require.Error(t, err)
+			require.Nil(t, sender)
+		})
+	}
+}
+
+func Test_Sender_uses_HTTP_status_when_rejection_has_no_description(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusBadGateway)
+		_, err := writer.Write([]byte(`{"ok":false}`))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+	sender, err := telegram.NewSender(telegram.Config{
+		APIBase: server.URL,
+		Token:   "test-token",
+		ChatID:  "-100123",
+		Timeout: time.Second,
+	})
+	require.NoError(t, err)
+
+	// When
+	err = sender.Send(context.Background(), "digest", false)
+
+	// Then
+	require.ErrorIs(t, err, telegram.ErrRejected)
+	require.Contains(t, err.Error(), "502 Bad Gateway")
+}
+
+func Test_Sender_returns_decode_error_for_invalid_response(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, err := writer.Write([]byte(`not json`))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+	sender, err := telegram.NewSender(telegram.Config{
+		APIBase: server.URL,
+		Token:   "test-token",
+		ChatID:  "-100123",
+		Timeout: time.Second,
+	})
+	require.NoError(t, err)
+
+	// When
+	err = sender.Send(context.Background(), "digest", false)
+
+	// Then
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "decode Telegram response")
+}
+
+func Test_Sender_returns_request_error_for_transport_failure(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	sender, err := telegram.NewSender(telegram.Config{
+		APIBase: server.URL,
+		Token:   "test-token",
+		ChatID:  "-100123",
+		Timeout: time.Second,
+	})
+	require.NoError(t, err)
+	server.Close()
+
+	// When
+	err = sender.Send(context.Background(), "digest", false)
+
+	// Then
+	require.ErrorIs(t, err, telegram.ErrRequest)
+}
+
+func Test_Sender_returns_context_error_when_request_is_canceled(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	sender, err := telegram.NewSender(telegram.Config{
+		APIBase: "https://api.telegram.org",
+		Token:   "test-token",
+		ChatID:  "-100123",
+		Timeout: time.Second,
+	})
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// When
+	err = sender.Send(ctx, "digest", false)
+
+	// Then
+	require.ErrorIs(t, err, context.Canceled)
+}
