@@ -92,14 +92,14 @@
 - Modify: `internal/process/process.go`
 - Modify/Create: `internal/process/callbacks_test.go`
 
-- [ ] Move `startCallbackPolling`, `pollRefreshCallbacks`, `waitForCallbackPoll`, and `handleRefreshCallback` into `internal/process/callbacks.go`.
-- [ ] Keep callback polling active while refresh digest runs.
-- [ ] Keep unknown callback data ignored after offset advances.
-- [ ] Keep poll error backoff at 5s and idle delay at 1s, honoring context cancellation.
-- [ ] Keep refresh callback answers: `Проверяю новые книги` when started, `Проверка уже выполняется` when skipped.
-- [ ] Keep old reply markup removal as `BeforeDelivery`, so removal happens only when renderable chunks exist and before first send.
-- [ ] Move/update callback tests for offset advancement, unknown data, refresh send ordering, no-books behavior, skip behavior, duplicate refresh, and poll backoff.
-- [ ] Run `go test ./internal/process ./cmd/alib-fetcher` and fix failures before Task 5.
+- [x] Move `startCallbackPolling`, `pollRefreshCallbacks`, `waitForCallbackPoll`, and `handleRefreshCallback` into `internal/process/callbacks.go`.
+- [x] Keep callback polling active while refresh digest runs.
+- [x] Keep unknown callback data ignored after offset advances.
+- [x] Keep poll error backoff at 5s and idle delay at 1s, honoring context cancellation.
+- [x] Keep refresh callback answers: `Проверяю новые книги` when started, `Проверка уже выполняется` when skipped.
+- [x] Keep old reply markup removal as `BeforeDelivery`, so removal happens only when renderable chunks exist and before first send.
+- [x] Move/update callback tests for offset advancement, unknown data, refresh send ordering, no-books behavior, skip behavior, duplicate refresh, and poll backoff.
+- [x] Run `go test ./internal/process ./cmd/alib-fetcher` and fix failures before Task 5.
 
 ### Task 5: Clean command package and imports
 

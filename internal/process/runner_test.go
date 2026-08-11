@@ -13,7 +13,6 @@ import (
 
 	"github.com/kemko/alib-fetcher/internal/alib"
 	"github.com/kemko/alib-fetcher/internal/app"
-	"github.com/kemko/alib-fetcher/internal/telegram"
 
 	"github.com/stretchr/testify/require"
 )
@@ -75,46 +74,6 @@ func Test_digestRunner_shares_lock_across_startup_scheduled_and_refresh_digests(
 	// Then
 	require.False(t, refreshStarted)
 	require.Equal(t, int32(1), fetches.Load())
-}
-
-func Test_handleRefreshCallback_answers_duplicate_refresh_while_background_digest_runs(t *testing.T) {
-	t.Parallel()
-
-	// Given
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	digestStarted := make(chan struct{})
-	releaseDigest := make(chan struct{})
-	client := &recordingCallbackClient{}
-	runner := newDigestRunner(app.Dependencies{
-		Fetcher:      &blockingFetcher{started: digestStarted, release: releaseDigest},
-		Sender:       noopSender{},
-		MessageLimit: 4096,
-		Now:          time.Now,
-	}, filepath.Join(t.TempDir(), "state.db"), slog.New(slog.DiscardHandler))
-
-	// When
-	handleRefreshCallback(ctx, client, runner, telegram.Callback{
-		ID:            "callback-1",
-		Data:          telegram.RefreshCallbackData,
-		MessageChatID: -100123,
-		MessageID:     77,
-	}, slog.New(slog.DiscardHandler))
-	waitForSignal(t, digestStarted)
-	handleRefreshCallback(ctx, client, runner, telegram.Callback{
-		ID:            "callback-2",
-		Data:          telegram.RefreshCallbackData,
-		MessageChatID: -100123,
-		MessageID:     77,
-	}, slog.New(slog.DiscardHandler))
-	close(releaseDigest)
-	runner.wait()
-
-	// Then
-	require.Equal(t, []callbackAnswer{
-		{id: "callback-1", text: refreshStartedText},
-		{id: "callback-2", text: refreshAlreadyRunningText},
-	}, client.answersSnapshot())
 }
 
 func Test_digestRunner_logs_trigger_when_digest_fails(t *testing.T) {
