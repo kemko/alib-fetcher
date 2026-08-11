@@ -118,12 +118,12 @@ Files:
 
 - Modify: cmd/alib-fetcher/main.go if Result fields or State contract require call-site changes
 - Modify: README.md
-- [ ] Обновить main только если компиляция требует изменений вокруг `Result` logging; сохранить stable log fields `fetched`, `new`, `pruned`, `sent`.
-- [ ] Обновить README: описать, что найденные книги сначала сохраняются в state DB как pending records с полным parsed book payload.
-- [ ] Обновить README: отправка берет все pending records из DB, а не только текущий fetch result.
-- [ ] Уточнить README: неотправленные книги остаются в очереди между циклами; sent records удаляются только retention pruning.
-- [ ] Проверить, что описание первого успешного запуска остается верным: все книги текущей страницы попадут в pending и будут отправлены.
-- [ ] Run `go test -race -shuffle=on -count=1 ./cmd/alib-fetcher ./internal/app ./internal/store` before task 6.
+- [x] Обновить main только если компиляция требует изменений вокруг `Result` logging; сохранить stable log fields `fetched`, `new`, `pruned`, `sent`.
+- [x] Обновить README: описать, что найденные книги сначала сохраняются в state DB как pending records с полным parsed book payload.
+- [x] Обновить README: отправка берет все pending records из DB, а не только текущий fetch result.
+- [x] Уточнить README: неотправленные книги остаются в очереди между циклами; sent records удаляются только retention pruning.
+- [x] Проверить, что описание первого успешного запуска остается верным: все книги текущей страницы попадут в pending и будут отправлены.
+- [x] Run `go test -race -shuffle=on -count=1 ./cmd/alib-fetcher ./internal/app ./internal/store` before task 6.
 
 ### Task 6: Verify acceptance criteria
 
