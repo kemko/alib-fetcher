@@ -75,6 +75,44 @@ func Test_Service_sends_single_chunk_with_sound(t *testing.T) {
 	require.Equal(t, []bool{true}, sender.attachRefresh)
 }
 
+func Test_Service_sends_only_final_chunk_with_sound(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	now := time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC)
+	books := []alib.Book{
+		{Title: "Первая", BuyURL: "https://example.com/1"},
+		{Title: "Вторая", BuyURL: "https://example.com/2"},
+		{Title: "Третья", BuyURL: "https://example.com/3"},
+	}
+	state := &fakeState{pending: books, recordedNew: len(books)}
+	sender := &fakeSender{}
+	service := app.NewService(app.Dependencies{
+		Fetcher:      fakeFetcher{books: books},
+		State:        state,
+		Sender:       sender,
+		MessageLimit: 120,
+		Now:          func() time.Time { return now },
+	})
+
+	// When
+	result, err := service.Run(context.Background())
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, app.Result{Fetched: 3, New: 3, Sent: 3}, result)
+	require.Len(t, sender.messages, 3)
+	require.Contains(t, sender.messages[0], "Первая")
+	require.NotContains(t, sender.messages[0], "Вторая")
+	require.Contains(t, sender.messages[1], "Вторая")
+	require.NotContains(t, sender.messages[1], "Третья")
+	require.Contains(t, sender.messages[2], "Третья")
+	require.Equal(t, books, state.marked)
+	require.Equal(t, now, state.markedAt)
+	require.Equal(t, []bool{true, true, false}, sender.silent)
+	require.Equal(t, []bool{false, false, true}, sender.attachRefresh)
+}
+
 func Test_Service_runs_pre_delivery_hook_once_before_sending_and_marking(t *testing.T) {
 	t.Parallel()
 

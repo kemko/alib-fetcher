@@ -38,12 +38,12 @@
 **Files:**
 - Modify: `internal/app/service_test.go`
 
-- [ ] Добавить отдельный тест `Test_Service_sends_only_final_chunk_with_sound` или переименовать/расширить существующий тест так, чтобы его цель была явно про звук.
-- [ ] Подобрать pending books и `MESSAGE_LIMIT` так, чтобы digest стабильно рендерился минимум в 3 отдельных chunks.
-- [ ] Проверить, что `sender.silent` равен `[]bool{true, true, false}`.
-- [ ] Проверить, что порядок сообщений и acknowledgements сохраняется.
-- [ ] Проверить, что `attachRefresh` остается только на последнем chunk: `[]bool{false, false, true}`.
-- [ ] Запустить `go test ./internal/app -run Test_Service_sends_only_final_chunk_with_sound -count=1` и убедиться, что тест отражает текущую поломку или защищает исправление.
+- [x] Добавить отдельный тест `Test_Service_sends_only_final_chunk_with_sound` или переименовать/расширить существующий тест так, чтобы его цель была явно про звук.
+- [x] Подобрать pending books и `MESSAGE_LIMIT` так, чтобы digest стабильно рендерился минимум в 3 отдельных chunks.
+- [x] Проверить, что `sender.silent` равен `[]bool{true, true, false}`.
+- [x] Проверить, что порядок сообщений и acknowledgements сохраняется.
+- [x] Проверить, что `attachRefresh` остается только на последнем chunk: `[]bool{false, false, true}`.
+- [x] Запустить `go test ./internal/app -run Test_Service_sends_only_final_chunk_with_sound -count=1` и убедиться, что тест отражает текущую поломку или защищает исправление.
 
 ### Task 2: Fix chunk silent flag selection in service orchestration
 
