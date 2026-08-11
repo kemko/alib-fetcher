@@ -96,7 +96,7 @@
 **Files:**
 - Modify: `README.md`, only if needed
 
-- [ ] Проверить `README.md`: поведение уже должно быть описано как “only the final message uses the normal notification sound; earlier messages are silent”.
-- [ ] Если формулировка отсутствует или стала неточной после правки, обновить `README.md`.
-- [ ] Если документация не менялась, оставить `README.md` без изменений.
-- [ ] После изменения документации снова запустить `make verify`.
+- [x] Проверить `README.md`: поведение уже должно быть описано как “only the final message uses the normal notification sound; earlier messages are silent”.
+- [x] Если формулировка отсутствует или стала неточной после правки, обновить `README.md`. Не требовалось: формулировка уже точная.
+- [x] Если документация не менялась, оставить `README.md` без изменений.
+- [x] После изменения документации снова запустить `make verify`. Документация не менялась; `make verify` запущен повторно и проходит.
