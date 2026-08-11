@@ -108,12 +108,12 @@
 **Files:**
 - Modify: `README.md`
 
-- [ ] Document that every sent digest ends with an `Обновить` inline button on the last message.
-- [ ] Document that `-once` sends the button but does not process callbacks after exit.
-- [ ] Document that service mode polls Telegram callback updates and a running service with the same bot can process a button sent by `-once`.
-- [ ] Document that pressing `Обновить` starts an out-of-schedule digest and leaves the old button in place when no new notification is sent.
-- [ ] Add or update README-adjacent tests only if docs examples or configuration parsing change.
-- [ ] Run `make test` and fix failures before Task 6.
+- [x] Document that every sent digest ends with an `Обновить` inline button on the last message.
+- [x] Document that `-once` sends the button but does not process callbacks after exit.
+- [x] Document that service mode polls Telegram callback updates and a running service with the same bot can process a button sent by `-once`.
+- [x] Document that pressing `Обновить` starts an out-of-schedule digest and leaves the old button in place when no new notification is sent.
+- [x] Add or update README-adjacent tests only if docs examples or configuration parsing change.
+- [x] Run `make test` and fix failures before Task 6.
 
 ### Task 6: Verify acceptance criteria
 

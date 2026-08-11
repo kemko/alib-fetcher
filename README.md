@@ -39,7 +39,13 @@ remains pending and the cycle reports the rendering error. Each Telegram listing
 keeps the full Alib announcement text and its seller and purchase links. The
 source photo-link section is replaced with `Фото: есть` or `Фото: нет`. When a
 digest is split into multiple messages, only the final message uses the normal
-notification sound; earlier messages are silent.
+notification sound; earlier messages are silent. Whenever a digest sends at
+least one message, the final message includes an inline `Обновить` button.
+Pressing it asks a running service with the same bot token to start one
+out-of-schedule digest. If that refresh sends new notifications, the clicked
+message's old button is removed before the first new message is sent, and the
+last new message receives a fresh `Обновить` button. If the refresh finds no
+sendable books, the old button stays in place.
 
 When Telegram returns a flood-control `retry_after`, the service waits for the
 specified duration and retries the same message before continuing with later
@@ -74,6 +80,11 @@ not affect `-once`. The five cron fields are minute, hour, day of month, month,
 and day of week; descriptors such as `@hourly` are also accepted. The state
 database is open only while a digest cycle is running, so a separate `-once`
 invocation can use it between scheduled cycles.
+
+Service mode also polls Telegram callback updates for the `Обновить` button.
+The `-once` command sends the button when it sends books, but exits without
+polling for callbacks. A running service that uses the same bot can process a
+button sent earlier by `-once`.
 
 The process emits structured JSON logs and stops gracefully on `SIGINT` or
 `SIGTERM`.
