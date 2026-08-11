@@ -117,11 +117,11 @@
 
 ### Task 6: Verify acceptance criteria
 
-- [ ] Run `make verify`.
-- [ ] Run `make lint` if not already covered by the final `make verify` output being inspected.
-- [ ] Run `go test -cover ./...` and verify coverage is at least 80% or report the exact package below threshold.
-- [ ] Confirm no secrets appear in logs, errors, tests, or docs.
-- [ ] Confirm worktree contains only task-related source, test, and README changes.
+- [x] Run `make verify`.
+- [x] Run `make lint` if not already covered by the final `make verify` output being inspected.
+- [x] Run `go test -cover ./...` and verify coverage is at least 80% or report the exact package below threshold. Below threshold: `cmd/alib-fetcher` 54.5%, `internal/store` 76.2%.
+- [x] Confirm no secrets appear in logs, errors, tests, or docs.
+- [x] Confirm worktree contains only task-related source, test, and README changes.
 
 ### Task 7: Update internal guidance if needed
 
