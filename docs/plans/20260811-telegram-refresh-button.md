@@ -75,17 +75,17 @@
 - Modify: `cmd/alib-fetcher/main.go`
 - Modify: `cmd/alib-fetcher/main_test.go`
 
-- [ ] Introduce a small digest runner around `executeJob` that serializes startup, scheduled, and refresh-triggered runs with one shared lock.
-- [ ] Keep cron overlap semantics: scheduled runs are skipped when another digest is already running.
-- [ ] Start Telegram callback polling only in service mode, never in `-once`.
-- [ ] For callback data that does not match the refresh constant, advance offset and ignore it.
-- [ ] For valid refresh callbacks, trigger one digest run using the existing state path, dependencies, and logger.
-- [ ] When a refresh-triggered digest has sendable chunks, remove the clicked message's old button before sending the first new chunk.
-- [ ] If no books are sent by the refresh-triggered digest, leave the old button in place.
-- [ ] If another digest is already running, answer the callback and skip the duplicate refresh run.
-- [ ] Log callback polling/digest errors with stable snake_case attributes and no secrets.
-- [ ] Add tests for no callback loop in `-once`, callback-triggered job execution, concurrent callback skip, and old-button removal before new send.
-- [ ] Run `make test` and fix failures before Task 4.
+- [x] Introduce a small digest runner around `executeJob` that serializes startup, scheduled, and refresh-triggered runs with one shared lock.
+- [x] Keep cron overlap semantics: scheduled runs are skipped when another digest is already running.
+- [x] Start Telegram callback polling only in service mode, never in `-once`.
+- [x] For callback data that does not match the refresh constant, advance offset and ignore it.
+- [x] For valid refresh callbacks, trigger one digest run using the existing state path, dependencies, and logger.
+- [x] When a refresh-triggered digest has sendable chunks, remove the clicked message's old button before sending the first new chunk.
+- [x] If no books are sent by the refresh-triggered digest, leave the old button in place.
+- [x] If another digest is already running, answer the callback and skip the duplicate refresh run.
+- [x] Log callback polling/digest errors with stable snake_case attributes and no secrets.
+- [x] Add tests for no callback loop in `-once`, callback-triggered job execution, concurrent callback skip, and old-button removal before new send.
+- [x] Run `make test` and fix failures before Task 4.
 
 ### Task 4: Preserve digest invariants around callbacks
 

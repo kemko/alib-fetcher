@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -22,13 +23,23 @@ import (
 )
 
 const (
-	logKeyError    = "error"
-	logKeyFetched  = "fetched"
-	logKeyNew      = "new"
-	logKeyPruned   = "pruned"
-	logKeySchedule = "cron_schedule"
-	logKeySent     = "sent"
-	logKeyTimezone = "timezone"
+	logKeyError        = "error"
+	logKeyFetched      = "fetched"
+	logKeyNew          = "new"
+	logKeyPruned       = "pruned"
+	logKeySchedule     = "cron_schedule"
+	logKeySent         = "sent"
+	logKeyTimezone     = "timezone"
+	logKeyTrigger      = "trigger"
+	logKeyUpdateOffset = "update_offset"
+	triggerRefresh     = "refresh"
+	triggerScheduled   = "scheduled"
+	triggerStartup     = "startup"
+)
+
+const (
+	refreshAlreadyRunningText = "Проверка уже выполняется"
+	refreshStartedText        = "Проверяю новые книги"
 )
 
 func main() {
@@ -69,29 +80,58 @@ func run(logger *slog.Logger) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	if *once {
+	return runProcess(ctx, processSettings{
+		CronSpec:     settings.CronSpec(),
+		Location:     settings.Location,
+		RunOnStartup: settings.RunOnStartup,
+		StatePath:    settings.StatePath,
+	}, dependencies, sender, *once, logger)
+}
+
+type processSettings struct {
+	Location     *time.Location
+	CronSpec     string
+	StatePath    string
+	RunOnStartup bool
+}
+
+type callbackClient interface {
+	PollCallbacks(ctx context.Context, offset int) ([]telegram.Callback, int, error)
+	AnswerCallback(ctx context.Context, callbackID string, text string) error
+	RemoveReplyMarkup(ctx context.Context, chatID int64, messageID int) error
+}
+
+func runProcess(
+	ctx context.Context,
+	settings processSettings,
+	dependencies app.Dependencies,
+	callbacks callbackClient,
+	once bool,
+	logger *slog.Logger,
+) error {
+	if once {
 		return executeJob(ctx, dependencies, settings.StatePath, logger)
 	}
 
+	runner := newDigestRunner(dependencies, settings.StatePath, logger)
 	scheduler := cron.New(
 		cron.WithLocation(settings.Location),
-		cron.WithChain(cron.SkipIfStillRunning(cron.DiscardLogger)),
 	)
 	job := func() {
-		if jobErr := executeJob(ctx, dependencies, settings.StatePath, logger); jobErr != nil {
-			logger.ErrorContext(ctx, "digest.failed", slog.Any(logKeyError, jobErr))
-		}
+		runner.RunScheduled(ctx)
 	}
-	if _, scheduleErr := scheduler.AddFunc(settings.CronSpec(), job); scheduleErr != nil {
+	if _, scheduleErr := scheduler.AddFunc(settings.CronSpec, job); scheduleErr != nil {
 		return fmt.Errorf("schedule digest: %w", scheduleErr)
 	}
 
+	callbacksDone := startCallbackPolling(ctx, callbacks, runner, logger)
 	logger.InfoContext(ctx, "scheduler.started",
-		slog.String(logKeySchedule, settings.CronSpec()),
+		slog.String(logKeySchedule, settings.CronSpec),
 		slog.String(logKeyTimezone, settings.Location.String()),
 	)
-	runScheduler(ctx, scheduler, job, settings.RunOnStartup)
-	logger.Info("scheduler.stopped")
+	runScheduler(ctx, scheduler, func() { runner.RunStartup(ctx) }, settings.RunOnStartup)
+	logger.InfoContext(ctx, "scheduler.stopped")
+	<-callbacksDone
 
 	return nil
 }
@@ -136,4 +176,159 @@ func executeJob(
 	)
 
 	return nil
+}
+
+type digestRunner struct {
+	dependencies app.Dependencies
+	logger       *slog.Logger
+	statePath    string
+	lock         sync.Mutex
+}
+
+func newDigestRunner(dependencies app.Dependencies, statePath string, logger *slog.Logger) *digestRunner {
+	return &digestRunner{
+		dependencies: dependencies,
+		logger:       logger,
+		statePath:    statePath,
+	}
+}
+
+func (r *digestRunner) RunStartup(ctx context.Context) {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+
+	r.runLocked(ctx, r.dependencies.Sender, triggerStartup, nil)
+}
+
+func (r *digestRunner) RunScheduled(ctx context.Context) {
+	if !r.lock.TryLock() {
+		return
+	}
+	defer r.lock.Unlock()
+
+	r.runLocked(ctx, r.dependencies.Sender, triggerScheduled, nil)
+}
+
+func (r *digestRunner) TryRunRefresh(
+	ctx context.Context,
+	sender app.Sender,
+	beforeRun func(context.Context) error,
+) bool {
+	if !r.lock.TryLock() {
+		return false
+	}
+	defer r.lock.Unlock()
+
+	r.runLocked(ctx, sender, triggerRefresh, beforeRun)
+
+	return true
+}
+
+func (r *digestRunner) runLocked(
+	ctx context.Context,
+	sender app.Sender,
+	trigger string,
+	beforeRun func(context.Context) error,
+) {
+	if beforeRun != nil {
+		if err := beforeRun(ctx); err != nil {
+			r.logger.ErrorContext(ctx, "callback.answer_failed", slog.Any(logKeyError, err))
+		}
+	}
+
+	dependencies := r.dependencies
+	dependencies.Sender = sender
+	if err := executeJob(ctx, dependencies, r.statePath, r.logger); err != nil {
+		r.logger.ErrorContext(ctx, "digest.failed", slog.Any(logKeyError, err), slog.String(logKeyTrigger, trigger))
+	}
+}
+
+func startCallbackPolling(
+	ctx context.Context,
+	callbacks callbackClient,
+	runner *digestRunner,
+	logger *slog.Logger,
+) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		pollRefreshCallbacks(ctx, callbacks, runner, logger)
+	}()
+
+	return done
+}
+
+func pollRefreshCallbacks(
+	ctx context.Context,
+	callbacks callbackClient,
+	runner *digestRunner,
+	logger *slog.Logger,
+) {
+	offset := 0
+	for ctx.Err() == nil {
+		items, nextOffset, err := callbacks.PollCallbacks(ctx, offset)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			logger.ErrorContext(ctx, "callback.poll_failed",
+				slog.Any(logKeyError, err),
+				slog.Int(logKeyUpdateOffset, offset),
+			)
+			continue
+		}
+		offset = nextOffset
+		for _, callback := range items {
+			if callback.Data != telegram.RefreshCallbackData {
+				continue
+			}
+			handleRefreshCallback(ctx, callbacks, runner, callback, logger)
+		}
+	}
+}
+
+func handleRefreshCallback(
+	ctx context.Context,
+	callbacks callbackClient,
+	runner *digestRunner,
+	callback telegram.Callback,
+	logger *slog.Logger,
+) {
+	sender := &refreshSender{
+		delegate:  runner.dependencies.Sender,
+		remover:   callbacks,
+		chatID:    callback.MessageChatID,
+		messageID: callback.MessageID,
+	}
+	started := runner.TryRunRefresh(ctx, sender, func(runCtx context.Context) error {
+		return callbacks.AnswerCallback(runCtx, callback.ID, refreshStartedText)
+	})
+	if started {
+		return
+	}
+
+	if err := callbacks.AnswerCallback(ctx, callback.ID, refreshAlreadyRunningText); err != nil {
+		logger.ErrorContext(ctx, "callback.answer_failed", slog.Any(logKeyError, err))
+	}
+}
+
+type refreshSender struct {
+	delegate app.Sender
+	remover  interface {
+		RemoveReplyMarkup(context.Context, int64, int) error
+	}
+	chatID    int64
+	messageID int
+	removed   bool
+}
+
+func (s *refreshSender) Send(ctx context.Context, text string, silent bool, attachRefresh bool) error {
+	if !s.removed {
+		if err := s.remover.RemoveReplyMarkup(ctx, s.chatID, s.messageID); err != nil {
+			return fmt.Errorf("remove refresh button: %w", err)
+		}
+		s.removed = true
+	}
+
+	return s.delegate.Send(ctx, text, silent, attachRefresh)
 }
