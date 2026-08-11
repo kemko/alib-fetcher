@@ -63,12 +63,12 @@
 - Create: `internal/process/scheduler.go`
 - Modify/Create: `internal/process/scheduler_test.go`
 
-- [ ] Move `runScheduler` into `internal/process/scheduler.go`.
-- [ ] Keep startup digest before `scheduler.Start()` when `RunOnStartup` is true.
-- [ ] Keep `RUN_ON_STARTUP=false` behavior: no startup job, scheduler still starts.
-- [ ] Preserve graceful shutdown: wait on context, then wait for `scheduler.Stop().Done()`.
-- [ ] Move/update scheduler tests for startup-enabled and startup-disabled behavior.
-- [ ] Run `go test ./internal/process ./cmd/alib-fetcher` and fix failures before Task 3.
+- [x] Move `runScheduler` into `internal/process/scheduler.go`.
+- [x] Keep startup digest before `scheduler.Start()` when `RunOnStartup` is true.
+- [x] Keep `RUN_ON_STARTUP=false` behavior: no startup job, scheduler still starts.
+- [x] Preserve graceful shutdown: wait on context, then wait for `scheduler.Stop().Done()`.
+- [x] Move/update scheduler tests for startup-enabled and startup-disabled behavior.
+- [x] Run `go test ./internal/process ./cmd/alib-fetcher` and fix failures before Task 3.
 
 ### Task 3: Move digest runner concurrency
 

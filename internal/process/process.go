@@ -10,8 +10,6 @@ import (
 
 	"github.com/kemko/alib-fetcher/internal/app"
 	"github.com/kemko/alib-fetcher/internal/telegram"
-
-	"github.com/robfig/cron/v3"
 )
 
 const (
@@ -72,14 +70,9 @@ func Run(
 		logger:       logger,
 		statePath:    settings.StatePath,
 	}
-	scheduler := cron.New(
-		cron.WithLocation(settings.Location),
-	)
-	job := func() {
-		runner.RunScheduled(ctx)
-	}
-	if _, scheduleErr := scheduler.AddFunc(settings.CronSpec, job); scheduleErr != nil {
-		return fmt.Errorf("schedule digest: %w", scheduleErr)
+	scheduler, err := newScheduler(ctx, settings, runner)
+	if err != nil {
+		return err
 	}
 
 	callbacksDone := startCallbackPolling(ctx, callbacks, runner, logger)
@@ -93,15 +86,6 @@ func Run(
 	runner.Wait()
 
 	return nil
-}
-
-func runScheduler(ctx context.Context, scheduler *cron.Cron, initialJob func(), runOnStartup bool) {
-	if runOnStartup {
-		initialJob()
-	}
-	scheduler.Start()
-	<-ctx.Done()
-	<-scheduler.Stop().Done()
 }
 
 type digestRunner struct {
