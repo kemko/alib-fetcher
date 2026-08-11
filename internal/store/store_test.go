@@ -78,10 +78,11 @@ func Test_Store_persists_stable_json_schema(t *testing.T) {
 			"buy_url": "https://example.com/schema",
 			"text_after_buy": "After buy",
 			"has_photos": true
-		},
-		"observed_at": %d,
-		"sent": false
-	}`, observedAt.UnixNano()), string(rawRecord))
+			},
+			"observed_at": %d,
+			"queue_order": 1,
+			"sent": false
+		}`, observedAt.UnixNano()), string(rawRecord))
 }
 
 func Test_Store_updates_sent_book_metadata_without_requeueing(t *testing.T) {
@@ -138,6 +139,30 @@ func Test_Store_returns_pending_books_from_previous_failed_cycle(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 	require.Equal(t, []alib.Book{previous, current}, pending)
+}
+
+func Test_Store_returns_pending_books_in_discovery_order(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	path := filepath.Join(t.TempDir(), "state.db")
+	observedAt := time.Date(2026, time.August, 5, 12, 0, 0, 0, time.UTC)
+	db, err := store.Open(path, time.Now())
+	require.NoError(t, err)
+	books := []alib.Book{
+		fullBook("https://example.com/z-last-key"),
+		fullBook("https://example.com/a-first-key"),
+		fullBook("https://example.com/m-middle-key"),
+	}
+	recordDiscovered(t, db, books, observedAt)
+
+	// When
+	pending, err := db.Pending(context.Background())
+	require.NoError(t, db.Close())
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, books, pending)
 }
 
 func Test_Store_mark_sent_removes_books_from_pending_and_preserves_metadata(t *testing.T) {

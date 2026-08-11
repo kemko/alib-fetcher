@@ -77,6 +77,43 @@ func Test_Sender_polls_callback_updates(t *testing.T) {
 	}, callbacks)
 }
 
+func Test_Sender_uses_short_poll_when_timeout_cannot_exceed_long_poll(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		assert.Equal(t, "/bottest-token/getUpdates", request.URL.Path)
+		var payload struct {
+			AllowedUpdates []string `json:"allowed_updates"`
+			Offset         int      `json:"offset"`
+			Timeout        int      `json:"timeout"`
+		}
+		if !assert.NoError(t, json.NewDecoder(request.Body).Decode(&payload)) {
+			return
+		}
+		assert.Equal(t, 0, payload.Timeout)
+		writer.Header().Set("Content-Type", "application/json")
+		_, err := writer.Write([]byte(`{"ok": true, "result": []}`))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+	sender, err := telegram.NewSender(telegram.Config{
+		APIBase: server.URL,
+		Token:   "test-token",
+		ChatID:  "-100123",
+		Timeout: time.Second,
+	})
+	require.NoError(t, err)
+
+	// When
+	callbacks, nextOffset, err := sender.PollCallbacks(context.Background(), 42)
+
+	// Then
+	require.NoError(t, err)
+	assert.Empty(t, callbacks)
+	assert.Equal(t, 42, nextOffset)
+}
+
 func Test_Sender_answers_callback_query(t *testing.T) {
 	t.Parallel()
 

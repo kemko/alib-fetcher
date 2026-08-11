@@ -115,7 +115,7 @@ func (s *Sender) post(ctx context.Context, method string, payload any, result an
 	if err != nil {
 		return fmt.Errorf("encode Telegram request: %w", err)
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, s.methodEndpoint(method), bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, s.endpoint+"/"+method, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("create Telegram request: %w", err)
 	}
@@ -158,10 +158,6 @@ func (s *Sender) post(ctx context.Context, method string, payload any, result an
 	return nil
 }
 
-func (s *Sender) methodEndpoint(method string) string {
-	return s.endpoint + "/" + method
-}
-
 func hasResult(result json.RawMessage) bool {
 	trimmed := bytes.TrimSpace(result)
 
@@ -171,7 +167,7 @@ func hasResult(result json.RawMessage) bool {
 func longPollTimeout(timeout time.Duration) int {
 	seconds := int(timeout / time.Second)
 	if seconds <= 1 {
-		return 1
+		return 0
 	}
 
 	return seconds - 1

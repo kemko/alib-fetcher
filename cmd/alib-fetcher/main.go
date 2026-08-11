@@ -42,6 +42,11 @@ const (
 	refreshStartedText        = "Проверяю новые книги"
 )
 
+const (
+	callbackPollErrorDelay = 5 * time.Second
+	callbackPollIdleDelay  = time.Second
+)
+
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	if err := run(logger); err != nil {
@@ -113,7 +118,11 @@ func runProcess(
 		return executeJob(ctx, dependencies, settings.StatePath, logger)
 	}
 
-	runner := newDigestRunner(dependencies, settings.StatePath, logger)
+	runner := &digestRunner{
+		dependencies: dependencies,
+		logger:       logger,
+		statePath:    settings.StatePath,
+	}
 	scheduler := cron.New(
 		cron.WithLocation(settings.Location),
 	)
@@ -132,6 +141,7 @@ func runProcess(
 	runScheduler(ctx, scheduler, func() { runner.RunStartup(ctx) }, settings.RunOnStartup)
 	logger.InfoContext(ctx, "scheduler.stopped")
 	<-callbacksDone
+	runner.Wait()
 
 	return nil
 }
@@ -183,14 +193,7 @@ type digestRunner struct {
 	logger       *slog.Logger
 	statePath    string
 	lock         sync.Mutex
-}
-
-func newDigestRunner(dependencies app.Dependencies, statePath string, logger *slog.Logger) *digestRunner {
-	return &digestRunner{
-		dependencies: dependencies,
-		logger:       logger,
-		statePath:    statePath,
-	}
+	refreshRuns  sync.WaitGroup
 }
 
 func (r *digestRunner) RunStartup(ctx context.Context) {
@@ -209,7 +212,7 @@ func (r *digestRunner) RunScheduled(ctx context.Context) {
 	r.runLocked(ctx, triggerScheduled, nil, nil)
 }
 
-func (r *digestRunner) TryRunRefresh(
+func (r *digestRunner) TryStartRefresh(
 	ctx context.Context,
 	beforeDelivery func(context.Context) error,
 	beforeRun func(context.Context) error,
@@ -217,11 +220,20 @@ func (r *digestRunner) TryRunRefresh(
 	if !r.lock.TryLock() {
 		return false
 	}
-	defer r.lock.Unlock()
 
-	r.runLocked(ctx, triggerRefresh, beforeRun, beforeDelivery)
+	r.refreshRuns.Add(1)
+	go func() {
+		defer r.refreshRuns.Done()
+		defer r.lock.Unlock()
+
+		r.runLocked(ctx, triggerRefresh, beforeRun, beforeDelivery)
+	}()
 
 	return true
+}
+
+func (r *digestRunner) Wait() {
+	r.refreshRuns.Wait()
 }
 
 func (r *digestRunner) runLocked(
@@ -275,15 +287,36 @@ func pollRefreshCallbacks(
 				slog.Any(logKeyError, err),
 				slog.Int(logKeyUpdateOffset, offset),
 			)
+			if !waitForCallbackPoll(ctx, callbackPollErrorDelay) {
+				return
+			}
 			continue
 		}
 		offset = nextOffset
+		if len(items) == 0 {
+			if !waitForCallbackPoll(ctx, callbackPollIdleDelay) {
+				return
+			}
+			continue
+		}
 		for _, callback := range items {
 			if callback.Data != telegram.RefreshCallbackData {
 				continue
 			}
 			handleRefreshCallback(ctx, callbacks, runner, callback, logger)
 		}
+	}
+}
+
+func waitForCallbackPoll(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 
@@ -301,7 +334,7 @@ func handleRefreshCallback(
 
 		return nil
 	}
-	started := runner.TryRunRefresh(ctx, beforeDelivery, func(runCtx context.Context) error {
+	started := runner.TryStartRefresh(ctx, beforeDelivery, func(runCtx context.Context) error {
 		return callbacks.AnswerCallback(runCtx, callback.ID, refreshStartedText)
 	})
 	if started {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/kemko/alib-fetcher/internal/alib"
@@ -23,7 +24,14 @@ type bookRecord struct {
 	Book       alib.Book `json:"book"`
 	ObservedAt int64     `json:"observed_at"`
 	SentAt     int64     `json:"sent_at,omitempty"`
+	QueueOrder uint64    `json:"queue_order,omitempty"`
 	Sent       bool      `json:"sent"`
+}
+
+type pendingRecord struct {
+	book       alib.Book
+	observedAt int64
+	queueOrder uint64
 }
 
 type legacyMigration struct {
@@ -72,6 +80,7 @@ func (s *Store) RecordDiscovered(ctx context.Context, books []alib.Book, observe
 	}
 
 	observedAt = observedAt.UTC()
+	observedAtNanos := encodeRecordTime(observedAt)
 	created := 0
 	err := s.db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(sentBucket)
@@ -81,20 +90,12 @@ func (s *Store) RecordDiscovered(ctx context.Context, books []alib.Book, observe
 			}
 
 			key := []byte(book.BuyURL)
-			value := bucket.Get(key)
-			record := bookRecord{
-				Book:       book,
-				ObservedAt: encodeRecordTime(observedAt),
+			record, isNew, prepareErr := prepareDiscoveredRecord(bucket, key, book, observedAtNanos)
+			if prepareErr != nil {
+				return prepareErr
 			}
-			if value == nil {
+			if isNew {
 				created++
-			} else {
-				existing, decodeErr := decodeRecord(key, value)
-				if decodeErr != nil {
-					return decodeErr
-				}
-				record.Sent = existing.Sent
-				record.SentAt = existing.SentAt
 			}
 			if putErr := putRecord(bucket, key, record); putErr != nil {
 				return putErr
@@ -109,13 +110,57 @@ func (s *Store) RecordDiscovered(ctx context.Context, books []alib.Book, observe
 	return created, nil
 }
 
+func prepareDiscoveredRecord(
+	bucket *bolt.Bucket,
+	key []byte,
+	book alib.Book,
+	observedAt int64,
+) (bookRecord, bool, error) {
+	record := bookRecord{
+		Book:       book,
+		ObservedAt: observedAt,
+	}
+	value := bucket.Get(key)
+	if value == nil {
+		queueOrder, err := nextQueueOrder(bucket)
+		record.QueueOrder = queueOrder
+
+		return record, true, err
+	}
+
+	existing, err := decodeRecord(key, value)
+	if err != nil {
+		return bookRecord{}, false, err
+	}
+	record.Sent = existing.Sent
+	record.SentAt = existing.SentAt
+	record.QueueOrder = existing.QueueOrder
+	if record.QueueOrder != 0 || record.Sent {
+		return record, false, nil
+	}
+
+	queueOrder, err := nextQueueOrder(bucket)
+	record.QueueOrder = queueOrder
+
+	return record, false, err
+}
+
+func nextQueueOrder(bucket *bolt.Bucket) (uint64, error) {
+	queueOrder, err := bucket.NextSequence()
+	if err != nil {
+		return 0, fmt.Errorf("allocate queue order: %w", err)
+	}
+
+	return queueOrder, nil
+}
+
 // Pending returns discovered books not yet delivered to Telegram.
 func (s *Store) Pending(ctx context.Context) ([]alib.Book, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("load pending books: %w", err)
 	}
 
-	pending := make([]alib.Book, 0)
+	pendingRecords := make([]pendingRecord, 0)
 	err := s.db.View(func(tx *bolt.Tx) error {
 		cursor := tx.Bucket(sentBucket).Cursor()
 		for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
@@ -128,13 +173,35 @@ func (s *Store) Pending(ctx context.Context) ([]alib.Book, error) {
 				return decodeErr
 			}
 			if !record.Sent {
-				pending = append(pending, record.Book)
+				pendingRecords = append(pendingRecords, pendingRecord{
+					book:       record.Book,
+					observedAt: record.ObservedAt,
+					queueOrder: record.QueueOrder,
+				})
 			}
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("load pending books: %w", err)
+	}
+
+	sort.SliceStable(pendingRecords, func(leftIndex, rightIndex int) bool {
+		left := pendingRecords[leftIndex]
+		right := pendingRecords[rightIndex]
+		if left.queueOrder > 0 && right.queueOrder > 0 && left.queueOrder != right.queueOrder {
+			return left.queueOrder < right.queueOrder
+		}
+		if left.observedAt != right.observedAt {
+			return left.observedAt < right.observedAt
+		}
+
+		return left.book.BuyURL < right.book.BuyURL
+	})
+
+	pending := make([]alib.Book, 0, len(pendingRecords))
+	for _, record := range pendingRecords {
+		pending = append(pending, record.book)
 	}
 
 	return pending, nil

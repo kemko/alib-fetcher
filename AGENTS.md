@@ -19,8 +19,8 @@ One digest cycle is deliberately ordered as follows:
 2. Fetch and decode the configured Alib page.
 3. Parse and deduplicate listings by their resolved `BuyURL`.
 4. Record fetched listings in bbolt as JSON records, preserving sent status.
-5. Load all pending records from bbolt, including books from earlier failed
-   cycles.
+5. Load all pending records from bbolt in first-discovery order, including
+   books from earlier failed cycles.
 6. Render pending books into Telegram-sized chunks.
 7. Send each chunk and mark only that chunk's books as delivered, only after
    Telegram accepts it.
@@ -33,6 +33,8 @@ Preserve these semantics:
   are not stable deduplication keys.
 - A failed Telegram chunk must remain pending so a later cycle can retry it.
   Earlier successfully sent chunks stay acknowledged.
+- Pending delivery order is the first-discovery/source order, not bbolt key
+  sort order.
 - A pending listing that cannot fit one Telegram message remains pending and
   must not block other renderable pending listings.
 - When a digest has multiple chunks, all but the last are sent silently; the
@@ -63,6 +65,9 @@ Preserve these semantics:
   startup and scheduled jobs. Startup, scheduled, and refresh-triggered digests
   share one process-local runner lock; scheduled and refresh-triggered digests
   skip when another digest is already running.
+- Callback polling must continue while a refresh-triggered digest is running so
+  duplicate button presses can be answered and skipped. Poll errors must not
+  spin in a tight loop.
 - Unknown callback data is ignored after the update offset advances. A refresh
   callback skipped because another digest is running must still be answered.
 - For refresh-triggered digests, remove the clicked message's old reply markup
@@ -90,7 +95,7 @@ Preserve these semantics:
   between complete listings.
 - `internal/store`: bbolt storage in bucket `sent_books`; keys are buy URLs and
   values are JSON records containing the full `alib.Book`, observed timestamp,
-  sent status, and sent timestamp for delivered records.
+  pending queue order, sent status, and sent timestamp for delivered records.
 - `internal/telegram`: Telegram Bot API client for `sendMessage`,
   `getUpdates`, `answerCallbackQuery`, and `editMessageReplyMarkup`; digest
   messages use HTML parse mode with link previews disabled.
