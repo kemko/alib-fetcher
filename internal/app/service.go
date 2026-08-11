@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/kemko/alib-fetcher/internal/alib"
@@ -16,26 +17,28 @@ type Fetcher interface {
 	Fetch(context.Context) ([]alib.Book, error)
 }
 
-// State tracks which listings have already been delivered.
+// State tracks discovered listings and their delivery status.
 type State interface {
 	Prune(context.Context, time.Time) (int, error)
-	Unseen(context.Context, []alib.Book) ([]alib.Book, error)
+	RecordDiscovered(context.Context, []alib.Book, time.Time) (int, error)
+	Pending(context.Context) ([]alib.Book, error)
 	MarkSent(context.Context, []alib.Book, time.Time) error
 }
 
 // Sender delivers one rendered message.
 type Sender interface {
-	Send(ctx context.Context, text string, silent bool) error
+	Send(ctx context.Context, text string, silent bool, attachRefresh bool) error
 }
 
 // Dependencies contains the service adapters, retry wait function, and Telegram message limit.
 type Dependencies struct {
-	Fetcher      Fetcher
-	State        State
-	Sender       Sender
-	Now          func() time.Time
-	Wait         func(context.Context, time.Duration) error
-	MessageLimit int
+	Fetcher        Fetcher
+	State          State
+	Sender         Sender
+	Now            func() time.Time
+	Wait           func(context.Context, time.Duration) error
+	BeforeDelivery func(context.Context) error
+	MessageLimit   int
 }
 
 // Result summarizes one completed or partially completed fetch job.
@@ -74,36 +77,73 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 	}
 	result.Fetched = len(books)
 
-	unseen, err := s.dependencies.State.Unseen(ctx, books)
+	created, err := s.dependencies.State.RecordDiscovered(ctx, books, cycleTime)
 	if err != nil {
-		return result, fmt.Errorf("filter listings: %w", err)
+		return result, fmt.Errorf("record discovered listings: %w", err)
 	}
-	result.New = len(unseen)
-	if len(unseen) == 0 {
+	result.New = created
+
+	pending, err := s.dependencies.State.Pending(ctx)
+	if err != nil {
+		return result, fmt.Errorf("load pending listings: %w", err)
+	}
+	if len(pending) == 0 {
 		return result, nil
 	}
 
-	chunks, err := digest.Render(unseen, s.dependencies.MessageLimit)
+	chunks, skippedBuyURLs, err := renderSendable(pending, s.dependencies.MessageLimit)
 	if err != nil {
 		return result, fmt.Errorf("render digest: %w", err)
 	}
+	if len(chunks) > 0 && s.dependencies.BeforeDelivery != nil {
+		if hookErr := s.dependencies.BeforeDelivery(ctx); hookErr != nil {
+			return result, fmt.Errorf("prepare digest delivery: %w", hookErr)
+		}
+	}
+	ackCtx := context.WithoutCancel(ctx)
 	for index, chunk := range chunks {
 		silent := index < len(chunks)-1
-		if sendErr := s.send(ctx, chunk.Text, silent); sendErr != nil {
+		attachRefresh := index == len(chunks)-1
+		if sendErr := s.send(ctx, chunk.Text, silent, attachRefresh); sendErr != nil {
 			return result, fmt.Errorf("send digest: %w", sendErr)
 		}
-		if markErr := s.dependencies.State.MarkSent(ctx, chunk.Books, cycleTime); markErr != nil {
+		if markErr := s.dependencies.State.MarkSent(ackCtx, chunk.Books, cycleTime); markErr != nil {
 			return result, fmt.Errorf("record delivered listings: %w", markErr)
 		}
 		result.Sent += len(chunk.Books)
+	}
+	if len(skippedBuyURLs) > 0 {
+		return result, fmt.Errorf("render digest: %w: %s", digest.ErrMessageTooLong, strings.Join(skippedBuyURLs, ", "))
 	}
 
 	return result, nil
 }
 
-func (s *Service) send(ctx context.Context, text string, silent bool) error {
+func renderSendable(books []alib.Book, limit int) ([]digest.Chunk, []string, error) {
+	renderable := make([]alib.Book, 0, len(books))
+	skippedBuyURLs := make([]string, 0)
+	for _, book := range books {
+		if _, err := digest.Render([]alib.Book{book}, limit); err != nil {
+			if errors.Is(err, digest.ErrMessageTooLong) {
+				skippedBuyURLs = append(skippedBuyURLs, book.BuyURL)
+				continue
+			}
+			return nil, nil, err
+		}
+		renderable = append(renderable, book)
+	}
+
+	chunks, err := digest.Render(renderable, limit)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return chunks, skippedBuyURLs, nil
+}
+
+func (s *Service) send(ctx context.Context, text string, silent bool, attachRefresh bool) error {
 	for {
-		err := s.dependencies.Sender.Send(ctx, text, silent)
+		err := s.dependencies.Sender.Send(ctx, text, silent, attachRefresh)
 		if err == nil {
 			return nil
 		}

@@ -3,9 +3,9 @@
 ## Project purpose
 
 `alib-fetcher` is a small always-on Go service. It fetches the newest listings
-from `https://www.alib.ru/tramka.phtml?tnew=7`, renders unseen books as
-Telegram HTML messages, sends them to one chat, and records successful
-deliveries in an embedded bbolt database.
+from `https://www.alib.ru/tramka.phtml?tnew=7`, records discovered books in an
+embedded bbolt database, renders pending books as Telegram HTML messages, sends
+them to one chat, and records successful deliveries in the same database.
 
 The module is `github.com/kemko/alib-fetcher`. The executable entry point is
 `./cmd/alib-fetcher`. Go 1.26.5 is the supported toolchain; `make tools`
@@ -15,23 +15,33 @@ installs the pinned golangci-lint v2 release.
 
 One digest cycle is deliberately ordered as follows:
 
-1. Remove delivery markers strictly older than 14 days.
+1. Remove sent records strictly older than 14 days.
 2. Fetch and decode the configured Alib page.
 3. Parse and deduplicate listings by their resolved `BuyURL`.
-4. Filter out URLs already present in bbolt.
-5. Render unseen books into Telegram-sized chunks.
-6. Send each chunk and mark only that chunk's books as delivered, only after
+4. Record fetched listings in bbolt as JSON records, preserving sent status.
+5. Load all pending records from bbolt in first-discovery order, including
+   books from earlier failed cycles.
+6. Render pending books into Telegram-sized chunks.
+7. Send each chunk and mark only that chunk's books as delivered, only after
    Telegram accepts it.
 
 Preserve these semantics:
 
-- The first successful run sends every listing currently on the source page.
+- The first successful run records and sends every listing currently on the
+  source page.
 - `BuyURL` is the persistent identity of a listing; titles and other metadata
   are not stable deduplication keys.
-- A failed Telegram chunk must remain unseen so a later cycle can retry it.
+- A failed Telegram chunk must remain pending so a later cycle can retry it.
   Earlier successfully sent chunks stay acknowledged.
+- Pending delivery order is the first-discovery/source order, not bbolt key
+  sort order.
+- A pending listing that cannot fit one Telegram message remains pending and
+  must not block other renderable pending listings.
 - When a digest has multiple chunks, all but the last are sent silently; the
   last chunk uses the normal notification sound.
+- Every sent digest attaches the `Обновить` inline button only to the final
+  Telegram chunk. A digest that sends no chunks does not create or move a
+  refresh button.
 - A Telegram flood-control response with a positive `retry_after` waits for the
   specified duration and retries the same chunk before later chunks. The wait
   honors context cancellation, and the chunk remains unacknowledged until a
@@ -39,13 +49,33 @@ Preserve these semantics:
 - An empty or structurally changed Alib page is an error (`alib.ErrNoBooks`),
   not a successful empty digest. This protects against silently accepting a
   broken parser.
-- Retention uses a strict boundary: records before the 14-day cutoff are
-  removed; a record exactly at the cutoff remains.
-- Legacy bbolt marker values are migrated to RFC3339Nano timestamps at open
-  time and must not be pruned immediately.
+- Retention uses a strict boundary for sent records: records sent before the
+  14-day cutoff are removed; a record exactly at the cutoff remains. Pending
+  records are not pruned by retention.
+- Legacy bbolt marker values are migrated at open time to sent JSON records
+  with only `Book.BuyURL` when full metadata cannot be recovered, and must not
+  be pruned immediately.
 - Service mode runs one cycle immediately after startup by default, then follows
   the cron schedule. `RUN_ON_STARTUP=false` skips the startup cycle. Overlapping
   cron jobs are skipped.
+- Service mode polls Telegram `callback_query` updates for the stable
+  `telegram.RefreshCallbackData` value. `-once` sends the refresh button when it
+  sends books, but never starts the callback polling loop.
+- Refresh callbacks run through the same digest path and bbolt state path as
+  startup and scheduled jobs. Startup, scheduled, and refresh-triggered digests
+  share one process-local runner lock; scheduled and refresh-triggered digests
+  skip when another digest is already running.
+- Callback polling must continue while a refresh-triggered digest is running so
+  duplicate button presses can be answered and skipped. Poll errors must not
+  spin in a tight loop.
+- Unknown callback data is ignored after the update offset advances. A refresh
+  callback from a different numeric chat ID or public `@channel` username is
+  answered and ignored. A refresh callback skipped because another digest is
+  running must still be answered.
+- For refresh-triggered digests, remove the clicked message's old reply markup
+  only after renderable chunks are known and before the first new Telegram
+  message is sent. If no chunk will be sent, leave the old button in place. If
+  old-button removal fails, do not send chunks or mark books delivered.
 - The bbolt database is open only while a digest cycle is running, allowing a
   separate `-once` process to use it between scheduled cycles.
 - `SIGINT` and `SIGTERM` stop scheduling gracefully and wait for cron shutdown.
@@ -53,8 +83,12 @@ Preserve these semantics:
 
 ## Repository map
 
-- `cmd/alib-fetcher/main.go`: process wiring, `-once`, JSON logging, signals,
-  startup run, and robfig/cron lifecycle.
+- `cmd/alib-fetcher/main.go`: thin bootstrap wiring for JSON logging, `-once`,
+  configuration loading, adapter construction, signal context, and
+  `internal/process.Run`.
+- `internal/process`: service process lifecycle orchestration, state DB open
+  lifetime, startup and scheduled digest runs, robfig/cron lifecycle, refresh
+  callback polling, and shared digest-runner concurrency.
 - `internal/config`: environment loading, defaults, and validation.
 - `internal/alib`: HTTP client plus charset-aware HTML parser. The real page may
   be Windows-1251. Listings are recognized inside `<p>` elements by a title in
@@ -65,9 +99,11 @@ Preserve these semantics:
 - `internal/digest`: full-listing Telegram HTML rendering and chunking only
   between complete listings.
 - `internal/store`: bbolt storage in bucket `sent_books`; keys are buy URLs and
-  values are UTC RFC3339Nano delivery timestamps.
-- `internal/telegram`: Telegram Bot API `sendMessage` client using HTML parse
-  mode with link previews disabled.
+  values are JSON records containing the full `alib.Book`, observed timestamp,
+  pending queue order, sent status, and sent timestamp for delivered records.
+- `internal/telegram`: Telegram Bot API client for `sendMessage`,
+  `getUpdates`, `answerCallbackQuery`, and `editMessageReplyMarkup`; digest
+  messages use HTML parse mode with link previews disabled.
 - `Dockerfile`: multi-stage static build; final distroless Debian image runs as
   UID/GID 65532 (`nonroot`) and stores state under `/var/lib/alib-fetcher`.
 - `docker-compose.yml`: read-only, capability-dropped service with a persistent
@@ -115,12 +151,15 @@ The Alib client accepts only HTTP(S), sends `User-Agent: alib-fetcher/1.0`, and
 requires HTTP 200. The Telegram sender accepts only HTTP(S), caps response
 decoding at 1 MiB, returns `telegram.ErrRequest` for transport failures and
 `telegram.ErrRejected` for unsuccessful API responses, and includes Telegram's
-description and optional `retry_after` delay in rejection errors.
+description and optional `retry_after` delay in rejection errors. Callback
+polling must request only `callback_query` updates and derive its long-poll
+timeout from the configured HTTP timeout.
 
 Structured logs go to stdout. Stable event names are `scheduler.started`,
-`scheduler.stopped`, `digest.started`, `digest.completed`, `digest.failed`, and
-`service.failed`; completion fields are `fetched`, `new`, `pruned`, and `sent`.
-Keep slog attributes typed, snake_case, and free of secrets.
+`scheduler.stopped`, `digest.started`, `digest.completed`, `digest.failed`,
+`callback.poll_failed`, `callback.answer_failed`, and `service.failed`;
+completion fields are `fetched`, `new`, `pruned`, and `sent`. Keep slog
+attributes typed, snake_case, and free of secrets.
 
 ## Development and verification
 

@@ -3,9 +3,7 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
-	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -15,21 +13,11 @@ import (
 	"github.com/kemko/alib-fetcher/internal/alib"
 	"github.com/kemko/alib-fetcher/internal/app"
 	"github.com/kemko/alib-fetcher/internal/config"
-	"github.com/kemko/alib-fetcher/internal/store"
+	"github.com/kemko/alib-fetcher/internal/process"
 	"github.com/kemko/alib-fetcher/internal/telegram"
-
-	"github.com/robfig/cron/v3"
 )
 
-const (
-	logKeyError    = "error"
-	logKeyFetched  = "fetched"
-	logKeyNew      = "new"
-	logKeyPruned   = "pruned"
-	logKeySchedule = "cron_schedule"
-	logKeySent     = "sent"
-	logKeyTimezone = "timezone"
-)
+const logKeyError = "error"
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -69,71 +57,11 @@ func run(logger *slog.Logger) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	if *once {
-		return executeJob(ctx, dependencies, settings.StatePath, logger)
-	}
-
-	scheduler := cron.New(
-		cron.WithLocation(settings.Location),
-		cron.WithChain(cron.SkipIfStillRunning(cron.DiscardLogger)),
-	)
-	job := func() {
-		if jobErr := executeJob(ctx, dependencies, settings.StatePath, logger); jobErr != nil {
-			logger.ErrorContext(ctx, "digest.failed", slog.Any(logKeyError, jobErr))
-		}
-	}
-	if _, scheduleErr := scheduler.AddFunc(settings.CronSpec(), job); scheduleErr != nil {
-		return fmt.Errorf("schedule digest: %w", scheduleErr)
-	}
-
-	logger.InfoContext(ctx, "scheduler.started",
-		slog.String(logKeySchedule, settings.CronSpec()),
-		slog.String(logKeyTimezone, settings.Location.String()),
-	)
-	runScheduler(ctx, scheduler, job, settings.RunOnStartup)
-	logger.Info("scheduler.stopped")
-
-	return nil
-}
-
-func runScheduler(ctx context.Context, scheduler *cron.Cron, initialJob func(), runOnStartup bool) {
-	if runOnStartup {
-		initialJob()
-	}
-	scheduler.Start()
-	<-ctx.Done()
-	<-scheduler.Stop().Done()
-}
-
-func executeJob(
-	ctx context.Context,
-	dependencies app.Dependencies,
-	statePath string,
-	logger *slog.Logger,
-) (jobErr error) {
-	logger.InfoContext(ctx, "digest.started")
-	state, err := store.Open(statePath, dependencies.Now())
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if closeErr := state.Close(); closeErr != nil {
-			jobErr = errors.Join(jobErr, closeErr)
-		}
-	}()
-
-	dependencies.State = state
-	service := app.NewService(dependencies)
-	result, err := service.Run(ctx)
-	if err != nil {
-		return err
-	}
-	logger.InfoContext(ctx, "digest.completed",
-		slog.Int(logKeyFetched, result.Fetched),
-		slog.Int(logKeyNew, result.New),
-		slog.Int(logKeyPruned, result.Pruned),
-		slog.Int(logKeySent, result.Sent),
-	)
-
-	return nil
+	return process.Run(ctx, process.Settings{
+		CronSpec:       settings.CronSpec(),
+		Location:       settings.Location,
+		RunOnStartup:   settings.RunOnStartup,
+		StatePath:      settings.StatePath,
+		TelegramChatID: settings.TelegramChatID,
+	}, dependencies, sender, *once, logger)
 }

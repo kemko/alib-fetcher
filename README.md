@@ -3,8 +3,8 @@
 Always-on Go service that fetches the latest listings from
 [`alib.ru/tramka.phtml?tnew=7`](https://www.alib.ru/tramka.phtml?tnew=7) and
 sends unseen books to a Telegram chat on a configurable cron schedule. Delivered
-listings are deduplicated by their unique `Купить` link in an embedded bbolt
-database.
+listings are tracked by their unique `Купить` link in an embedded bbolt
+database, which also stores the pending send queue.
 
 ## Configuration
 
@@ -21,14 +21,32 @@ database.
 | `HTTP_TIMEOUT` | no | `30s` | Timeout for each external request |
 | `MESSAGE_LIMIT` | no | `4000` | Safe Telegram message size, max `4096` |
 
-The first successful run sends every listing currently present on the source
-page. Later runs send only links that have not been acknowledged in the state
-database. A chunk is acknowledged only after Telegram accepts it. State entries
-older than 14 days are removed once at the beginning of every digest cycle.
+Each digest first records every fetched listing in the state database as a
+pending record with the full parsed Alib payload: title, announcement text,
+seller data, purchase link, trailing text, and photo marker. Existing records
+keep their sent status while refreshing the parsed payload from the latest
+source page. The first successful run records every listing currently present on
+the source page as pending and sends them.
+
+Sending reads every pending record from the database in first-discovery order,
+not only books found in the current fetch result. Books that could not be sent
+remain pending across later digest cycles. A chunk is acknowledged only after
+Telegram accepts it, and then its records become sent. Sent records older than
+14 days are removed once at the beginning of every digest cycle; pending records
+are not removed by retention pruning. If one pending listing cannot fit in a
+Telegram message, other renderable pending listings are still sent while the
+oversized listing remains pending and the cycle reports the rendering error.
 Each Telegram listing keeps the full Alib announcement text and its seller and
 purchase links. The source photo-link section is replaced with `Фото: есть` or
 `Фото: нет`. When a digest is split into multiple messages, only the final
 message uses the normal notification sound; earlier messages are silent.
+Whenever a digest sends at least one message, the final message includes an
+inline `Обновить` button.
+Pressing it asks a running service with the same bot token to start one
+out-of-schedule digest. If that refresh sends new notifications, the clicked
+message's old button is removed before the first new message is sent, and the
+last new message receives a fresh `Обновить` button. If the refresh finds no
+sendable books, the old button stays in place.
 
 When Telegram returns a flood-control `retry_after`, the service waits for the
 specified duration and retries the same message before continuing with later
@@ -64,8 +82,22 @@ and day of week; descriptors such as `@hourly` are also accepted. The state
 database is open only while a digest cycle is running, so a separate `-once`
 invocation can use it between scheduled cycles.
 
+Service mode also polls Telegram callback updates for the `Обновить` button.
+The `-once` command sends the button when it sends books, but exits without
+polling for callbacks. A running service that uses the same bot can process a
+button sent earlier by `-once`. Refresh callbacks from other chats are answered
+and ignored when their numeric chat ID or public `@channel` username does not
+match `TELEGRAM_CHAT_ID`. Do not configure a Telegram webhook or another
+`getUpdates` poller for the same bot token, or refresh callbacks may be consumed
+outside this service.
+
 The process emits structured JSON logs and stops gracefully on `SIGINT` or
 `SIGTERM`.
+
+On first run after upgrading from older timestamp-marker releases, existing
+state entries are migrated to JSON records. Back up `STATE_PATH` before
+upgrading; rolling back to an older release requires restoring or recreating the
+state database.
 
 ## Container
 

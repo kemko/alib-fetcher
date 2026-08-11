@@ -1,13 +1,14 @@
-// Package store persists delivered listing identifiers.
+// Package store persists discovered listing records.
 package store
 
 import (
-	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/kemko/alib-fetcher/internal/alib"
@@ -17,9 +18,26 @@ import (
 
 var sentBucket = []byte("sent_books")
 
-const timestampLayout = time.RFC3339Nano
+type bookRecord struct {
+	Book       alib.Book `json:"book"`
+	ObservedAt int64     `json:"observed_at"`
+	SentAt     int64     `json:"sent_at,omitempty"`
+	QueueOrder uint64    `json:"queue_order,omitempty"`
+	Sent       bool      `json:"sent"`
+}
 
-// Store persists links for listings already delivered to Telegram.
+type pendingRecord struct {
+	book       alib.Book
+	observedAt int64
+	queueOrder uint64
+}
+
+type legacyMigration struct {
+	key    []byte
+	record bookRecord
+}
+
+// Store persists discovered listings and their delivery state.
 type Store struct {
 	db *bolt.DB
 }
@@ -53,40 +71,170 @@ func Open(path string, migratedAt time.Time) (*Store, error) {
 	return store, nil
 }
 
-// Unseen returns books whose buy links are absent from the state database.
-func (s *Store) Unseen(ctx context.Context, books []alib.Book) ([]alib.Book, error) {
+// RecordDiscovered stores fetched books and returns how many records were created.
+func (s *Store) RecordDiscovered(ctx context.Context, books []alib.Book, observedAt time.Time) (int, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("filter unseen books: %w", err)
+		return 0, fmt.Errorf("record discovered books: %w", err)
 	}
 
-	unseen := make([]alib.Book, 0, len(books))
-	err := s.db.View(func(tx *bolt.Tx) error {
+	observedAt = observedAt.UTC()
+	observedAtNanos := encodeRecordTime(observedAt)
+	created := 0
+	err := s.db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(sentBucket)
 		for _, book := range books {
-			if bucket.Get([]byte(book.BuyURL)) == nil {
-				unseen = append(unseen, book)
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+
+			key := []byte(book.BuyURL)
+			record, isNew, prepareErr := prepareDiscoveredRecord(bucket, key, book, observedAtNanos)
+			if prepareErr != nil {
+				return prepareErr
+			}
+			if isNew {
+				created++
+			}
+			if putErr := putRecord(bucket, key, record); putErr != nil {
+				return putErr
 			}
 		}
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("filter unseen books: %w", err)
+		return 0, fmt.Errorf("record discovered books: %w", err)
 	}
 
-	return unseen, nil
+	return created, nil
 }
 
-// MarkSent stores the buy links for a successfully delivered group of books.
+func prepareDiscoveredRecord(
+	bucket *bolt.Bucket,
+	key []byte,
+	book alib.Book,
+	observedAt int64,
+) (bookRecord, bool, error) {
+	record := bookRecord{
+		Book:       book,
+		ObservedAt: observedAt,
+	}
+	value := bucket.Get(key)
+	if value == nil {
+		queueOrder, err := nextQueueOrder(bucket)
+		record.QueueOrder = queueOrder
+
+		return record, true, err
+	}
+
+	existing, err := decodeRecord(key, value)
+	if err != nil {
+		return bookRecord{}, false, err
+	}
+	record.Sent = existing.Sent
+	record.SentAt = existing.SentAt
+	record.QueueOrder = existing.QueueOrder
+	if record.QueueOrder != 0 || record.Sent {
+		return record, false, nil
+	}
+
+	queueOrder, err := nextQueueOrder(bucket)
+	record.QueueOrder = queueOrder
+
+	return record, false, err
+}
+
+func nextQueueOrder(bucket *bolt.Bucket) (uint64, error) {
+	queueOrder, err := bucket.NextSequence()
+	if err != nil {
+		return 0, fmt.Errorf("allocate queue order: %w", err)
+	}
+
+	return queueOrder, nil
+}
+
+// Pending returns discovered books not yet delivered to Telegram.
+func (s *Store) Pending(ctx context.Context) ([]alib.Book, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("load pending books: %w", err)
+	}
+
+	pendingRecords := make([]pendingRecord, 0)
+	err := s.db.View(func(tx *bolt.Tx) error {
+		cursor := tx.Bucket(sentBucket).Cursor()
+		for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+
+			record, decodeErr := decodeRecord(key, value)
+			if decodeErr != nil {
+				return decodeErr
+			}
+			if !record.Sent {
+				pendingRecords = append(pendingRecords, pendingRecord{
+					book:       record.Book,
+					observedAt: record.ObservedAt,
+					queueOrder: record.QueueOrder,
+				})
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("load pending books: %w", err)
+	}
+
+	sort.SliceStable(pendingRecords, func(leftIndex, rightIndex int) bool {
+		left := pendingRecords[leftIndex]
+		right := pendingRecords[rightIndex]
+		if left.queueOrder > 0 && right.queueOrder > 0 && left.queueOrder != right.queueOrder {
+			return left.queueOrder < right.queueOrder
+		}
+		if left.observedAt != right.observedAt {
+			return left.observedAt < right.observedAt
+		}
+
+		return left.book.BuyURL < right.book.BuyURL
+	})
+
+	pending := make([]alib.Book, 0, len(pendingRecords))
+	for _, record := range pendingRecords {
+		pending = append(pending, record.book)
+	}
+
+	return pending, nil
+}
+
+// MarkSent records a successfully delivered group of books.
 func (s *Store) MarkSent(ctx context.Context, books []alib.Book, sentAt time.Time) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("mark books sent: %w", err)
 	}
 
+	sentAt = sentAt.UTC()
 	if err := s.db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(sentBucket)
 		for _, book := range books {
-			if err := bucket.Put([]byte(book.BuyURL), encodeTimestamp(sentAt)); err != nil {
+			if err := ctx.Err(); err != nil {
 				return err
+			}
+
+			key := []byte(book.BuyURL)
+			value := bucket.Get(key)
+			if value == nil {
+				return fmt.Errorf("missing book record %q", book.BuyURL)
+			}
+			record, decodeErr := decodeRecord(key, value)
+			if decodeErr != nil {
+				return decodeErr
+			}
+			if record.ObservedAt == 0 {
+				record.ObservedAt = encodeRecordTime(sentAt)
+			}
+			record.Sent = true
+			record.SentAt = encodeRecordTime(sentAt)
+			if putErr := putRecord(bucket, key, record); putErr != nil {
+				return putErr
 			}
 		}
 		return nil
@@ -110,11 +258,11 @@ func (s *Store) Prune(ctx context.Context, before time.Time) (int, error) {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			sentAt, err := time.Parse(timestampLayout, string(value))
-			if err != nil {
-				return fmt.Errorf("parse sent timestamp: %w", err)
+			record, decodeErr := decodeRecord(key, value)
+			if decodeErr != nil {
+				return decodeErr
 			}
-			if sentAt.Before(before) {
+			if record.Sent && record.SentAt != 0 && decodeRecordTime(record.SentAt).Before(before) {
 				if deleteErr := cursor.Delete(); deleteErr != nil {
 					return deleteErr
 				}
@@ -140,17 +288,28 @@ func (s *Store) Close() error {
 }
 
 func migrateLegacyMarkers(bucket *bolt.Bucket, migratedAt time.Time) error {
-	legacyKeys := make([][]byte, 0)
+	migrations := make([]legacyMigration, 0)
 	if err := bucket.ForEach(func(key, value []byte) error {
-		if _, err := time.Parse(timestampLayout, string(value)); err != nil {
-			legacyKeys = append(legacyKeys, bytes.Clone(key))
+		if _, err := decodeRecord(key, value); err == nil {
+			return nil
 		}
+
+		sentAt := migratedAt.UTC()
+		migrations = append(migrations, legacyMigration{
+			key: append([]byte(nil), key...),
+			record: bookRecord{
+				Book:       alib.Book{BuyURL: string(key)},
+				Sent:       true,
+				ObservedAt: encodeRecordTime(sentAt),
+				SentAt:     encodeRecordTime(sentAt),
+			},
+		})
 		return nil
 	}); err != nil {
 		return err
 	}
-	for _, key := range legacyKeys {
-		if err := bucket.Put(key, encodeTimestamp(migratedAt)); err != nil {
+	for _, migration := range migrations {
+		if err := putRecord(bucket, migration.key, migration.record); err != nil {
 			return err
 		}
 	}
@@ -158,6 +317,30 @@ func migrateLegacyMarkers(bucket *bolt.Bucket, migratedAt time.Time) error {
 	return nil
 }
 
-func encodeTimestamp(value time.Time) []byte {
-	return []byte(value.UTC().Format(timestampLayout))
+func decodeRecord(key, value []byte) (bookRecord, error) {
+	var record bookRecord
+	if err := json.Unmarshal(value, &record); err != nil {
+		return bookRecord{}, fmt.Errorf("decode book record %q: %w", string(key), err)
+	}
+	if record.Book.BuyURL == "" {
+		return bookRecord{}, fmt.Errorf("decode book record %q: missing buy URL", string(key))
+	}
+
+	return record, nil
+}
+
+func encodeRecordTime(value time.Time) int64 {
+	return value.UTC().UnixNano()
+}
+
+func decodeRecordTime(value int64) time.Time {
+	return time.Unix(0, value).UTC()
+}
+
+func putRecord(bucket *bolt.Bucket, key []byte, record bookRecord) error {
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		return fmt.Errorf("encode book record %q: %w", string(key), err)
+	}
+	return bucket.Put(key, encoded)
 }
