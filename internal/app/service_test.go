@@ -193,7 +193,7 @@ func Test_Service_waits_and_retries_only_rate_limited_chunk(t *testing.T) {
 	events := make([]string, 0)
 	state := &fakeState{pending: books, recordedNew: len(books), events: &events}
 	sender := &fakeSender{
-		failAt: 2,
+		failAt: 3,
 		err:    retryAfterError{delay: time.Second},
 		events: &events,
 	}
@@ -224,10 +224,10 @@ func Test_Service_waits_and_retries_only_rate_limited_chunk(t *testing.T) {
 	require.Equal(t, books, state.marked)
 	require.Len(t, sender.messages, 4)
 	require.NotEqual(t, sender.messages[0], sender.messages[1])
-	require.Equal(t, sender.messages[1], sender.messages[2])
-	require.NotEqual(t, sender.messages[2], sender.messages[3])
-	require.Equal(t, []bool{true, true, true, false}, sender.silent)
-	require.Equal(t, []bool{false, false, false, true}, sender.attachRefresh)
+	require.NotEqual(t, sender.messages[1], sender.messages[2])
+	require.Equal(t, sender.messages[2], sender.messages[3])
+	require.Equal(t, []bool{true, true, false, false}, sender.silent)
+	require.Equal(t, []bool{false, false, true, true}, sender.attachRefresh)
 	require.Equal(t, []string{
 		"record",
 		"pending",
@@ -235,9 +235,9 @@ func Test_Service_waits_and_retries_only_rate_limited_chunk(t *testing.T) {
 		"send",
 		"mark:https://example.com/1",
 		"send",
-		"wait",
-		"send",
 		"mark:https://example.com/2",
+		"send",
+		"wait",
 		"send",
 		"mark:https://example.com/3",
 	}, events)
