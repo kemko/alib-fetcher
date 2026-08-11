@@ -18,8 +18,6 @@ import (
 
 var sentBucket = []byte("sent_books")
 
-const timestampLayout = time.RFC3339Nano
-
 type bookRecord struct {
 	Book       alib.Book `json:"book"`
 	ObservedAt int64     `json:"observed_at"`
@@ -297,9 +295,6 @@ func migrateLegacyMarkers(bucket *bolt.Bucket, migratedAt time.Time) error {
 		}
 
 		sentAt := migratedAt.UTC()
-		if parsedAt, err := time.Parse(timestampLayout, string(value)); err == nil {
-			sentAt = parsedAt.UTC()
-		}
 		migrations = append(migrations, legacyMigration{
 			key: append([]byte(nil), key...),
 			record: bookRecord{

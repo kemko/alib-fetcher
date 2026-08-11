@@ -314,18 +314,22 @@ func Test_Open_migrates_legacy_timestamp_marker_to_sent_record(t *testing.T) {
 	// Given
 	path := filepath.Join(t.TempDir(), "state.db")
 	buyURL := "https://example.com/legacy-timestamp"
-	sentAt := time.Date(2026, time.August, 4, 12, 0, 0, 123, time.UTC)
-	require.NoError(t, writeLegacyMarker(path, buyURL, []byte(sentAt.Format(time.RFC3339Nano))))
+	legacySentAt := time.Date(2026, time.July, 1, 12, 0, 0, 123, time.UTC)
+	migratedAt := time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, writeLegacyMarker(path, buyURL, []byte(legacySentAt.Format(time.RFC3339Nano))))
 
 	// When
-	db, err := store.Open(path, time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC))
+	db, err := store.Open(path, migratedAt)
 	require.NoError(t, err)
+	pruned, pruneErr := db.Prune(context.Background(), migratedAt.Add(-14*24*time.Hour))
 	pending, pendingErr := db.Pending(context.Background())
 	require.NoError(t, db.Close())
 	record := readStoredRecord(t, path, buyURL)
 
 	// Then
+	require.NoError(t, pruneErr)
 	require.NoError(t, pendingErr)
+	require.Zero(t, pruned)
 	require.Empty(t, pending)
 	require.Equal(t, alib.Book{BuyURL: buyURL}, record.Book)
 	require.Empty(t, record.Book.Title)
@@ -335,7 +339,7 @@ func Test_Open_migrates_legacy_timestamp_marker_to_sent_record(t *testing.T) {
 	require.Empty(t, record.Book.TextAfterBuy)
 	require.False(t, record.Book.HasPhotos)
 	require.True(t, record.Sent)
-	require.True(t, decodeStoredTime(record.SentAt).Equal(sentAt))
+	require.True(t, decodeStoredTime(record.SentAt).Equal(migratedAt.UTC()))
 }
 
 func Test_Open_migrates_unknown_legacy_marker_without_immediate_pruning(t *testing.T) {
@@ -385,9 +389,10 @@ func Test_Store_rediscovered_legacy_sent_book_gets_full_payload_without_requeuei
 	path := filepath.Join(t.TempDir(), "state.db")
 	buyURL := "https://example.com/legacy-rediscovered"
 	sentAt := time.Date(2026, time.August, 4, 12, 0, 0, 0, time.UTC)
+	migratedAt := time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC)
 	rediscoveredAt := sentAt.Add(24 * time.Hour)
 	require.NoError(t, writeLegacyMarker(path, buyURL, []byte(sentAt.Format(time.RFC3339Nano))))
-	db, err := store.Open(path, time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC))
+	db, err := store.Open(path, migratedAt)
 	require.NoError(t, err)
 	rediscovered := fullBook(buyURL)
 
@@ -404,7 +409,7 @@ func Test_Store_rediscovered_legacy_sent_book_gets_full_payload_without_requeuei
 	require.Empty(t, pending)
 	require.Equal(t, rediscovered, record.Book)
 	require.True(t, record.Sent)
-	require.True(t, decodeStoredTime(record.SentAt).Equal(sentAt))
+	require.True(t, decodeStoredTime(record.SentAt).Equal(migratedAt.UTC()))
 	require.True(t, decodeStoredTime(record.ObservedAt).Equal(rediscoveredAt.UTC()))
 }
 

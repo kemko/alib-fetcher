@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/kemko/alib-fetcher/internal/telegram"
@@ -11,6 +13,7 @@ import (
 
 const (
 	refreshAlreadyRunningText = "Проверка уже выполняется"
+	refreshUnavailableText    = "Кнопка недоступна"
 	refreshStartedText        = "Проверяю новые книги"
 )
 
@@ -30,12 +33,13 @@ func startCallbackPolling(
 	ctx context.Context,
 	callbacks CallbackClient,
 	runner *digestRunner,
+	expectedChatID string,
 	logger *slog.Logger,
 ) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		pollRefreshCallbacks(ctx, callbacks, runner, logger)
+		pollRefreshCallbacks(ctx, callbacks, runner, expectedChatID, logger)
 	}()
 
 	return done
@@ -45,6 +49,7 @@ func pollRefreshCallbacks(
 	ctx context.Context,
 	callbacks CallbackClient,
 	runner *digestRunner,
+	expectedChatID string,
 	logger *slog.Logger,
 ) {
 	offset := 0
@@ -74,6 +79,10 @@ func pollRefreshCallbacks(
 			if callback.Data != telegram.RefreshCallbackData {
 				continue
 			}
+			if !matchesExpectedChat(callback, expectedChatID) {
+				answerRefreshCallback(ctx, callbacks, callback.ID, refreshUnavailableText, logger)
+				continue
+			}
 			handleRefreshCallback(ctx, callbacks, runner, callback, logger)
 		}
 	}
@@ -89,6 +98,19 @@ func waitForCallbackPoll(ctx context.Context, delay time.Duration) bool {
 	case <-timer.C:
 		return true
 	}
+}
+
+func matchesExpectedChat(callback telegram.Callback, expectedChatID string) bool {
+	if expectedChatID == "" {
+		return true
+	}
+	if numericChatID, err := strconv.ParseInt(expectedChatID, 10, 64); err == nil {
+		return callback.MessageChatID == numericChatID
+	}
+
+	expectedUsername := strings.TrimPrefix(expectedChatID, "@")
+
+	return expectedUsername != "" && strings.EqualFold(callback.MessageChatUsername, expectedUsername)
 }
 
 func handleRefreshCallback(
@@ -112,7 +134,17 @@ func handleRefreshCallback(
 		return
 	}
 
-	if err := callbacks.AnswerCallback(ctx, callback.ID, refreshAlreadyRunningText); err != nil {
+	answerRefreshCallback(ctx, callbacks, callback.ID, refreshAlreadyRunningText, logger)
+}
+
+func answerRefreshCallback(
+	ctx context.Context,
+	callbacks CallbackClient,
+	callbackID string,
+	text string,
+	logger *slog.Logger,
+) {
+	if err := callbacks.AnswerCallback(ctx, callbackID, text); err != nil {
 		logger.ErrorContext(ctx, "callback.answer_failed", slog.Any(logKeyError, err))
 	}
 }

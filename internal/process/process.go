@@ -26,10 +26,11 @@ const (
 
 // Settings contains process-level service settings.
 type Settings struct {
-	Location     *time.Location
-	CronSpec     string
-	StatePath    string
-	RunOnStartup bool
+	Location       *time.Location
+	CronSpec       string
+	StatePath      string
+	TelegramChatID string
+	RunOnStartup   bool
 }
 
 // Run starts the digest process lifecycle or runs one digest in once mode.
@@ -51,7 +52,7 @@ func Run(
 		return err
 	}
 
-	callbacksDone := startCallbackPolling(ctx, callbacks, runner, logger)
+	callbacksDone := startCallbackPolling(ctx, callbacks, runner, settings.TelegramChatID, logger)
 	logger.InfoContext(ctx, "scheduler.started",
 		slog.String(logKeySchedule, settings.CronSpec),
 		slog.String(logKeyTimezone, settings.Location.String()),

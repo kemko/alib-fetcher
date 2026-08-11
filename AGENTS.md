@@ -69,7 +69,9 @@ Preserve these semantics:
   duplicate button presses can be answered and skipped. Poll errors must not
   spin in a tight loop.
 - Unknown callback data is ignored after the update offset advances. A refresh
-  callback skipped because another digest is running must still be answered.
+  callback from a different numeric chat ID or public `@channel` username is
+  answered and ignored. A refresh callback skipped because another digest is
+  running must still be answered.
 - For refresh-triggered digests, remove the clicked message's old reply markup
   only after renderable chunks are known and before the first new Telegram
   message is sent. If no chunk will be sent, leave the old button in place. If

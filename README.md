@@ -85,7 +85,9 @@ invocation can use it between scheduled cycles.
 Service mode also polls Telegram callback updates for the `Обновить` button.
 The `-once` command sends the button when it sends books, but exits without
 polling for callbacks. A running service that uses the same bot can process a
-button sent earlier by `-once`. Do not configure a Telegram webhook or another
+button sent earlier by `-once`. Refresh callbacks from other chats are answered
+and ignored when their numeric chat ID or public `@channel` username does not
+match `TELEGRAM_CHAT_ID`. Do not configure a Telegram webhook or another
 `getUpdates` poller for the same bot token, or refresh callbacks may be consumed
 outside this service.
 

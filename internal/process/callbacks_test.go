@@ -43,7 +43,7 @@ func Test_pollRefreshCallbacks_advances_offset_and_ignores_unknown_callback_data
 	}, statePath: filepath.Join(t.TempDir(), "state.db"), logger: slog.New(slog.DiscardHandler)}
 
 	// When
-	done := startCallbackPolling(ctx, client, runner, slog.New(slog.DiscardHandler))
+	done := startCallbackPolling(ctx, client, runner, "-100123", slog.New(slog.DiscardHandler))
 	waitForCallbackLoop(t, done)
 
 	// Then
@@ -64,10 +64,11 @@ func Test_pollRefreshCallbacks_runs_digest_and_removes_old_button_before_new_sen
 	client := &recordingCallbackClient{
 		callbacks: []telegram.Callback{
 			{
-				ID:            "callback-1",
-				Data:          telegram.RefreshCallbackData,
-				MessageChatID: -100123,
-				MessageID:     77,
+				ID:                  "callback-1",
+				Data:                telegram.RefreshCallbackData,
+				MessageChatUsername: "Books",
+				MessageChatID:       -100123,
+				MessageID:           77,
 			},
 		},
 		nextOffset: 101,
@@ -82,7 +83,7 @@ func Test_pollRefreshCallbacks_runs_digest_and_removes_old_button_before_new_sen
 	}, statePath: statePath, logger: slog.New(slog.DiscardHandler)}
 
 	// When
-	done := startCallbackPolling(ctx, client, runner, slog.New(slog.DiscardHandler))
+	done := startCallbackPolling(ctx, client, runner, "@books", slog.New(slog.DiscardHandler))
 	waitForCallbackLoop(t, done)
 	runner.wait()
 	state, err := store.Open(statePath, now)
@@ -199,6 +200,43 @@ func Test_handleRefreshCallback_answers_duplicate_refresh_while_background_diges
 	}, client.answersSnapshot())
 }
 
+func Test_pollRefreshCallbacks_answers_and_ignores_refresh_from_unexpected_chat(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	ctx, cancel := context.WithCancel(context.Background())
+	var fetches atomic.Int32
+	client := &recordingCallbackClient{
+		callbacks: []telegram.Callback{
+			{
+				ID:            "callback-1",
+				Data:          telegram.RefreshCallbackData,
+				MessageChatID: -100999,
+				MessageID:     77,
+			},
+		},
+		nextOffset: 101,
+		cancel:     cancel,
+	}
+	runner := &digestRunner{dependencies: app.Dependencies{
+		Fetcher:      countingFetcher{calls: &fetches},
+		Sender:       noopSender{},
+		MessageLimit: 4096,
+		Now:          time.Now,
+	}, statePath: filepath.Join(t.TempDir(), "state.db"), logger: slog.New(slog.DiscardHandler)}
+
+	// When
+	done := startCallbackPolling(ctx, client, runner, "-100123", slog.New(slog.DiscardHandler))
+	waitForCallbackLoop(t, done)
+	runner.wait()
+
+	// Then
+	require.Equal(t, []int{0, 101}, client.pollOffsetsSnapshot())
+	require.Equal(t, []callbackAnswer{{id: "callback-1", text: refreshUnavailableText}}, client.answersSnapshot())
+	require.Empty(t, client.removalsSnapshot())
+	require.Zero(t, fetches.Load())
+}
+
 func Test_pollRefreshCallbacks_backs_off_after_poll_error(t *testing.T) {
 	t.Parallel()
 
@@ -220,7 +258,7 @@ func Test_pollRefreshCallbacks_backs_off_after_poll_error(t *testing.T) {
 	}
 
 	// When
-	done := startCallbackPolling(ctx, client, runner, slog.New(slog.DiscardHandler))
+	done := startCallbackPolling(ctx, client, runner, "", slog.New(slog.DiscardHandler))
 	waitForSignal(t, client.firstPoll)
 	time.Sleep(20 * time.Millisecond)
 	cancel()

@@ -6,10 +6,11 @@ import (
 
 // Callback contains one Telegram callback query from an inline button.
 type Callback struct {
-	ID            string
-	Data          string
-	MessageChatID int64
-	MessageID     int
+	ID                  string
+	Data                string
+	MessageChatUsername string
+	MessageChatID       int64
+	MessageID           int
 }
 
 // PollCallbacks long-polls Telegram callback updates and returns the next offset to persist in memory.
@@ -34,10 +35,11 @@ func (s *Sender) PollCallbacks(ctx context.Context, offset int) ([]Callback, int
 			continue
 		}
 		callbacks = append(callbacks, Callback{
-			ID:            item.CallbackQuery.ID,
-			Data:          item.CallbackQuery.Data,
-			MessageChatID: item.CallbackQuery.Message.Chat.ID,
-			MessageID:     item.CallbackQuery.Message.MessageID,
+			ID:                  item.CallbackQuery.ID,
+			Data:                item.CallbackQuery.Data,
+			MessageChatUsername: item.CallbackQuery.Message.Chat.Username,
+			MessageChatID:       item.CallbackQuery.Message.Chat.ID,
+			MessageID:           item.CallbackQuery.Message.MessageID,
 		})
 	}
 
@@ -96,10 +98,11 @@ type callbackQuery struct {
 }
 
 type callbackMessage struct {
-	MessageID int          `json:"message_id"`
 	Chat      callbackChat `json:"chat"`
+	MessageID int          `json:"message_id"`
 }
 
 type callbackChat struct {
-	ID int64 `json:"id"`
+	Username string `json:"username"`
+	ID       int64  `json:"id"`
 }

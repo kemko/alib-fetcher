@@ -43,7 +43,7 @@ func Test_Sender_polls_callback_updates(t *testing.T) {
 						"data": "refresh",
 						"message": {
 							"message_id": 77,
-							"chat": {"id": -100123}
+								"chat": {"id": -100123, "username": "books"}
 						}
 					}
 				},
@@ -69,10 +69,11 @@ func Test_Sender_polls_callback_updates(t *testing.T) {
 	assert.Equal(t, 102, nextOffset)
 	assert.Equal(t, []telegram.Callback{
 		{
-			ID:            "callback-1",
-			Data:          telegram.RefreshCallbackData,
-			MessageChatID: -100123,
-			MessageID:     77,
+			ID:                  "callback-1",
+			Data:                telegram.RefreshCallbackData,
+			MessageChatUsername: "books",
+			MessageChatID:       -100123,
+			MessageID:           77,
 		},
 	}, callbacks)
 }

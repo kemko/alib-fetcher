@@ -58,9 +58,10 @@ func run(logger *slog.Logger) error {
 	defer cancel()
 
 	return process.Run(ctx, process.Settings{
-		CronSpec:     settings.CronSpec(),
-		Location:     settings.Location,
-		RunOnStartup: settings.RunOnStartup,
-		StatePath:    settings.StatePath,
+		CronSpec:       settings.CronSpec(),
+		Location:       settings.Location,
+		RunOnStartup:   settings.RunOnStartup,
+		StatePath:      settings.StatePath,
+		TelegramChatID: settings.TelegramChatID,
 	}, dependencies, sender, *once, logger)
 }
