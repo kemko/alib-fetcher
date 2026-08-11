@@ -74,12 +74,12 @@
 **Files:**
 - Modify: `cmd/alib-fetcher/main_test.go`
 
-- [ ] Расширить run wiring test или добавить новый тест с httptest Alib page и малым `MESSAGE_LIMIT`, чтобы сервис отправил несколько Telegram `sendMessage` requests.
-- [ ] Собрать `disable_notification` по всем Telegram requests.
-- [ ] Проверить, что все requests кроме последнего имеют `disable_notification=true`.
-- [ ] Проверить, что последний request имеет `disable_notification=false` и содержит refresh button.
-- [ ] Проверить, что bot token не попадает в тело запроса или логи, как в существующем тесте.
-- [ ] Запустить `go test ./cmd/alib-fetcher -count=1`.
+- [x] Расширить run wiring test или добавить новый тест с httptest Alib page и малым `MESSAGE_LIMIT`, чтобы сервис отправил несколько Telegram `sendMessage` requests.
+- [x] Собрать `disable_notification` по всем Telegram requests.
+- [x] Проверить, что все requests кроме последнего имеют `disable_notification=true`.
+- [x] Проверить, что последний request имеет `disable_notification=false` и содержит refresh button.
+- [x] Проверить, что bot token не попадает в тело запроса или логи, как в существующем тесте.
+- [x] Запустить `go test ./cmd/alib-fetcher -count=1`.
 
 ### Task 5: Verify acceptance criteria
 
