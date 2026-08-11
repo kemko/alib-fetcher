@@ -75,6 +75,73 @@ func Test_Service_sends_single_chunk_with_sound(t *testing.T) {
 	require.Equal(t, []bool{true}, sender.attachRefresh)
 }
 
+func Test_Service_runs_pre_delivery_hook_once_before_sending_and_marking(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	now := time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC)
+	book := alib.Book{Title: "Книга", BuyURL: "https://example.com/1"}
+	events := make([]string, 0)
+	state := &fakeState{pending: []alib.Book{book}, recordedNew: 1, events: &events}
+	service := app.NewService(app.Dependencies{
+		Fetcher: fakeFetcher{books: []alib.Book{book}, events: &events},
+		State:   state,
+		Sender:  &fakeSender{events: &events},
+		BeforeDelivery: func(context.Context) error {
+			events = append(events, "before_delivery")
+
+			return nil
+		},
+		MessageLimit: 4096,
+		Now:          func() time.Time { return now },
+	})
+
+	// When
+	result, err := service.Run(context.Background())
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, app.Result{Fetched: 1, New: 1, Sent: 1}, result)
+	require.Equal(t, []string{
+		"fetch",
+		"record",
+		"pending",
+		"before_delivery",
+		"send",
+		"mark:https://example.com/1",
+	}, events)
+}
+
+func Test_Service_does_not_send_or_mark_when_pre_delivery_hook_fails(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	hookErr := errors.New("remove refresh button")
+	now := time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC)
+	book := alib.Book{Title: "Книга", BuyURL: "https://example.com/1"}
+	state := &fakeState{pending: []alib.Book{book}, recordedNew: 1}
+	sender := &fakeSender{}
+	service := app.NewService(app.Dependencies{
+		Fetcher: fakeFetcher{books: []alib.Book{book}},
+		State:   state,
+		Sender:  sender,
+		BeforeDelivery: func(context.Context) error {
+			return hookErr
+		},
+		MessageLimit: 4096,
+		Now:          func() time.Time { return now },
+	})
+
+	// When
+	result, err := service.Run(context.Background())
+
+	// Then
+	require.ErrorIs(t, err, hookErr)
+	require.Equal(t, app.Result{Fetched: 1, New: 1}, result)
+	require.Empty(t, sender.messages)
+	require.Empty(t, state.marked)
+}
+
 func Test_Service_waits_and_retries_only_rate_limited_chunk(t *testing.T) {
 	t.Parallel()
 
@@ -101,6 +168,11 @@ func Test_Service_waits_and_retries_only_rate_limited_chunk(t *testing.T) {
 			require.Equal(t, time.Second, delay)
 			return nil
 		},
+		BeforeDelivery: func(context.Context) error {
+			events = append(events, "before_delivery")
+
+			return nil
+		},
 		MessageLimit: 120,
 	})
 
@@ -119,6 +191,7 @@ func Test_Service_waits_and_retries_only_rate_limited_chunk(t *testing.T) {
 	require.Equal(t, []string{
 		"record",
 		"pending",
+		"before_delivery",
 		"send",
 		"mark:https://example.com/1",
 		"send",
@@ -255,14 +328,21 @@ func Test_Service_sends_renderable_pending_books_when_one_pending_book_is_too_lo
 
 	// Given
 	now := time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC)
-	oversized := alib.Book{Title: strings.Repeat("Очень длинная книга ", 20), BuyURL: "https://example.com/oversized"}
-	deliverable := alib.Book{Title: "Обычная", BuyURL: "https://example.com/deliverable"}
-	state := &fakeState{pending: []alib.Book{oversized, deliverable}}
+	oversized := alib.Book{Title: strings.Repeat("Очень длинная книга ", 20), BuyURL: "https://e/oversized"}
+	firstDeliverable := alib.Book{Title: "Обычная 1", BuyURL: "https://e/1"}
+	secondDeliverable := alib.Book{Title: "Обычная 2", BuyURL: "https://e/2"}
+	state := &fakeState{pending: []alib.Book{oversized, firstDeliverable, secondDeliverable}}
 	sender := &fakeSender{}
+	hookCalls := 0
 	service := app.NewService(app.Dependencies{
-		Fetcher:      fakeFetcher{},
-		State:        state,
-		Sender:       sender,
+		Fetcher: fakeFetcher{},
+		State:   state,
+		Sender:  sender,
+		BeforeDelivery: func(context.Context) error {
+			hookCalls++
+
+			return nil
+		},
 		MessageLimit: 120,
 		Now:          func() time.Time { return now },
 	})
@@ -272,12 +352,46 @@ func Test_Service_sends_renderable_pending_books_when_one_pending_book_is_too_lo
 
 	// Then
 	require.ErrorIs(t, err, digest.ErrMessageTooLong)
-	require.Equal(t, app.Result{Sent: 1}, result)
-	require.Equal(t, []alib.Book{deliverable}, state.marked)
-	require.Len(t, sender.messages, 1)
+	require.Equal(t, app.Result{Sent: 2}, result)
+	require.Equal(t, []alib.Book{firstDeliverable, secondDeliverable}, state.marked)
+	require.Len(t, sender.messages, 2)
 	require.Contains(t, sender.messages[0], "Обычная")
-	require.NotContains(t, sender.messages[0], "Очень длинная книга")
-	require.Equal(t, []bool{true}, sender.attachRefresh)
+	require.NotContains(t, strings.Join(sender.messages, "\n"), "Очень длинная книга")
+	require.Equal(t, []bool{false, true}, sender.attachRefresh)
+	require.Equal(t, []bool{true, false}, sender.silent)
+	require.Equal(t, 1, hookCalls)
+}
+
+func Test_Service_does_not_run_pre_delivery_hook_when_no_chunks_are_renderable(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	oversized := alib.Book{Title: strings.Repeat("Очень длинная книга ", 20), BuyURL: "https://example.com/oversized"}
+	hookCalls := 0
+	state := &fakeState{pending: []alib.Book{oversized}}
+	sender := &fakeSender{}
+	service := app.NewService(app.Dependencies{
+		Fetcher: fakeFetcher{},
+		State:   state,
+		Sender:  sender,
+		BeforeDelivery: func(context.Context) error {
+			hookCalls++
+
+			return nil
+		},
+		MessageLimit: 120,
+		Now:          time.Now,
+	})
+
+	// When
+	result, err := service.Run(context.Background())
+
+	// Then
+	require.ErrorIs(t, err, digest.ErrMessageTooLong)
+	require.Empty(t, result.Sent)
+	require.Zero(t, hookCalls)
+	require.Empty(t, sender.messages)
+	require.Empty(t, state.marked)
 }
 
 func Test_Service_does_not_send_when_no_pending_books(t *testing.T) {

@@ -197,7 +197,7 @@ func (r *digestRunner) RunStartup(ctx context.Context) {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
-	r.runLocked(ctx, r.dependencies.Sender, triggerStartup, nil)
+	r.runLocked(ctx, triggerStartup, nil, nil)
 }
 
 func (r *digestRunner) RunScheduled(ctx context.Context) {
@@ -206,12 +206,12 @@ func (r *digestRunner) RunScheduled(ctx context.Context) {
 	}
 	defer r.lock.Unlock()
 
-	r.runLocked(ctx, r.dependencies.Sender, triggerScheduled, nil)
+	r.runLocked(ctx, triggerScheduled, nil, nil)
 }
 
 func (r *digestRunner) TryRunRefresh(
 	ctx context.Context,
-	sender app.Sender,
+	beforeDelivery func(context.Context) error,
 	beforeRun func(context.Context) error,
 ) bool {
 	if !r.lock.TryLock() {
@@ -219,16 +219,16 @@ func (r *digestRunner) TryRunRefresh(
 	}
 	defer r.lock.Unlock()
 
-	r.runLocked(ctx, sender, triggerRefresh, beforeRun)
+	r.runLocked(ctx, triggerRefresh, beforeRun, beforeDelivery)
 
 	return true
 }
 
 func (r *digestRunner) runLocked(
 	ctx context.Context,
-	sender app.Sender,
 	trigger string,
 	beforeRun func(context.Context) error,
+	beforeDelivery func(context.Context) error,
 ) {
 	if beforeRun != nil {
 		if err := beforeRun(ctx); err != nil {
@@ -237,7 +237,7 @@ func (r *digestRunner) runLocked(
 	}
 
 	dependencies := r.dependencies
-	dependencies.Sender = sender
+	dependencies.BeforeDelivery = beforeDelivery
 	if err := executeJob(ctx, dependencies, r.statePath, r.logger); err != nil {
 		r.logger.ErrorContext(ctx, "digest.failed", slog.Any(logKeyError, err), slog.String(logKeyTrigger, trigger))
 	}
@@ -294,13 +294,14 @@ func handleRefreshCallback(
 	callback telegram.Callback,
 	logger *slog.Logger,
 ) {
-	sender := &refreshSender{
-		delegate:  runner.dependencies.Sender,
-		remover:   callbacks,
-		chatID:    callback.MessageChatID,
-		messageID: callback.MessageID,
+	beforeDelivery := func(runCtx context.Context) error {
+		if err := callbacks.RemoveReplyMarkup(runCtx, callback.MessageChatID, callback.MessageID); err != nil {
+			return fmt.Errorf("remove refresh button: %w", err)
+		}
+
+		return nil
 	}
-	started := runner.TryRunRefresh(ctx, sender, func(runCtx context.Context) error {
+	started := runner.TryRunRefresh(ctx, beforeDelivery, func(runCtx context.Context) error {
 		return callbacks.AnswerCallback(runCtx, callback.ID, refreshStartedText)
 	})
 	if started {
@@ -310,25 +311,4 @@ func handleRefreshCallback(
 	if err := callbacks.AnswerCallback(ctx, callback.ID, refreshAlreadyRunningText); err != nil {
 		logger.ErrorContext(ctx, "callback.answer_failed", slog.Any(logKeyError, err))
 	}
-}
-
-type refreshSender struct {
-	delegate app.Sender
-	remover  interface {
-		RemoveReplyMarkup(context.Context, int64, int) error
-	}
-	chatID    int64
-	messageID int
-	removed   bool
-}
-
-func (s *refreshSender) Send(ctx context.Context, text string, silent bool, attachRefresh bool) error {
-	if !s.removed {
-		if err := s.remover.RemoveReplyMarkup(ctx, s.chatID, s.messageID); err != nil {
-			return fmt.Errorf("remove refresh button: %w", err)
-		}
-		s.removed = true
-	}
-
-	return s.delegate.Send(ctx, text, silent, attachRefresh)
 }

@@ -32,12 +32,13 @@ type Sender interface {
 
 // Dependencies contains the service adapters, retry wait function, and Telegram message limit.
 type Dependencies struct {
-	Fetcher      Fetcher
-	State        State
-	Sender       Sender
-	Now          func() time.Time
-	Wait         func(context.Context, time.Duration) error
-	MessageLimit int
+	Fetcher        Fetcher
+	State          State
+	Sender         Sender
+	Now            func() time.Time
+	Wait           func(context.Context, time.Duration) error
+	BeforeDelivery func(context.Context) error
+	MessageLimit   int
 }
 
 // Result summarizes one completed or partially completed fetch job.
@@ -93,6 +94,11 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 	chunks, skippedBuyURLs, err := renderSendable(pending, s.dependencies.MessageLimit)
 	if err != nil {
 		return result, fmt.Errorf("render digest: %w", err)
+	}
+	if len(chunks) > 0 && s.dependencies.BeforeDelivery != nil {
+		if hookErr := s.dependencies.BeforeDelivery(ctx); hookErr != nil {
+			return result, fmt.Errorf("prepare digest delivery: %w", hookErr)
+		}
 	}
 	ackCtx := context.WithoutCancel(ctx)
 	for index, chunk := range chunks {

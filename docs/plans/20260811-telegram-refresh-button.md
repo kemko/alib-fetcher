@@ -95,13 +95,13 @@
 - Modify: `cmd/alib-fetcher/main.go`
 - Modify: `cmd/alib-fetcher/main_test.go`
 
-- [ ] Add a pre-delivery hook to `app.Dependencies` only if needed to guarantee old-button removal happens after renderable chunks are known and before the first new Telegram message.
-- [ ] Ensure the hook runs once per digest only when at least one chunk will be sent.
-- [ ] Ensure hook failure does not mark books sent before Telegram accepts their chunks.
-- [ ] Preserve flood-control retry behavior for chunks after the old-button removal hook.
-- [ ] Preserve oversized-listing behavior: renderable pending listings still send, oversized listings remain pending, and final sent chunk gets the refresh button.
-- [ ] Add tests for hook ordering relative to send/mark, hook not running when there are no chunks, and final-button behavior when one pending listing is oversized.
-- [ ] Run `make test` and fix failures before Task 5.
+- [x] Add a pre-delivery hook to `app.Dependencies` only if needed to guarantee old-button removal happens after renderable chunks are known and before the first new Telegram message.
+- [x] Ensure the hook runs once per digest only when at least one chunk will be sent.
+- [x] Ensure hook failure does not mark books sent before Telegram accepts their chunks.
+- [x] Preserve flood-control retry behavior for chunks after the old-button removal hook.
+- [x] Preserve oversized-listing behavior: renderable pending listings still send, oversized listings remain pending, and final sent chunk gets the refresh button.
+- [x] Add tests for hook ordering relative to send/mark, hook not running when there are no chunks, and final-button behavior when one pending listing is oversized.
+- [x] Run `make test` and fix failures before Task 5.
 
 ### Task 5: Update documentation
 
