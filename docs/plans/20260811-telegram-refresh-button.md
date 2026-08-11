@@ -128,6 +128,6 @@
 **Files:**
 - Modify: `AGENTS.md` only if implementation changes durable repository workflow or invariants.
 
-- [ ] Update `AGENTS.md` only if new callback/polling invariants need to be preserved by future agents.
-- [ ] If `AGENTS.md` changes, add/update tests only when the documented invariant maps to executable behavior not already covered.
-- [ ] Run `make test` after any internal guidance-related code/test adjustment.
+- [x] Update `AGENTS.md` only if new callback/polling invariants need to be preserved by future agents.
+- [x] If `AGENTS.md` changes, add/update tests only when the documented invariant maps to executable behavior not already covered.
+- [x] Run `make test` after any internal guidance-related code/test adjustment.

@@ -37,6 +37,9 @@ Preserve these semantics:
   must not block other renderable pending listings.
 - When a digest has multiple chunks, all but the last are sent silently; the
   last chunk uses the normal notification sound.
+- Every sent digest attaches the `Обновить` inline button only to the final
+  Telegram chunk. A digest that sends no chunks does not create or move a
+  refresh button.
 - A Telegram flood-control response with a positive `retry_after` waits for the
   specified duration and retries the same chunk before later chunks. The wait
   honors context cancellation, and the chunk remains unacknowledged until a
@@ -53,6 +56,19 @@ Preserve these semantics:
 - Service mode runs one cycle immediately after startup by default, then follows
   the cron schedule. `RUN_ON_STARTUP=false` skips the startup cycle. Overlapping
   cron jobs are skipped.
+- Service mode polls Telegram `callback_query` updates for the stable
+  `telegram.RefreshCallbackData` value. `-once` sends the refresh button when it
+  sends books, but never starts the callback polling loop.
+- Refresh callbacks run through the same digest path and bbolt state path as
+  startup and scheduled jobs. Startup, scheduled, and refresh-triggered digests
+  share one process-local runner lock; scheduled and refresh-triggered digests
+  skip when another digest is already running.
+- Unknown callback data is ignored after the update offset advances. A refresh
+  callback skipped because another digest is running must still be answered.
+- For refresh-triggered digests, remove the clicked message's old reply markup
+  only after renderable chunks are known and before the first new Telegram
+  message is sent. If no chunk will be sent, leave the old button in place. If
+  old-button removal fails, do not send chunks or mark books delivered.
 - The bbolt database is open only while a digest cycle is running, allowing a
   separate `-once` process to use it between scheduled cycles.
 - `SIGINT` and `SIGTERM` stop scheduling gracefully and wait for cron shutdown.
@@ -61,7 +77,8 @@ Preserve these semantics:
 ## Repository map
 
 - `cmd/alib-fetcher/main.go`: process wiring, `-once`, JSON logging, signals,
-  startup run, and robfig/cron lifecycle.
+  startup run, robfig/cron lifecycle, refresh callback polling, and shared
+  digest-runner concurrency.
 - `internal/config`: environment loading, defaults, and validation.
 - `internal/alib`: HTTP client plus charset-aware HTML parser. The real page may
   be Windows-1251. Listings are recognized inside `<p>` elements by a title in
@@ -74,8 +91,9 @@ Preserve these semantics:
 - `internal/store`: bbolt storage in bucket `sent_books`; keys are buy URLs and
   values are JSON records containing the full `alib.Book`, observed timestamp,
   sent status, and sent timestamp for delivered records.
-- `internal/telegram`: Telegram Bot API `sendMessage` client using HTML parse
-  mode with link previews disabled.
+- `internal/telegram`: Telegram Bot API client for `sendMessage`,
+  `getUpdates`, `answerCallbackQuery`, and `editMessageReplyMarkup`; digest
+  messages use HTML parse mode with link previews disabled.
 - `Dockerfile`: multi-stage static build; final distroless Debian image runs as
   UID/GID 65532 (`nonroot`) and stores state under `/var/lib/alib-fetcher`.
 - `docker-compose.yml`: read-only, capability-dropped service with a persistent
@@ -123,12 +141,15 @@ The Alib client accepts only HTTP(S), sends `User-Agent: alib-fetcher/1.0`, and
 requires HTTP 200. The Telegram sender accepts only HTTP(S), caps response
 decoding at 1 MiB, returns `telegram.ErrRequest` for transport failures and
 `telegram.ErrRejected` for unsuccessful API responses, and includes Telegram's
-description and optional `retry_after` delay in rejection errors.
+description and optional `retry_after` delay in rejection errors. Callback
+polling must request only `callback_query` updates and derive its long-poll
+timeout from the configured HTTP timeout.
 
 Structured logs go to stdout. Stable event names are `scheduler.started`,
-`scheduler.stopped`, `digest.started`, `digest.completed`, `digest.failed`, and
-`service.failed`; completion fields are `fetched`, `new`, `pruned`, and `sent`.
-Keep slog attributes typed, snake_case, and free of secrets.
+`scheduler.stopped`, `digest.started`, `digest.completed`, `digest.failed`,
+`callback.poll_failed`, `callback.answer_failed`, and `service.failed`;
+completion fields are `fetched`, `new`, `pruned`, and `sent`. Keep slog
+attributes typed, snake_case, and free of secrets.
 
 ## Development and verification
 
