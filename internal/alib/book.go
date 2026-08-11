@@ -3,12 +3,12 @@ package alib
 
 // Book is one sale listing from Alib.ru.
 type Book struct {
-	Title            string
-	TextBeforeSeller string
-	Seller           string
-	SellerURL        string
-	TextBeforeBuy    string
-	BuyURL           string
-	TextAfterBuy     string
-	HasPhotos        bool
+	Title            string `json:"title"`
+	TextBeforeSeller string `json:"text_before_seller"`
+	Seller           string `json:"seller"`
+	SellerURL        string `json:"seller_url"`
+	TextBeforeBuy    string `json:"text_before_buy"`
+	BuyURL           string `json:"buy_url"`
+	TextAfterBuy     string `json:"text_after_buy"`
+	HasPhotos        bool   `json:"has_photos"`
 }

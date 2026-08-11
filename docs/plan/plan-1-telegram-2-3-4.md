@@ -68,19 +68,19 @@ Files:
 
 - Modify: internal/store/store.go
 - Modify: internal/store/store_test.go
-- [ ] Ввести internal JSON record в `store`: `Book alib.Book`, `Sent bool`, `FirstSeenAt`/`LastSeenAt` или один `ObservedAt`, `SentAt` для retention.
-- [ ] Убедиться, что record хранит все поля `alib.Book`: `Title`, `TextBeforeSeller`, `Seller`, `SellerURL`, `TextBeforeBuy`, `BuyURL`, `TextAfterBuy`, `HasPhotos`.
-- [ ] Сохранить существующий bucket name `sent_books` для совместимости с уже созданными БД, но переименовать Go-level смысл в books/state records, если это упрощает чтение.
-- [ ] Реализовать `RecordDiscovered`: для нового `BuyURL` создать record с полным `Book` payload и `Sent=false`.
-- [ ] Реализовать `RecordDiscovered`: для существующей `Sent=false` записи обновить `Book` payload полными актуальными данными и оставить pending.
-- [ ] Реализовать `RecordDiscovered`: для существующей `Sent=true` записи обновить `Book` payload полными актуальными данными, но не сбрасывать `Sent` и `SentAt`.
-- [ ] Реализовать `Pending`: читать из БД все records с `Sent=false` и возвращать сохраненный `alib.Book`.
-- [ ] Обновить `MarkSent`: выставлять `Sent=true` и `SentAt=sentAt` для `BuyURL` из книг успешно отправленного чанка, не теряя сохраненный `Book`.
-- [ ] Добавить тест: `RecordDiscovered` сохраняет новые книги как pending с полным набором полей `alib.Book`.
-- [ ] Добавить тест: повторно обнаруженная already-sent книга обновляет book metadata, но не становится pending.
-- [ ] Добавить тест: pending книга из прошлой неудачной отправки возвращается `Pending` без участия текущего массива fetch.
-- [ ] Добавить тест: `MarkSent` убирает книги из `Pending` и сохраняет book metadata.
-- [ ] Run `go test -race -shuffle=on -count=1 ./internal/store` before task 3.
+- [x] Ввести internal JSON record в `store`: `Book alib.Book`, `Sent bool`, `FirstSeenAt`/`LastSeenAt` или один `ObservedAt`, `SentAt` для retention.
+- [x] Убедиться, что record хранит все поля `alib.Book`: `Title`, `TextBeforeSeller`, `Seller`, `SellerURL`, `TextBeforeBuy`, `BuyURL`, `TextAfterBuy`, `HasPhotos`.
+- [x] Сохранить существующий bucket name `sent_books` для совместимости с уже созданными БД, но переименовать Go-level смысл в books/state records, если это упрощает чтение.
+- [x] Реализовать `RecordDiscovered`: для нового `BuyURL` создать record с полным `Book` payload и `Sent=false`.
+- [x] Реализовать `RecordDiscovered`: для существующей `Sent=false` записи обновить `Book` payload полными актуальными данными и оставить pending.
+- [x] Реализовать `RecordDiscovered`: для существующей `Sent=true` записи обновить `Book` payload полными актуальными данными, но не сбрасывать `Sent` и `SentAt`.
+- [x] Реализовать `Pending`: читать из БД все records с `Sent=false` и возвращать сохраненный `alib.Book`.
+- [x] Обновить `MarkSent`: выставлять `Sent=true` и `SentAt=sentAt` для `BuyURL` из книг успешно отправленного чанка, не теряя сохраненный `Book`.
+- [x] Добавить тест: `RecordDiscovered` сохраняет новые книги как pending с полным набором полей `alib.Book`.
+- [x] Добавить тест: повторно обнаруженная already-sent книга обновляет book metadata, но не становится pending.
+- [x] Добавить тест: pending книга из прошлой неудачной отправки возвращается `Pending` без участия текущего массива fetch.
+- [x] Добавить тест: `MarkSent` убирает книги из `Pending` и сохраняет book metadata.
+- [x] Run `go test -race -shuffle=on -count=1 ./internal/store` before task 3.
 
 ### Task 3: Обновить migration и retention под новую схему
 
