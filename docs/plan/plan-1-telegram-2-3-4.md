@@ -107,10 +107,10 @@ Files:
 
 - Modify: internal/digest/render_test.go if coverage gaps appear
 - Modify: internal/app/service_test.go if chunk expectations need adjustment
-- [ ] Убедиться, что `digest.Render` не требует production changes: он уже работает с `[]alib.Book`, теперь эти книги приходят из DB `Pending`.
-- [ ] Если app tests перестали явно покрывать chunk-level `MarkSent`, добавить regression test: при send error на втором чанке первый чанк уже `MarkSent`, второй остается pending/not marked.
-- [ ] Если порядок `Pending` из store стал deterministic by key, не добавлять отдельную order abstraction без требования; app tests должны задавать порядок через fakeState.
-- [ ] Run `go test -race -shuffle=on -count=1 ./internal/digest ./internal/app` before task 5.
+- [x] Убедиться, что `digest.Render` не требует production changes: он уже работает с `[]alib.Book`, теперь эти книги приходят из DB `Pending`.
+- [x] Если app tests перестали явно покрывать chunk-level `MarkSent`, добавить regression test: при send error на втором чанке первый чанк уже `MarkSent`, второй остается pending/not marked.
+- [x] Если порядок `Pending` из store стал deterministic by key, не добавлять отдельную order abstraction без требования; app tests должны задавать порядок через fakeState.
+- [x] Run `go test -race -shuffle=on -count=1 ./internal/digest ./internal/app` before task 5.
 
 ### Task 5: Обновить wiring и документацию поведения
 
