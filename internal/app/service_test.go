@@ -261,6 +261,64 @@ func Test_Service_records_discovered_before_loading_pending_and_sending(t *testi
 	}, events)
 }
 
+func Test_Service_stops_when_record_discovered_fails(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	recordErr := errors.New("database write failed")
+	book := alib.Book{Title: "Новая", BuyURL: "https://example.com/new"}
+	events := make([]string, 0)
+	state := &fakeState{events: &events, recordErr: recordErr}
+	sender := &fakeSender{}
+	service := app.NewService(app.Dependencies{
+		Fetcher:      fakeFetcher{books: []alib.Book{book}},
+		State:        state,
+		Sender:       sender,
+		MessageLimit: 4096,
+		Now:          time.Now,
+	})
+
+	// When
+	result, err := service.Run(context.Background())
+
+	// Then
+	require.ErrorIs(t, err, recordErr)
+	require.Contains(t, err.Error(), "record discovered listings")
+	require.Equal(t, app.Result{Fetched: 1}, result)
+	require.Equal(t, []string{"record"}, events)
+	require.Empty(t, sender.messages)
+	require.Empty(t, state.marked)
+}
+
+func Test_Service_stops_when_pending_load_fails(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	pendingErr := errors.New("database read failed")
+	book := alib.Book{Title: "Новая", BuyURL: "https://example.com/new"}
+	events := make([]string, 0)
+	state := &fakeState{events: &events, recordedNew: 1, pendingErr: pendingErr}
+	sender := &fakeSender{}
+	service := app.NewService(app.Dependencies{
+		Fetcher:      fakeFetcher{books: []alib.Book{book}},
+		State:        state,
+		Sender:       sender,
+		MessageLimit: 4096,
+		Now:          time.Now,
+	})
+
+	// When
+	result, err := service.Run(context.Background())
+
+	// Then
+	require.ErrorIs(t, err, pendingErr)
+	require.Contains(t, err.Error(), "load pending listings")
+	require.Equal(t, app.Result{Fetched: 1, New: 1}, result)
+	require.Equal(t, []string{"record", "pending"}, events)
+	require.Empty(t, sender.messages)
+	require.Empty(t, state.marked)
+}
+
 func Test_Service_sends_pending_books_not_present_in_current_fetch(t *testing.T) {
 	t.Parallel()
 
@@ -454,6 +512,8 @@ func (f fakeFetcher) Fetch(context.Context) ([]alib.Book, error) {
 
 type fakeState struct {
 	events       *[]string
+	recordErr    error
+	pendingErr   error
 	markedAt     time.Time
 	prunedBefore time.Time
 	recordedAt   time.Time
@@ -475,12 +535,18 @@ func (f *fakeState) RecordDiscovered(_ context.Context, books []alib.Book, obser
 	if f.events != nil {
 		*f.events = append(*f.events, "record")
 	}
+	if f.recordErr != nil {
+		return 0, f.recordErr
+	}
 	return f.recordedNew, nil
 }
 
 func (f *fakeState) Pending(context.Context) ([]alib.Book, error) {
 	if f.events != nil {
 		*f.events = append(*f.events, "pending")
+	}
+	if f.pendingErr != nil {
+		return nil, f.pendingErr
 	}
 	return f.pending, nil
 }

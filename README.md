@@ -85,10 +85,17 @@ invocation can use it between scheduled cycles.
 Service mode also polls Telegram callback updates for the `Обновить` button.
 The `-once` command sends the button when it sends books, but exits without
 polling for callbacks. A running service that uses the same bot can process a
-button sent earlier by `-once`.
+button sent earlier by `-once`. Do not configure a Telegram webhook or another
+`getUpdates` poller for the same bot token, or refresh callbacks may be consumed
+outside this service.
 
 The process emits structured JSON logs and stops gracefully on `SIGINT` or
 `SIGTERM`.
+
+On first run after upgrading from older timestamp-marker releases, existing
+state entries are migrated to JSON records. Back up `STATE_PATH` before
+upgrading; rolling back to an older release requires restoring or recreating the
+state database.
 
 ## Container
 
