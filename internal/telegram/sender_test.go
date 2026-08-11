@@ -66,7 +66,9 @@ func Test_Sender_posts_audible_HTML_message_with_notification_enabled(t *testing
 		var payload map[string]json.RawMessage
 		assert.NoError(t, json.NewDecoder(request.Body).Decode(&payload))
 		disableNotification, ok := payload["disable_notification"]
-		require.True(t, ok)
+		if !assert.True(t, ok) {
+			return
+		}
 		assert.JSONEq(t, `false`, string(disableNotification))
 		writer.Header().Set("Content-Type", "application/json")
 		_, err := writer.Write([]byte(`{"ok":true,"result":{}}`))

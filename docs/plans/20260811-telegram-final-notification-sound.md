@@ -86,10 +86,10 @@
 **Files:**
 - Modify: none
 
-- [ ] Запустить `make verify`.
-- [ ] Убедиться, что форматирование, lint, race-enabled shuffled tests и build проходят.
-- [ ] Проверить, что тесты явно покрывают single chunk, multiple chunks, retry same final chunk, Telegram JSON payload и main wiring для нескольких сообщений.
-- [ ] Проверить, что coverage для затронутых пакетов не снижена и остается выше 80% там, где применяется локальная метрика проекта.
+- [x] Запустить `make verify`.
+- [x] Убедиться, что форматирование, lint, race-enabled shuffled tests и build проходят.
+- [x] Проверить, что тесты явно покрывают single chunk, multiple chunks, retry same final chunk, Telegram JSON payload и main wiring для нескольких сообщений.
+- [x] Проверить, что coverage для затронутых пакетов не снижена и остается выше 80% там, где применяется локальная метрика проекта. Локального coverage gate нет; `run` покрыт на 80.0%, `internal/app` на 90.1%, `internal/telegram` на 94.4%, общий `cmd/alib-fetcher` ниже из-за непокрытого `main` wrapper.
 
 ### Task 6: Update documentation if behavior text changed
 
