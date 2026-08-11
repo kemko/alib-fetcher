@@ -1,4 +1,4 @@
-package main
+package process
 
 import (
 	"context"
@@ -43,7 +43,7 @@ func Test_executeJob_closes_state_database_after_cycle(t *testing.T) {
 	require.NoError(t, reopened.Close())
 }
 
-func Test_runProcess_does_not_poll_callbacks_in_once_mode(t *testing.T) {
+func Test_Run_does_not_poll_callbacks_in_once_mode(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -58,7 +58,7 @@ func Test_runProcess_does_not_poll_callbacks_in_once_mode(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
 
 	// When
-	err := runProcess(context.Background(), processSettings{
+	err := Run(context.Background(), Settings{
 		StatePath: statePath,
 	}, dependencies, panicCallbackClient{t: t}, true, logger)
 
