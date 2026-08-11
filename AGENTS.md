@@ -43,8 +43,9 @@ Preserve these semantics:
   removed; a record exactly at the cutoff remains.
 - Legacy bbolt marker values are migrated to RFC3339Nano timestamps at open
   time and must not be pruned immediately.
-- Service mode runs one cycle immediately after startup, then follows the cron
-  schedule. Overlapping cron jobs are skipped.
+- Service mode runs one cycle immediately after startup by default, then follows
+  the cron schedule. `RUN_ON_STARTUP=false` skips the startup cycle. Overlapping
+  cron jobs are skipped.
 - The bbolt database is open only while a digest cycle is running, allowing a
   separate `-once` process to use it between scheduled cycles.
 - `SIGINT` and `SIGTERM` stop scheduling gracefully and wait for cron shutdown.
@@ -91,6 +92,7 @@ Optional defaults:
 | --- | --- | --- |
 | `CRON_SCHEDULE` | `0 0 * * *` | robfig standard five-field cron; descriptors such as `@hourly` and `@every 6h` are accepted |
 | `TIMEZONE` | `Europe/Moscow` | IANA location used by cron |
+| `RUN_ON_STARTUP` | `true` | whether service mode runs one digest cycle immediately after startup |
 | `STATE_PATH` | `/var/lib/alib-fetcher/state.db` | bbolt database; parent directories are created with mode `0750`, DB with `0600` |
 | `ALIB_URL` | `https://www.alib.ru/tramka.phtml?tnew=7` | HTTP(S) source; override it in integration tests |
 | `TELEGRAM_API_BASE` | `https://api.telegram.org` | HTTP(S) API base; override it in tests |

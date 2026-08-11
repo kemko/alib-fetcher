@@ -90,14 +90,16 @@ func run(logger *slog.Logger) error {
 		slog.String(logKeySchedule, settings.CronSpec()),
 		slog.String(logKeyTimezone, settings.Location.String()),
 	)
-	runScheduler(ctx, scheduler, job)
+	runScheduler(ctx, scheduler, job, settings.RunOnStartup)
 	logger.Info("scheduler.stopped")
 
 	return nil
 }
 
-func runScheduler(ctx context.Context, scheduler *cron.Cron, initialJob func()) {
-	initialJob()
+func runScheduler(ctx context.Context, scheduler *cron.Cron, initialJob func(), runOnStartup bool) {
+	if runOnStartup {
+		initialJob()
+	}
 	scheduler.Start()
 	<-ctx.Done()
 	<-scheduler.Stop().Done()

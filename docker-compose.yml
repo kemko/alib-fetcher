@@ -10,6 +10,7 @@ services:
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:?TELEGRAM_CHAT_ID is required}
       CRON_SCHEDULE: "${CRON_SCHEDULE:-0 0 * * *}"
       TIMEZONE: ${TIMEZONE:-Europe/Moscow}
+      RUN_ON_STARTUP: "${RUN_ON_STARTUP:-true}"
       STATE_PATH: /var/lib/alib-fetcher/state.db
       ALIB_URL: ${ALIB_URL:-https://www.alib.ru/tramka.phtml?tnew=7}
       TELEGRAM_API_BASE: ${TELEGRAM_API_BASE:-https://api.telegram.org}

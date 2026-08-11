@@ -53,10 +53,29 @@ func Test_runScheduler_executes_job_immediately_before_waiting_for_schedule(t *t
 	require.NoError(t, err)
 
 	// When
-	runScheduler(ctx, scheduler, job)
+	runScheduler(ctx, scheduler, job, true)
 
 	// Then
 	require.Equal(t, int32(1), runs.Load())
+}
+
+func Test_runScheduler_skips_job_at_startup_when_disabled(t *testing.T) {
+	// Given
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	scheduler := cron.New()
+	var runs atomic.Int32
+	job := func() {
+		runs.Add(1)
+	}
+	_, err := scheduler.AddFunc("0 0 1 1 *", job)
+	require.NoError(t, err)
+
+	// When
+	runScheduler(ctx, scheduler, job, false)
+
+	// Then
+	require.Zero(t, runs.Load())
 }
 
 type emptyFetcher struct{}

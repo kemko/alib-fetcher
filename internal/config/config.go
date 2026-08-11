@@ -19,6 +19,7 @@ const (
 	defaultCronSchedule      = "0 0 * * *"
 	defaultHTTPTimeout       = 30 * time.Second
 	defaultMessageLimit      = 4000
+	defaultRunOnStartup      = true
 	defaultStatePath         = "/var/lib/alib-fetcher/state.db"
 	defaultTelegramAPIBase   = "https://api.telegram.org"
 	defaultTimezone          = "Europe/Moscow"
@@ -36,6 +37,7 @@ type Config struct {
 	cronSpec        string
 	HTTPTimeout     time.Duration
 	MessageLimit    int
+	RunOnStartup    bool
 }
 
 // Load reads and validates process environment variables.
@@ -62,6 +64,10 @@ func Load() (Config, error) {
 	if err != nil || messageLimit < 64 || messageLimit > telegramHardMessageLimit {
 		return Config{}, fmt.Errorf("%w: MESSAGE_LIMIT must be between 64 and %d", ErrInvalid, telegramHardMessageLimit)
 	}
+	runOnStartup, err := strconv.ParseBool(valueOrDefault("RUN_ON_STARTUP", strconv.FormatBool(defaultRunOnStartup)))
+	if err != nil {
+		return Config{}, fmt.Errorf("%w: RUN_ON_STARTUP must be a boolean", ErrInvalid)
+	}
 
 	return Config{
 		TelegramToken:   token,
@@ -72,6 +78,7 @@ func Load() (Config, error) {
 		Location:        location,
 		HTTPTimeout:     timeout,
 		MessageLimit:    messageLimit,
+		RunOnStartup:    runOnStartup,
 		cronSpec:        cronSpec,
 	}, nil
 }

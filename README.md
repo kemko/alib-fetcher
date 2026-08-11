@@ -14,6 +14,7 @@ database.
 | `TELEGRAM_CHAT_ID` | yes | - | Numeric chat ID or `@channel` username |
 | `CRON_SCHEDULE` | no | `0 0 * * *` | Standard five-field cron expression |
 | `TIMEZONE` | no | `Europe/Moscow` | IANA timezone used by the scheduler |
+| `RUN_ON_STARTUP` | no | `true` | Run one digest cycle immediately after scheduler startup |
 | `STATE_PATH` | no | `/var/lib/alib-fetcher/state.db` | bbolt state database |
 | `ALIB_URL` | no | source URL above | Listing page, also useful for testing |
 | `TELEGRAM_API_BASE` | no | `https://api.telegram.org` | Bot API base URL |
@@ -55,11 +56,13 @@ STATE_PATH=./data/state.db \
 go run ./cmd/alib-fetcher
 ```
 
-Service mode runs one digest cycle immediately after startup and then continues
-using `CRON_SCHEDULE` in the configured timezone. The five fields are minute,
-hour, day of month, month, and day of week; descriptors such as `@hourly` are
-also accepted. The state database is open only while a digest cycle is running,
-so a separate `-once` invocation can use it between scheduled cycles.
+By default, service mode runs one digest cycle immediately after startup and
+then continues using `CRON_SCHEDULE` in the configured timezone. Set
+`RUN_ON_STARTUP=false` to wait for the first scheduled cycle instead. This does
+not affect `-once`. The five cron fields are minute, hour, day of month, month,
+and day of week; descriptors such as `@hourly` are also accepted. The state
+database is open only while a digest cycle is running, so a separate `-once`
+invocation can use it between scheduled cycles.
 
 The process emits structured JSON logs and stops gracefully on `SIGINT` or
 `SIGTERM`.

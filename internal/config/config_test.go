@@ -21,6 +21,7 @@ func Test_Load_applies_service_defaults(t *testing.T) {
 		"TELEGRAM_API_BASE":  "",
 		"HTTP_TIMEOUT":       "",
 		"MESSAGE_LIMIT":      "",
+		"RUN_ON_STARTUP":     "",
 	})
 
 	// When
@@ -35,6 +36,7 @@ func Test_Load_applies_service_defaults(t *testing.T) {
 	require.Equal(t, "https://api.telegram.org", loaded.TelegramAPIBase)
 	require.Equal(t, 30*time.Second, loaded.HTTPTimeout)
 	require.Equal(t, 4000, loaded.MessageLimit)
+	require.True(t, loaded.RunOnStartup)
 }
 
 func Test_Load_parses_custom_schedule(t *testing.T) {
@@ -49,6 +51,7 @@ func Test_Load_parses_custom_schedule(t *testing.T) {
 		"TELEGRAM_API_BASE":  "https://telegram.example.test",
 		"HTTP_TIMEOUT":       "15s",
 		"MESSAGE_LIMIT":      "3500",
+		"RUN_ON_STARTUP":     "false",
 	})
 
 	// When
@@ -60,6 +63,23 @@ func Test_Load_parses_custom_schedule(t *testing.T) {
 	require.Equal(t, "Asia/Tbilisi", loaded.Location.String())
 	require.Equal(t, 15*time.Second, loaded.HTTPTimeout)
 	require.Equal(t, 3500, loaded.MessageLimit)
+	require.False(t, loaded.RunOnStartup)
+}
+
+func Test_Load_rejects_invalid_run_on_startup(t *testing.T) {
+	// Given
+	setEnvironment(t, map[string]string{
+		"TELEGRAM_BOT_TOKEN": "token",
+		"TELEGRAM_CHAT_ID":   "chat",
+		"RUN_ON_STARTUP":     "sometimes",
+	})
+
+	// When
+	loaded, err := config.Load()
+
+	// Then
+	require.ErrorIs(t, err, config.ErrInvalid)
+	require.Empty(t, loaded)
 }
 
 func Test_Load_rejects_invalid_schedule(t *testing.T) {
