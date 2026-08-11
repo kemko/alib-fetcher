@@ -65,28 +65,6 @@ func Test_Run_does_not_poll_callbacks_in_once_mode(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func Test_digestRunner_skips_scheduled_digest_when_another_digest_is_running(t *testing.T) {
-	t.Parallel()
-
-	// Given
-	statePath := filepath.Join(t.TempDir(), "state.db")
-	var fetches atomic.Int32
-	runner := &digestRunner{dependencies: app.Dependencies{
-		Fetcher:      countingFetcher{calls: &fetches},
-		Sender:       noopSender{},
-		MessageLimit: 4096,
-		Now:          time.Now,
-	}, statePath: statePath, logger: slog.New(slog.DiscardHandler)}
-	runner.lock.Lock()
-	defer runner.lock.Unlock()
-
-	// When
-	runner.RunScheduled(context.Background())
-
-	// Then
-	require.Zero(t, fetches.Load())
-}
-
 func Test_pollRefreshCallbacks_advances_offset_and_ignores_unknown_callback_data(t *testing.T) {
 	t.Parallel()
 
@@ -153,7 +131,7 @@ func Test_pollRefreshCallbacks_runs_digest_and_removes_old_button_before_new_sen
 	// When
 	done := startCallbackPolling(ctx, client, runner, slog.New(slog.DiscardHandler))
 	waitForCallbackLoop(t, done)
-	runner.Wait()
+	runner.wait()
 	state, err := store.Open(statePath, now)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, state.Close()) })
@@ -190,7 +168,7 @@ func Test_handleRefreshCallback_leaves_old_button_when_digest_sends_no_books(t *
 		MessageChatID: -100123,
 		MessageID:     77,
 	}, slog.New(slog.DiscardHandler))
-	runner.Wait()
+	runner.wait()
 
 	// Then
 	require.Equal(t, []callbackAnswer{{id: "callback-1", text: refreshStartedText}}, client.answersSnapshot())
@@ -226,51 +204,6 @@ func Test_handleRefreshCallback_answers_and_skips_when_digest_is_running(t *test
 	require.Equal(t, []callbackAnswer{{id: "callback-1", text: refreshAlreadyRunningText}}, client.answersSnapshot())
 	require.Empty(t, client.removalsSnapshot())
 	require.Empty(t, sender.messages)
-}
-
-func Test_handleRefreshCallback_answers_duplicate_refresh_while_background_digest_runs(t *testing.T) {
-	t.Parallel()
-
-	// Given
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	statePath := filepath.Join(t.TempDir(), "state.db")
-	digestStarted := make(chan struct{})
-	releaseDigest := make(chan struct{})
-	client := &recordingCallbackClient{}
-	runner := &digestRunner{
-		dependencies: app.Dependencies{
-			Fetcher:      &blockingFetcher{started: digestStarted, release: releaseDigest},
-			Sender:       noopSender{},
-			MessageLimit: 4096,
-			Now:          time.Now,
-		},
-		statePath: statePath,
-		logger:    slog.New(slog.DiscardHandler),
-	}
-
-	// When
-	handleRefreshCallback(ctx, client, runner, telegram.Callback{
-		ID:            "callback-1",
-		Data:          telegram.RefreshCallbackData,
-		MessageChatID: -100123,
-		MessageID:     77,
-	}, slog.New(slog.DiscardHandler))
-	waitForSignal(t, digestStarted)
-	handleRefreshCallback(ctx, client, runner, telegram.Callback{
-		ID:            "callback-2",
-		Data:          telegram.RefreshCallbackData,
-		MessageChatID: -100123,
-		MessageID:     77,
-	}, slog.New(slog.DiscardHandler))
-	close(releaseDigest)
-	runner.Wait()
-
-	// Then
-	require.Equal(t, []callbackAnswer{
-		{id: "callback-1", text: refreshStartedText},
-		{id: "callback-2", text: refreshAlreadyRunningText},
-	}, client.answersSnapshot())
 }
 
 func Test_pollRefreshCallbacks_backs_off_after_poll_error(t *testing.T) {
@@ -316,34 +249,6 @@ type bookFetcher struct {
 
 func (f bookFetcher) Fetch(context.Context) ([]alib.Book, error) {
 	return f.books, nil
-}
-
-type countingFetcher struct {
-	calls *atomic.Int32
-}
-
-func (f countingFetcher) Fetch(context.Context) ([]alib.Book, error) {
-	f.calls.Add(1)
-
-	return nil, nil
-}
-
-type blockingFetcher struct {
-	started chan<- struct{}
-	release <-chan struct{}
-	once    sync.Once
-}
-
-func (f *blockingFetcher) Fetch(ctx context.Context) ([]alib.Book, error) {
-	f.once.Do(func() {
-		close(f.started)
-	})
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-f.release:
-		return nil, nil
-	}
 }
 
 type noopSender struct{}

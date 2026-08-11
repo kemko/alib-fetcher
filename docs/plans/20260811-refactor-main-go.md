@@ -77,13 +77,13 @@
 - Modify: `internal/process/process.go`
 - Modify/Create: `internal/process/runner_test.go`
 
-- [ ] Move `digestRunner` into `internal/process/runner.go`.
-- [ ] Keep shared lock across startup, scheduled, and refresh-triggered digests.
-- [ ] Keep scheduled and refresh-triggered digests non-blocking when another digest runs.
-- [ ] Keep refresh digests in background and expose only internal wait behavior used by `Run`.
-- [ ] Preserve trigger-specific `digest.failed` log attribute values: `startup`, `scheduled`, `refresh`.
-- [ ] Move/update tests for skipped scheduled digest and duplicate refresh while background digest runs.
-- [ ] Run `go test ./internal/process ./cmd/alib-fetcher` and fix failures before Task 4.
+- [x] Move `digestRunner` into `internal/process/runner.go`.
+- [x] Keep shared lock across startup, scheduled, and refresh-triggered digests.
+- [x] Keep scheduled and refresh-triggered digests non-blocking when another digest runs.
+- [x] Keep refresh digests in background and expose only internal wait behavior used by `Run`.
+- [x] Preserve trigger-specific `digest.failed` log attribute values: `startup`, `scheduled`, `refresh`.
+- [x] Move/update tests for skipped scheduled digest and duplicate refresh while background digest runs.
+- [x] Run `go test ./internal/process ./cmd/alib-fetcher` and fix failures before Task 4.
 
 ### Task 4: Move callback polling and refresh handling
 
