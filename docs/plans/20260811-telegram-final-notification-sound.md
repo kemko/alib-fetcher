@@ -64,10 +64,10 @@
 - Modify: `internal/telegram/sender_test.go`
 - Modify: `internal/telegram/sender.go`
 
-- [ ] Добавить или усилить transport-level тест, который вызывает `Sender.Send(..., silent=false, attachRefresh=false)` и проверяет `disable_notification=false` в JSON payload.
-- [ ] Сохранить существующий тест для `silent=true` и `disable_notification=true`.
-- [ ] Если `sender.go` инвертирует или теряет флаг, исправить только `payload.DisableNotification` assignment.
-- [ ] Запустить `go test ./internal/telegram -count=1`.
+- [x] Добавить или усилить transport-level тест, который вызывает `Sender.Send(..., silent=false, attachRefresh=false)` и проверяет `disable_notification=false` в JSON payload.
+- [x] Сохранить существующий тест для `silent=true` и `disable_notification=true`.
+- [x] Если `sender.go` инвертирует или теряет флаг, исправить только `payload.DisableNotification` assignment.
+- [x] Запустить `go test ./internal/telegram -count=1`.
 
 ### Task 4: Add end-to-end wiring coverage for multiple Telegram messages
 
