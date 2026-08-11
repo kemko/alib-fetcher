@@ -86,6 +86,6 @@ func (emptyFetcher) Fetch(context.Context) ([]alib.Book, error) {
 
 type noopSender struct{}
 
-func (noopSender) Send(context.Context, string, bool) error {
+func (noopSender) Send(context.Context, string, bool, bool) error {
 	return nil
 }

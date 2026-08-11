@@ -20,6 +20,11 @@ var ErrRejected = errors.New("telegram rejected the message")
 // ErrRequest indicates that the Bot API could not be reached.
 var ErrRequest = errors.New("telegram request failed")
 
+// RefreshCallbackData identifies digest refresh button presses.
+const RefreshCallbackData = "refresh"
+
+const refreshButtonText = "Обновить"
+
 // Config contains the Telegram Bot API connection settings.
 type Config struct {
 	APIBase string
@@ -60,13 +65,14 @@ func NewSender(config Config) (*Sender, error) {
 }
 
 // Send posts one HTML-formatted digest message, optionally without a notification sound.
-func (s *Sender) Send(ctx context.Context, text string, silent bool) (sendErr error) {
+func (s *Sender) Send(ctx context.Context, text string, silent bool, attachRefresh bool) (sendErr error) {
 	payload := struct {
 		ChatID              string             `json:"chat_id"`
 		Text                string             `json:"text"`
 		ParseMode           string             `json:"parse_mode"`
 		DisableNotification bool               `json:"disable_notification"`
 		LinkPreviewOptions  linkPreviewOptions `json:"link_preview_options"`
+		ReplyMarkup         *replyMarkup       `json:"reply_markup,omitempty"`
 	}{
 		ChatID:              s.chatID,
 		Text:                text,
@@ -75,6 +81,18 @@ func (s *Sender) Send(ctx context.Context, text string, silent bool) (sendErr er
 		LinkPreviewOptions: linkPreviewOptions{
 			Disabled: true,
 		},
+	}
+	if attachRefresh {
+		payload.ReplyMarkup = &replyMarkup{
+			InlineKeyboard: [][]inlineKeyboardButton{
+				{
+					{
+						Text:         refreshButtonText,
+						CallbackData: RefreshCallbackData,
+					},
+				},
+			},
+		}
 	}
 
 	body, err := json.Marshal(payload)
@@ -119,6 +137,15 @@ func (s *Sender) Send(ctx context.Context, text string, silent bool) (sendErr er
 
 type linkPreviewOptions struct {
 	Disabled bool `json:"is_disabled"`
+}
+
+type replyMarkup struct {
+	InlineKeyboard [][]inlineKeyboardButton `json:"inline_keyboard"`
+}
+
+type inlineKeyboardButton struct {
+	Text         string `json:"text"`
+	CallbackData string `json:"callback_data"`
 }
 
 type apiResponse struct {

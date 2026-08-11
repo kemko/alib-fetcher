@@ -47,6 +47,7 @@ func Test_Service_marks_each_chunk_only_after_delivery(t *testing.T) {
 	require.Equal(t, books[:1], state.marked)
 	require.Equal(t, now, state.markedAt)
 	require.Equal(t, []bool{true, false}, sender.silent)
+	require.Equal(t, []bool{false, true}, sender.attachRefresh)
 }
 
 func Test_Service_sends_single_chunk_with_sound(t *testing.T) {
@@ -71,6 +72,7 @@ func Test_Service_sends_single_chunk_with_sound(t *testing.T) {
 	require.Equal(t, 1, result.New)
 	require.Equal(t, 1, result.Sent)
 	require.Equal(t, []bool{false}, sender.silent)
+	require.Equal(t, []bool{true}, sender.attachRefresh)
 }
 
 func Test_Service_waits_and_retries_only_rate_limited_chunk(t *testing.T) {
@@ -113,6 +115,7 @@ func Test_Service_waits_and_retries_only_rate_limited_chunk(t *testing.T) {
 	require.NotEqual(t, sender.messages[0], sender.messages[1])
 	require.Equal(t, sender.messages[1], sender.messages[2])
 	require.Equal(t, []bool{true, false, false}, sender.silent)
+	require.Equal(t, []bool{false, true, true}, sender.attachRefresh)
 	require.Equal(t, []string{
 		"record",
 		"pending",
@@ -274,6 +277,7 @@ func Test_Service_sends_renderable_pending_books_when_one_pending_book_is_too_lo
 	require.Len(t, sender.messages, 1)
 	require.Contains(t, sender.messages[0], "Обычная")
 	require.NotContains(t, sender.messages[0], "Очень длинная книга")
+	require.Equal(t, []bool{true}, sender.attachRefresh)
 }
 
 func Test_Service_does_not_send_when_no_pending_books(t *testing.T) {
@@ -382,17 +386,19 @@ func (f *fakeState) MarkSent(ctx context.Context, books []alib.Book, sentAt time
 }
 
 type fakeSender struct {
-	events    *[]string
-	err       error
-	afterSend func()
-	messages  []string
-	silent    []bool
-	failAt    int
+	events        *[]string
+	err           error
+	afterSend     func()
+	messages      []string
+	silent        []bool
+	attachRefresh []bool
+	failAt        int
 }
 
-func (f *fakeSender) Send(_ context.Context, text string, silent bool) error {
+func (f *fakeSender) Send(_ context.Context, text string, silent bool, attachRefresh bool) error {
 	f.messages = append(f.messages, text)
 	f.silent = append(f.silent, silent)
+	f.attachRefresh = append(f.attachRefresh, attachRefresh)
 	if f.events != nil {
 		*f.events = append(*f.events, "send")
 	}

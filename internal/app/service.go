@@ -27,7 +27,7 @@ type State interface {
 
 // Sender delivers one rendered message.
 type Sender interface {
-	Send(ctx context.Context, text string, silent bool) error
+	Send(ctx context.Context, text string, silent bool, attachRefresh bool) error
 }
 
 // Dependencies contains the service adapters, retry wait function, and Telegram message limit.
@@ -97,7 +97,8 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 	ackCtx := context.WithoutCancel(ctx)
 	for index, chunk := range chunks {
 		silent := index < len(chunks)-1
-		if sendErr := s.send(ctx, chunk.Text, silent); sendErr != nil {
+		attachRefresh := index == len(chunks)-1
+		if sendErr := s.send(ctx, chunk.Text, silent, attachRefresh); sendErr != nil {
 			return result, fmt.Errorf("send digest: %w", sendErr)
 		}
 		if markErr := s.dependencies.State.MarkSent(ackCtx, chunk.Books, cycleTime); markErr != nil {
@@ -134,9 +135,9 @@ func renderSendable(books []alib.Book, limit int) ([]digest.Chunk, []string, err
 	return chunks, skippedBuyURLs, nil
 }
 
-func (s *Service) send(ctx context.Context, text string, silent bool) error {
+func (s *Service) send(ctx context.Context, text string, silent bool, attachRefresh bool) error {
 	for {
-		err := s.dependencies.Sender.Send(ctx, text, silent)
+		err := s.dependencies.Sender.Send(ctx, text, silent, attachRefresh)
 		if err == nil {
 			return nil
 		}
