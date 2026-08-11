@@ -51,12 +51,12 @@
 - Modify: `internal/app/service.go`
 - Modify: `internal/app/service_test.go`
 
-- [ ] Проверить текущий расчет `silent` около цикла отправки chunks.
-- [ ] Исправить логику так, чтобы `silent=true` было для каждого `index < len(chunks)-1`, а `silent=false` только для `index == len(chunks)-1`.
-- [ ] Убедиться, что retry того же chunk повторяет тот же `silent` и `attachRefresh` flags.
-- [ ] Убедиться, что oversized pending listings не меняют выбор финального renderable chunk.
-- [ ] Обновить существующие тесты, если они стали дублировать новый регрессионный тест или завязаны на старое имя.
-- [ ] Запустить `go test ./internal/app -count=1`.
+- [x] Проверить текущий расчет `silent` около цикла отправки chunks.
+- [x] Исправить логику так, чтобы `silent=true` было для каждого `index < len(chunks)-1`, а `silent=false` только для `index == len(chunks)-1`.
+- [x] Убедиться, что retry того же chunk повторяет тот же `silent` и `attachRefresh` flags.
+- [x] Убедиться, что oversized pending listings не меняют выбор финального renderable chunk.
+- [x] Обновить существующие тесты, если они стали дублировать новый регрессионный тест или завязаны на старое имя.
+- [x] Запустить `go test ./internal/app -count=1`.
 
 ### Task 3: Verify Telegram transport maps silent to disable_notification
 
