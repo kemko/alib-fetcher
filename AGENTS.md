@@ -81,9 +81,12 @@ Preserve these semantics:
 
 ## Repository map
 
-- `cmd/alib-fetcher/main.go`: process wiring, `-once`, JSON logging, signals,
-  startup run, robfig/cron lifecycle, refresh callback polling, and shared
-  digest-runner concurrency.
+- `cmd/alib-fetcher/main.go`: thin bootstrap wiring for JSON logging, `-once`,
+  configuration loading, adapter construction, signal context, and
+  `internal/process.Run`.
+- `internal/process`: service process lifecycle orchestration, state DB open
+  lifetime, startup and scheduled digest runs, robfig/cron lifecycle, refresh
+  callback polling, and shared digest-runner concurrency.
 - `internal/config`: environment loading, defaults, and validation.
 - `internal/alib`: HTTP client plus charset-aware HTML parser. The real page may
   be Windows-1251. Listings are recognized inside `<p>` elements by a title in

@@ -135,8 +135,8 @@
 - Modify: `README.md` if needed
 - Modify: `AGENTS.md` or `CLAUDE.md` if present and needed
 
-- [ ] Inspect `README.md` for stale references to process structure or commands.
-- [ ] Update README only if user-visible commands, behavior, or development workflow changed.
-- [ ] Inspect internal guidance files if present for stale repository map or ownership descriptions.
-- [ ] Update internal guidance only if it names `cmd/alib-fetcher/main.go` as owner of behavior now moved to `internal/process`.
-- [ ] Run `make verify` after documentation-related code/test adjustments if any code changed after Task 6.
+- [x] Inspect `README.md` for stale references to process structure or commands.
+- [x] Update README only if user-visible commands, behavior, or development workflow changed. (not needed - README remains accurate)
+- [x] Inspect internal guidance files if present for stale repository map or ownership descriptions. (`AGENTS.md` present, `CLAUDE.md` absent)
+- [x] Update internal guidance only if it names `cmd/alib-fetcher/main.go` as owner of behavior now moved to `internal/process`.
+- [x] Run `make verify` after documentation-related code/test adjustments if any code changed after Task 6. (full verify rerun passed)
