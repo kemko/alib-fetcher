@@ -75,6 +75,44 @@ func Test_Service_sends_single_chunk_with_sound(t *testing.T) {
 	require.Equal(t, []bool{true}, sender.attachRefresh)
 }
 
+func Test_Service_sends_only_final_chunk_with_sound(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	now := time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC)
+	books := []alib.Book{
+		{Title: "Первая", BuyURL: "https://example.com/1"},
+		{Title: "Вторая", BuyURL: "https://example.com/2"},
+		{Title: "Третья", BuyURL: "https://example.com/3"},
+	}
+	state := &fakeState{pending: books, recordedNew: len(books)}
+	sender := &fakeSender{}
+	service := app.NewService(app.Dependencies{
+		Fetcher:      fakeFetcher{books: books},
+		State:        state,
+		Sender:       sender,
+		MessageLimit: 120,
+		Now:          func() time.Time { return now },
+	})
+
+	// When
+	result, err := service.Run(context.Background())
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, app.Result{Fetched: 3, New: 3, Sent: 3}, result)
+	require.Len(t, sender.messages, 3)
+	require.Contains(t, sender.messages[0], "Первая")
+	require.NotContains(t, sender.messages[0], "Вторая")
+	require.Contains(t, sender.messages[1], "Вторая")
+	require.NotContains(t, sender.messages[1], "Третья")
+	require.Contains(t, sender.messages[2], "Третья")
+	require.Equal(t, books, state.marked)
+	require.Equal(t, now, state.markedAt)
+	require.Equal(t, []bool{true, true, false}, sender.silent)
+	require.Equal(t, []bool{false, false, true}, sender.attachRefresh)
+}
+
 func Test_Service_runs_pre_delivery_hook_once_before_sending_and_marking(t *testing.T) {
 	t.Parallel()
 
@@ -150,11 +188,12 @@ func Test_Service_waits_and_retries_only_rate_limited_chunk(t *testing.T) {
 	books := []alib.Book{
 		{Title: "Первая", BuyURL: "https://example.com/1"},
 		{Title: "Вторая", BuyURL: "https://example.com/2"},
+		{Title: "Третья", BuyURL: "https://example.com/3"},
 	}
 	events := make([]string, 0)
 	state := &fakeState{pending: books, recordedNew: len(books), events: &events}
 	sender := &fakeSender{
-		failAt: 2,
+		failAt: 3,
 		err:    retryAfterError{delay: time.Second},
 		events: &events,
 	}
@@ -181,13 +220,14 @@ func Test_Service_waits_and_retries_only_rate_limited_chunk(t *testing.T) {
 
 	// Then
 	require.NoError(t, err)
-	require.Equal(t, 2, result.Sent)
+	require.Equal(t, 3, result.Sent)
 	require.Equal(t, books, state.marked)
-	require.Len(t, sender.messages, 3)
+	require.Len(t, sender.messages, 4)
 	require.NotEqual(t, sender.messages[0], sender.messages[1])
-	require.Equal(t, sender.messages[1], sender.messages[2])
-	require.Equal(t, []bool{true, false, false}, sender.silent)
-	require.Equal(t, []bool{false, true, true}, sender.attachRefresh)
+	require.NotEqual(t, sender.messages[1], sender.messages[2])
+	require.Equal(t, sender.messages[2], sender.messages[3])
+	require.Equal(t, []bool{true, true, false, false}, sender.silent)
+	require.Equal(t, []bool{false, false, true, true}, sender.attachRefresh)
 	require.Equal(t, []string{
 		"record",
 		"pending",
@@ -195,9 +235,11 @@ func Test_Service_waits_and_retries_only_rate_limited_chunk(t *testing.T) {
 		"send",
 		"mark:https://example.com/1",
 		"send",
+		"mark:https://example.com/2",
+		"send",
 		"wait",
 		"send",
-		"mark:https://example.com/2",
+		"mark:https://example.com/3",
 	}, events)
 }
 

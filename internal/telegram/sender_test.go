@@ -57,6 +57,39 @@ func Test_Sender_posts_silent_HTML_message_with_preview_disabled(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func Test_Sender_posts_audible_HTML_message_with_notification_enabled(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		assert.Equal(t, "/bottest-token/sendMessage", request.URL.Path)
+		var payload map[string]json.RawMessage
+		assert.NoError(t, json.NewDecoder(request.Body).Decode(&payload))
+		disableNotification, ok := payload["disable_notification"]
+		if !assert.True(t, ok) {
+			return
+		}
+		assert.JSONEq(t, `false`, string(disableNotification))
+		writer.Header().Set("Content-Type", "application/json")
+		_, err := writer.Write([]byte(`{"ok":true,"result":{}}`))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+	sender, err := telegram.NewSender(telegram.Config{
+		APIBase: server.URL,
+		Token:   "test-token",
+		ChatID:  "-100123",
+		Timeout: time.Second,
+	})
+	require.NoError(t, err)
+
+	// When
+	err = sender.Send(context.Background(), "<b>digest</b>", false, false)
+
+	// Then
+	require.NoError(t, err)
+}
+
 func Test_Sender_posts_refresh_button_when_requested(t *testing.T) {
 	t.Parallel()
 
