@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/kemko/alib-fetcher/internal/telegram"
@@ -52,19 +51,19 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 		assert.NotContains(t, string(body), "test-token")
 
 		var payload struct {
-			ChatID              string `json:"chat_id"`
-			Text                string `json:"text"`
-			ParseMode           string `json:"parse_mode"`
-			DisableNotification bool   `json:"disable_notification"`
-			LinkPreviewOptions  struct {
-				Disabled bool `json:"is_disabled"`
-			} `json:"link_preview_options"`
+			ChatID      string `json:"chat_id"`
+			Text        string `json:"text"`
+			ParseMode   string `json:"parse_mode"`
 			ReplyMarkup struct {
 				InlineKeyboard [][]struct {
 					Text         string `json:"text"`
 					CallbackData string `json:"callback_data"`
 				} `json:"inline_keyboard"`
 			} `json:"reply_markup"`
+			DisableNotification bool `json:"disable_notification"`
+			LinkPreviewOptions  struct {
+				Disabled bool `json:"is_disabled"`
+			} `json:"link_preview_options"`
 		}
 		assert.NoError(t, json.Unmarshal(body, &payload))
 		assert.Equal(t, "-100123", payload.ChatID)
@@ -105,5 +104,5 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, telegramRequests, 1)
 	require.Contains(t, logs.String(), "digest.completed")
-	require.False(t, strings.Contains(logs.String(), "test-token"))
+	require.NotContains(t, logs.String(), "test-token")
 }

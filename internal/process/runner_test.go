@@ -80,9 +80,9 @@ func Test_digestRunner_logs_trigger_when_digest_fails(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
+		run     func(*testing.T, context.Context, *digestRunner)
 		name    string
 		trigger string
-		run     func(*testing.T, context.Context, *digestRunner)
 	}{
 		{
 			name:    "startup",

@@ -120,14 +120,14 @@
 **Files:**
 - Modify tests only if verification exposes missing coverage or broken assumptions.
 
-- [ ] Run `make fmt-check`.
-- [ ] Run `make lint`.
-- [ ] Run `make test`.
-- [ ] Run `make build`.
-- [ ] Run `make verify`.
-- [ ] Run `go test -cover ./...` and verify overall coverage is at least 80%.
-- [ ] Confirm `cmd/alib-fetcher/main.go` is substantially smaller and contains only bootstrap wiring.
-- [ ] Confirm `-once`, scheduler startup, callback polling, refresh button handling, and state DB lifetime semantics remain covered by tests.
+- [x] Run `make fmt-check`.
+- [x] Run `make lint`.
+- [x] Run `make test`.
+- [x] Run `make build`.
+- [x] Run `make verify`.
+- [x] Run `go test -cover ./...` and verify overall coverage is at least 80%.
+- [x] Confirm `cmd/alib-fetcher/main.go` is substantially smaller and contains only bootstrap wiring.
+- [x] Confirm `-once`, scheduler startup, callback polling, refresh button handling, and state DB lifetime semantics remain covered by tests.
 
 ### Task 7: Update documentation
 
