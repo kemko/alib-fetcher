@@ -21,14 +21,14 @@ func Test_Sender_posts_silent_HTML_message_with_preview_disabled(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		assert.Equal(t, "/bottest-token/sendMessage", request.URL.Path)
 		var payload struct {
-			ChatID              string `json:"chat_id"`
-			Text                string `json:"text"`
-			ParseMode           string `json:"parse_mode"`
-			DisableNotification bool   `json:"disable_notification"`
-			LinkPreviewOptions  struct {
+			ChatID             string          `json:"chat_id"`
+			Text               string          `json:"text"`
+			ParseMode          string          `json:"parse_mode"`
+			ReplyMarkup        json.RawMessage `json:"reply_markup"`
+			LinkPreviewOptions struct {
 				Disabled bool `json:"is_disabled"`
 			} `json:"link_preview_options"`
-			ReplyMarkup json.RawMessage `json:"reply_markup"`
+			DisableNotification bool `json:"disable_notification"`
 		}
 		assert.NoError(t, json.NewDecoder(request.Body).Decode(&payload))
 		assert.Equal(t, "-100123", payload.ChatID)
@@ -72,8 +72,12 @@ func Test_Sender_posts_refresh_button_when_requested(t *testing.T) {
 			} `json:"reply_markup"`
 		}
 		assert.NoError(t, json.NewDecoder(request.Body).Decode(&payload))
-		require.Len(t, payload.ReplyMarkup.InlineKeyboard, 1)
-		require.Len(t, payload.ReplyMarkup.InlineKeyboard[0], 1)
+		if !assert.Len(t, payload.ReplyMarkup.InlineKeyboard, 1) {
+			return
+		}
+		if !assert.Len(t, payload.ReplyMarkup.InlineKeyboard[0], 1) {
+			return
+		}
 		assert.Equal(t, "Обновить", payload.ReplyMarkup.InlineKeyboard[0][0].Text)
 		assert.Equal(t, telegram.RefreshCallbackData, payload.ReplyMarkup.InlineKeyboard[0][0].CallbackData)
 		writer.Header().Set("Content-Type", "application/json")

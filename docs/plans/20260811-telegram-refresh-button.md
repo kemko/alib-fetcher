@@ -60,14 +60,14 @@
 - Create: `internal/telegram/updates.go` if separating polling keeps `sender.go` too large.
 - Create: `internal/telegram/updates_test.go` if `updates.go` is created.
 
-- [ ] Refactor Telegram endpoint construction so one client can call multiple Bot API methods without duplicating token URL logic.
-- [ ] Add typed callback/update structs exposing callback ID, message chat ID, message ID, and callback data.
-- [ ] Implement `PollCallbacks(ctx, offset)` via `getUpdates` with `allowed_updates=["callback_query"]`, long-poll timeout derived from configured HTTP timeout, and next offset handling.
-- [ ] Implement `AnswerCallback(ctx, callbackID, text)` via `answerCallbackQuery`.
-- [ ] Implement `RemoveReplyMarkup(ctx, chatID, messageID)` via `editMessageReplyMarkup` with empty reply markup.
-- [ ] Reuse existing Bot API error handling, response-size cap, context handling, and secret-free errors.
-- [ ] Add httptest coverage for polling callback updates, offset payload, allowed updates, callback answering, reply markup removal, API rejection, invalid JSON, and context cancellation where relevant.
-- [ ] Run `make test` and fix failures before Task 3.
+- [x] Refactor Telegram endpoint construction so one client can call multiple Bot API methods without duplicating token URL logic.
+- [x] Add typed callback/update structs exposing callback ID, message chat ID, message ID, and callback data.
+- [x] Implement `PollCallbacks(ctx, offset)` via `getUpdates` with `allowed_updates=["callback_query"]`, long-poll timeout derived from configured HTTP timeout, and next offset handling.
+- [x] Implement `AnswerCallback(ctx, callbackID, text)` via `answerCallbackQuery`.
+- [x] Implement `RemoveReplyMarkup(ctx, chatID, messageID)` via `editMessageReplyMarkup` with empty reply markup.
+- [x] Reuse existing Bot API error handling, response-size cap, context handling, and secret-free errors.
+- [x] Add httptest coverage for polling callback updates, offset payload, allowed updates, callback answering, reply markup removal, API rejection, invalid JSON, and context cancellation where relevant.
+- [x] Run `make test` and fix failures before Task 3.
 
 ### Task 3: Run refresh callbacks in service mode
 
