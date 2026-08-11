@@ -33,11 +33,13 @@ the current fetch result. Books that could not be sent remain pending across
 later digest cycles. A chunk is acknowledged only after Telegram accepts it, and
 then its records become sent. Sent records older than 14 days are removed once
 at the beginning of every digest cycle; pending records are not removed by
-retention pruning. Each Telegram listing keeps the full Alib announcement text
-and its seller and purchase links. The source photo-link section is replaced
-with `Фото: есть` or `Фото: нет`. When a digest is split into multiple messages,
-only the final message uses the normal notification sound; earlier messages are
-silent.
+retention pruning. If one pending listing cannot fit in a Telegram message,
+other renderable pending listings are still sent while the oversized listing
+remains pending and the cycle reports the rendering error. Each Telegram listing
+keeps the full Alib announcement text and its seller and purchase links. The
+source photo-link section is replaced with `Фото: есть` or `Фото: нет`. When a
+digest is split into multiple messages, only the final message uses the normal
+notification sound; earlier messages are silent.
 
 When Telegram returns a flood-control `retry_after`, the service waits for the
 specified duration and retries the same message before continuing with later

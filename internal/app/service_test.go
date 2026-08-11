@@ -3,11 +3,15 @@ package app_test
 import (
 	"context"
 	"errors"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/kemko/alib-fetcher/internal/alib"
 	"github.com/kemko/alib-fetcher/internal/app"
+	"github.com/kemko/alib-fetcher/internal/digest"
+	"github.com/kemko/alib-fetcher/internal/store"
 
 	"github.com/stretchr/testify/require"
 )
@@ -186,9 +190,13 @@ func Test_Service_sends_pending_books_not_present_in_current_fetch(t *testing.T)
 
 	// Given
 	now := time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC)
-	fetched := []alib.Book{{Title: "Свежая", BuyURL: "https://example.com/fresh"}}
-	pending := []alib.Book{{Title: "Из прошлой попытки", BuyURL: "https://example.com/pending"}}
-	state := &fakeState{pending: pending, recordedNew: 1}
+	state, err := store.Open(filepath.Join(t.TempDir(), "state.db"), now)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, state.Close()) })
+	fetched := []alib.Book{{Title: "Свежая", BuyURL: "https://example.com/2-fresh"}}
+	previous := []alib.Book{{Title: "Из прошлой попытки", BuyURL: "https://example.com/1-pending"}}
+	_, err = state.RecordDiscovered(context.Background(), previous, now.Add(-time.Hour))
+	require.NoError(t, err)
 	sender := &fakeSender{}
 	service := app.NewService(app.Dependencies{
 		Fetcher:      fakeFetcher{books: fetched},
@@ -200,16 +208,72 @@ func Test_Service_sends_pending_books_not_present_in_current_fetch(t *testing.T)
 
 	// When
 	result, err := service.Run(context.Background())
+	remaining, pendingErr := state.Pending(context.Background())
 
 	// Then
 	require.NoError(t, err)
-	require.Equal(t, fetched, state.recorded)
-	require.Equal(t, pending, state.marked)
-	require.Equal(t, now, state.markedAt)
-	require.Equal(t, app.Result{Fetched: 1, New: 1, Sent: 1}, result)
+	require.NoError(t, pendingErr)
+	require.Empty(t, remaining)
+	require.Equal(t, app.Result{Fetched: 1, New: 1, Sent: 2}, result)
 	require.Len(t, sender.messages, 1)
 	require.Contains(t, sender.messages[0], "Из прошлой попытки")
-	require.NotContains(t, sender.messages[0], "Свежая")
+	require.Contains(t, sender.messages[0], "Свежая")
+}
+
+func Test_Service_marks_sent_after_delivery_even_if_job_context_is_canceled(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	now := time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC)
+	book := alib.Book{Title: "Книга", BuyURL: "https://example.com/1"}
+	state := &fakeState{pending: []alib.Book{book}, recordedNew: 1}
+	ctx, cancel := context.WithCancel(context.Background())
+	sender := &fakeSender{afterSend: cancel}
+	service := app.NewService(app.Dependencies{
+		Fetcher:      fakeFetcher{books: []alib.Book{book}},
+		State:        state,
+		Sender:       sender,
+		MessageLimit: 4096,
+		Now:          func() time.Time { return now },
+	})
+
+	// When
+	result, err := service.Run(ctx)
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, app.Result{Fetched: 1, New: 1, Sent: 1}, result)
+	require.Equal(t, []alib.Book{book}, state.marked)
+	require.Equal(t, now, state.markedAt)
+}
+
+func Test_Service_sends_renderable_pending_books_when_one_pending_book_is_too_long(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	now := time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC)
+	oversized := alib.Book{Title: strings.Repeat("Очень длинная книга ", 20), BuyURL: "https://example.com/oversized"}
+	deliverable := alib.Book{Title: "Обычная", BuyURL: "https://example.com/deliverable"}
+	state := &fakeState{pending: []alib.Book{oversized, deliverable}}
+	sender := &fakeSender{}
+	service := app.NewService(app.Dependencies{
+		Fetcher:      fakeFetcher{},
+		State:        state,
+		Sender:       sender,
+		MessageLimit: 120,
+		Now:          func() time.Time { return now },
+	})
+
+	// When
+	result, err := service.Run(context.Background())
+
+	// Then
+	require.ErrorIs(t, err, digest.ErrMessageTooLong)
+	require.Equal(t, app.Result{Sent: 1}, result)
+	require.Equal(t, []alib.Book{deliverable}, state.marked)
+	require.Len(t, sender.messages, 1)
+	require.Contains(t, sender.messages[0], "Обычная")
+	require.NotContains(t, sender.messages[0], "Очень длинная книга")
 }
 
 func Test_Service_does_not_send_when_no_pending_books(t *testing.T) {
@@ -303,7 +367,10 @@ func (f *fakeState) Pending(context.Context) ([]alib.Book, error) {
 	return f.pending, nil
 }
 
-func (f *fakeState) MarkSent(_ context.Context, books []alib.Book, sentAt time.Time) error {
+func (f *fakeState) MarkSent(ctx context.Context, books []alib.Book, sentAt time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	f.marked = append(f.marked, books...)
 	f.markedAt = sentAt
 	if f.events != nil {
@@ -315,11 +382,12 @@ func (f *fakeState) MarkSent(_ context.Context, books []alib.Book, sentAt time.T
 }
 
 type fakeSender struct {
-	events   *[]string
-	err      error
-	messages []string
-	silent   []bool
-	failAt   int
+	events    *[]string
+	err       error
+	afterSend func()
+	messages  []string
+	silent    []bool
+	failAt    int
 }
 
 func (f *fakeSender) Send(_ context.Context, text string, silent bool) error {
@@ -327,6 +395,9 @@ func (f *fakeSender) Send(_ context.Context, text string, silent bool) error {
 	f.silent = append(f.silent, silent)
 	if f.events != nil {
 		*f.events = append(*f.events, "send")
+	}
+	if f.afterSend != nil {
+		f.afterSend()
 	}
 	if len(f.messages) == f.failAt {
 		return f.err

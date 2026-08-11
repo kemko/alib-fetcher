@@ -3,9 +3,9 @@
 ## Project purpose
 
 `alib-fetcher` is a small always-on Go service. It fetches the newest listings
-from `https://www.alib.ru/tramka.phtml?tnew=7`, renders unseen books as
-Telegram HTML messages, sends them to one chat, and records successful
-deliveries in an embedded bbolt database.
+from `https://www.alib.ru/tramka.phtml?tnew=7`, records discovered books in an
+embedded bbolt database, renders pending books as Telegram HTML messages, sends
+them to one chat, and records successful deliveries in the same database.
 
 The module is `github.com/kemko/alib-fetcher`. The executable entry point is
 `./cmd/alib-fetcher`. Go 1.26.5 is the supported toolchain; `make tools`
@@ -15,21 +15,26 @@ installs the pinned golangci-lint v2 release.
 
 One digest cycle is deliberately ordered as follows:
 
-1. Remove delivery markers strictly older than 14 days.
+1. Remove sent records strictly older than 14 days.
 2. Fetch and decode the configured Alib page.
 3. Parse and deduplicate listings by their resolved `BuyURL`.
-4. Filter out URLs already present in bbolt.
-5. Render unseen books into Telegram-sized chunks.
-6. Send each chunk and mark only that chunk's books as delivered, only after
+4. Record fetched listings in bbolt as JSON records, preserving sent status.
+5. Load all pending records from bbolt, including books from earlier failed
+   cycles.
+6. Render pending books into Telegram-sized chunks.
+7. Send each chunk and mark only that chunk's books as delivered, only after
    Telegram accepts it.
 
 Preserve these semantics:
 
-- The first successful run sends every listing currently on the source page.
+- The first successful run records and sends every listing currently on the
+  source page.
 - `BuyURL` is the persistent identity of a listing; titles and other metadata
   are not stable deduplication keys.
-- A failed Telegram chunk must remain unseen so a later cycle can retry it.
+- A failed Telegram chunk must remain pending so a later cycle can retry it.
   Earlier successfully sent chunks stay acknowledged.
+- A pending listing that cannot fit one Telegram message remains pending and
+  must not block other renderable pending listings.
 - When a digest has multiple chunks, all but the last are sent silently; the
   last chunk uses the normal notification sound.
 - A Telegram flood-control response with a positive `retry_after` waits for the
@@ -39,10 +44,12 @@ Preserve these semantics:
 - An empty or structurally changed Alib page is an error (`alib.ErrNoBooks`),
   not a successful empty digest. This protects against silently accepting a
   broken parser.
-- Retention uses a strict boundary: records before the 14-day cutoff are
-  removed; a record exactly at the cutoff remains.
-- Legacy bbolt marker values are migrated to RFC3339Nano timestamps at open
-  time and must not be pruned immediately.
+- Retention uses a strict boundary for sent records: records sent before the
+  14-day cutoff are removed; a record exactly at the cutoff remains. Pending
+  records are not pruned by retention.
+- Legacy bbolt marker values are migrated at open time to sent JSON records
+  with only `Book.BuyURL` when full metadata cannot be recovered, and must not
+  be pruned immediately.
 - Service mode runs one cycle immediately after startup by default, then follows
   the cron schedule. `RUN_ON_STARTUP=false` skips the startup cycle. Overlapping
   cron jobs are skipped.
@@ -65,7 +72,8 @@ Preserve these semantics:
 - `internal/digest`: full-listing Telegram HTML rendering and chunking only
   between complete listings.
 - `internal/store`: bbolt storage in bucket `sent_books`; keys are buy URLs and
-  values are UTC RFC3339Nano delivery timestamps.
+  values are JSON records containing the full `alib.Book`, observed timestamp,
+  sent status, and sent timestamp for delivered records.
 - `internal/telegram`: Telegram Bot API `sendMessage` client using HTML parse
   mode with link previews disabled.
 - `Dockerfile`: multi-stage static build; final distroless Debian image runs as

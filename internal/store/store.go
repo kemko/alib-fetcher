@@ -155,19 +155,16 @@ func (s *Store) MarkSent(ctx context.Context, books []alib.Book, sentAt time.Tim
 			}
 
 			key := []byte(book.BuyURL)
-			record := bookRecord{
-				Book:       book,
-				ObservedAt: encodeRecordTime(sentAt),
+			value := bucket.Get(key)
+			if value == nil {
+				return fmt.Errorf("missing book record %q", book.BuyURL)
 			}
-			if value := bucket.Get(key); value != nil {
-				existing, decodeErr := decodeRecord(key, value)
-				if decodeErr != nil {
-					return decodeErr
-				}
-				record = existing
-				if record.ObservedAt == 0 {
-					record.ObservedAt = encodeRecordTime(sentAt)
-				}
+			record, decodeErr := decodeRecord(key, value)
+			if decodeErr != nil {
+				return decodeErr
+			}
+			if record.ObservedAt == 0 {
+				record.ObservedAt = encodeRecordTime(sentAt)
 			}
 			record.Sent = true
 			record.SentAt = encodeRecordTime(sentAt)

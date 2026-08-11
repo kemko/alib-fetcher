@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/kemko/alib-fetcher/internal/alib"
@@ -89,22 +90,48 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 		return result, nil
 	}
 
-	chunks, err := digest.Render(pending, s.dependencies.MessageLimit)
+	chunks, skippedBuyURLs, err := renderSendable(pending, s.dependencies.MessageLimit)
 	if err != nil {
 		return result, fmt.Errorf("render digest: %w", err)
 	}
+	ackCtx := context.WithoutCancel(ctx)
 	for index, chunk := range chunks {
 		silent := index < len(chunks)-1
 		if sendErr := s.send(ctx, chunk.Text, silent); sendErr != nil {
 			return result, fmt.Errorf("send digest: %w", sendErr)
 		}
-		if markErr := s.dependencies.State.MarkSent(ctx, chunk.Books, cycleTime); markErr != nil {
+		if markErr := s.dependencies.State.MarkSent(ackCtx, chunk.Books, cycleTime); markErr != nil {
 			return result, fmt.Errorf("record delivered listings: %w", markErr)
 		}
 		result.Sent += len(chunk.Books)
 	}
+	if len(skippedBuyURLs) > 0 {
+		return result, fmt.Errorf("render digest: %w: %s", digest.ErrMessageTooLong, strings.Join(skippedBuyURLs, ", "))
+	}
 
 	return result, nil
+}
+
+func renderSendable(books []alib.Book, limit int) ([]digest.Chunk, []string, error) {
+	renderable := make([]alib.Book, 0, len(books))
+	skippedBuyURLs := make([]string, 0)
+	for _, book := range books {
+		if _, err := digest.Render([]alib.Book{book}, limit); err != nil {
+			if errors.Is(err, digest.ErrMessageTooLong) {
+				skippedBuyURLs = append(skippedBuyURLs, book.BuyURL)
+				continue
+			}
+			return nil, nil, err
+		}
+		renderable = append(renderable, book)
+	}
+
+	chunks, err := digest.Render(renderable, limit)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return chunks, skippedBuyURLs, nil
 }
 
 func (s *Service) send(ctx context.Context, text string, silent bool) error {
