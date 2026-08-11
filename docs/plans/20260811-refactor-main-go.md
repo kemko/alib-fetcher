@@ -108,12 +108,12 @@
 - Modify: `cmd/alib-fetcher/main_test.go` or remove if fully migrated
 - Modify/Create: `cmd/alib-fetcher/main_test.go` only if command-level behavior remains testable without process internals
 
-- [ ] Remove process-only constants, interfaces, structs, and helper functions from `main.go`.
-- [ ] Keep `main.go` focused on logger setup, `-once`, `config.Load`, adapter construction, signal context, and `process.Run`.
-- [ ] Ensure `cmd/alib-fetcher` imports no `cron`, `store`, or process-internal concurrency packages.
-- [ ] Keep token handling unchanged; never log or expose Telegram token.
-- [ ] Add or update command-level smoke test only if bootstrap behavior has a stable test seam after refactor.
-- [ ] Run `go test ./cmd/alib-fetcher ./internal/process` and fix failures before Task 6.
+- [x] Remove process-only constants, interfaces, structs, and helper functions from `main.go`.
+- [x] Keep `main.go` focused on logger setup, `-once`, `config.Load`, adapter construction, signal context, and `process.Run`.
+- [x] Ensure `cmd/alib-fetcher` imports no `cron`, `store`, or process-internal concurrency packages.
+- [x] Keep token handling unchanged; never log or expose Telegram token.
+- [x] Add or update command-level smoke test only if bootstrap behavior has a stable test seam after refactor.
+- [x] Run `go test ./cmd/alib-fetcher ./internal/process` and fix failures before Task 6.
 
 ### Task 6: Verify acceptance criteria
 
