@@ -171,13 +171,90 @@ func Test_Store_prunes_only_entries_older_than_cutoff(t *testing.T) {
 	require.True(t, recordExists(t, path, boundaryBook.BuyURL))
 }
 
-func Test_Open_migrates_legacy_markers_without_immediate_pruning(t *testing.T) {
+func Test_Store_prune_keeps_unsent_entries_older_than_cutoff(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	path := filepath.Join(t.TempDir(), "state.db")
+	now := time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC)
+	db, err := store.Open(path, now)
+	require.NoError(t, err)
+	pendingBook := fullBook("https://example.com/pending-old")
+	recordDiscovered(t, db, []alib.Book{pendingBook}, now.Add(-30*24*time.Hour))
+
+	// When
+	pruned, err := db.Prune(context.Background(), now.Add(-14*24*time.Hour))
+	pending, pendingErr := db.Pending(context.Background())
+	require.NoError(t, db.Close())
+
+	// Then
+	require.NoError(t, err)
+	require.NoError(t, pendingErr)
+	require.Zero(t, pruned)
+	require.Equal(t, []alib.Book{pendingBook}, pending)
+	require.True(t, recordExists(t, path, pendingBook.BuyURL))
+}
+
+func Test_Open_leaves_valid_json_records_unchanged(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	path := filepath.Join(t.TempDir(), "state.db")
+	book := fullBook("https://example.com/json-record")
+	record := storedRecord{
+		Book:       book,
+		ObservedAt: time.Date(2026, time.August, 4, 12, 0, 0, 0, time.UTC).UnixNano(),
+		SentAt:     time.Date(2026, time.August, 4, 13, 0, 0, 0, time.UTC).UnixNano(),
+		Sent:       true,
+	}
+	require.NoError(t, writeRawRecord(path, book.BuyURL, record))
+
+	// When
+	db, err := store.Open(path, time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	// Then
+	require.Equal(t, record, readStoredRecord(t, path, book.BuyURL))
+}
+
+func Test_Open_migrates_legacy_timestamp_marker_to_sent_record(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	path := filepath.Join(t.TempDir(), "state.db")
+	buyURL := "https://example.com/legacy-timestamp"
+	sentAt := time.Date(2026, time.August, 4, 12, 0, 0, 123, time.UTC)
+	require.NoError(t, writeLegacyMarker(path, buyURL, []byte(sentAt.Format(time.RFC3339Nano))))
+
+	// When
+	db, err := store.Open(path, time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	pending, pendingErr := db.Pending(context.Background())
+	require.NoError(t, db.Close())
+	record := readStoredRecord(t, path, buyURL)
+
+	// Then
+	require.NoError(t, pendingErr)
+	require.Empty(t, pending)
+	require.Equal(t, alib.Book{BuyURL: buyURL}, record.Book)
+	require.Empty(t, record.Book.Title)
+	require.Empty(t, record.Book.Seller)
+	require.Empty(t, record.Book.TextBeforeSeller)
+	require.Empty(t, record.Book.TextBeforeBuy)
+	require.Empty(t, record.Book.TextAfterBuy)
+	require.False(t, record.Book.HasPhotos)
+	require.True(t, record.Sent)
+	require.True(t, decodeStoredTime(record.SentAt).Equal(sentAt))
+}
+
+func Test_Open_migrates_unknown_legacy_marker_without_immediate_pruning(t *testing.T) {
 	t.Parallel()
 
 	// Given
 	path := filepath.Join(t.TempDir(), "state.db")
 	book := alib.Book{BuyURL: "https://example.com/legacy"}
-	require.NoError(t, writeLegacyMarker(path, book.BuyURL))
+	require.NoError(t, writeLegacyMarker(path, book.BuyURL, []byte{1}))
 	migratedAt := time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC)
 
 	// When
@@ -200,9 +277,45 @@ func Test_Open_migrates_legacy_markers_without_immediate_pruning(t *testing.T) {
 	require.Empty(t, pending)
 	require.Equal(t, 1, prunedAfterRetention)
 	require.Equal(t, book, record.Book)
+	require.Empty(t, record.Book.Title)
+	require.Empty(t, record.Book.Seller)
+	require.Empty(t, record.Book.TextBeforeSeller)
+	require.Empty(t, record.Book.TextBeforeBuy)
+	require.Empty(t, record.Book.TextAfterBuy)
+	require.False(t, record.Book.HasPhotos)
 	require.True(t, record.Sent)
 	require.NotZero(t, record.SentAt)
 	require.True(t, decodeStoredTime(record.SentAt).Equal(migratedAt.UTC()))
+}
+
+func Test_Store_rediscovered_legacy_sent_book_gets_full_payload_without_requeueing(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	path := filepath.Join(t.TempDir(), "state.db")
+	buyURL := "https://example.com/legacy-rediscovered"
+	sentAt := time.Date(2026, time.August, 4, 12, 0, 0, 0, time.UTC)
+	rediscoveredAt := sentAt.Add(24 * time.Hour)
+	require.NoError(t, writeLegacyMarker(path, buyURL, []byte(sentAt.Format(time.RFC3339Nano))))
+	db, err := store.Open(path, time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	rediscovered := fullBook(buyURL)
+
+	// When
+	created, err := db.RecordDiscovered(context.Background(), []alib.Book{rediscovered}, rediscoveredAt)
+	pending, pendingErr := db.Pending(context.Background())
+	require.NoError(t, db.Close())
+	record := readStoredRecord(t, path, buyURL)
+
+	// Then
+	require.NoError(t, err)
+	require.NoError(t, pendingErr)
+	require.Zero(t, created)
+	require.Empty(t, pending)
+	require.Equal(t, rediscovered, record.Book)
+	require.True(t, record.Sent)
+	require.True(t, decodeStoredTime(record.SentAt).Equal(sentAt))
+	require.True(t, decodeStoredTime(record.ObservedAt).Equal(rediscoveredAt.UTC()))
 }
 
 func fullBook(buyURL string) alib.Book {
@@ -266,7 +379,16 @@ func recordExists(t *testing.T, path, buyURL string) bool {
 	return exists
 }
 
-func writeLegacyMarker(path, buyURL string) error {
+func writeRawRecord(path, buyURL string, record storedRecord) error {
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+
+	return writeLegacyMarker(path, buyURL, encoded)
+}
+
+func writeLegacyMarker(path, buyURL string, value []byte) error {
 	db, err := bolt.Open(path, 0o600, nil)
 	if err != nil {
 		return err
@@ -276,7 +398,7 @@ func writeLegacyMarker(path, buyURL string) error {
 		if bucketErr != nil {
 			return bucketErr
 		}
-		return bucket.Put([]byte(buyURL), []byte{1})
+		return bucket.Put([]byte(buyURL), value)
 	})
 
 	return errors.Join(writeErr, db.Close())

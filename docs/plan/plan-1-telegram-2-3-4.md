@@ -88,18 +88,18 @@ Files:
 
 - Modify: internal/store/store.go
 - Modify: internal/store/store_test.go
-- [ ] Обновить `migrateLegacyMarkers`: если value уже валидный JSON record новой схемы, оставить как есть.
-- [ ] Обновить `migrateLegacyMarkers`: если value является RFC3339Nano timestamp, заменить на JSON record `{Book: {BuyURL: key}, Sent: true, SentAt: parsed timestamp}`.
-- [ ] Обновить `migrateLegacyMarkers`: если value является unknown legacy marker, заменить на JSON record `{Book: {BuyURL: key}, Sent: true, SentAt: migratedAt}`.
-- [ ] Явно зафиксировать в тестах, что legacy marker-only записи не имеют восстановимых title/seller/text/photo fields, но не попадают в pending, потому что `Sent=true`.
-- [ ] Добавить тест: если legacy-sent `BuyURL` снова найден на странице, `RecordDiscovered` дополняет record полным `alib.Book`, сохраняя `Sent=true`.
-- [ ] Обновить `Prune`: удалять только `Sent=true` records с `SentAt` strictly before cutoff.
-- [ ] Не удалять `Sent=false` records при retention, даже если они старые.
-- [ ] Сохранить strict boundary behavior: `SentAt` ровно на cutoff остается.
-- [ ] Добавить тест миграции RFC3339Nano marker в sent record без повторной отправки.
-- [ ] Добавить тест миграции unknown legacy marker без immediate pruning.
-- [ ] Добавить тест: `Prune` не удаляет unsent запись старше cutoff.
-- [ ] Run `go test -race -shuffle=on -count=1 ./internal/store` before task 4.
+- [x] Обновить `migrateLegacyMarkers`: если value уже валидный JSON record новой схемы, оставить как есть.
+- [x] Обновить `migrateLegacyMarkers`: если value является RFC3339Nano timestamp, заменить на JSON record `{Book: {BuyURL: key}, Sent: true, SentAt: parsed timestamp}`.
+- [x] Обновить `migrateLegacyMarkers`: если value является unknown legacy marker, заменить на JSON record `{Book: {BuyURL: key}, Sent: true, SentAt: migratedAt}`.
+- [x] Явно зафиксировать в тестах, что legacy marker-only записи не имеют восстановимых title/seller/text/photo fields, но не попадают в pending, потому что `Sent=true`.
+- [x] Добавить тест: если legacy-sent `BuyURL` снова найден на странице, `RecordDiscovered` дополняет record полным `alib.Book`, сохраняя `Sent=true`.
+- [x] Обновить `Prune`: удалять только `Sent=true` records с `SentAt` strictly before cutoff.
+- [x] Не удалять `Sent=false` records при retention, даже если они старые.
+- [x] Сохранить strict boundary behavior: `SentAt` ровно на cutoff остается.
+- [x] Добавить тест миграции RFC3339Nano marker в sent record без повторной отправки.
+- [x] Добавить тест миграции unknown legacy marker без immediate pruning.
+- [x] Добавить тест: `Prune` не удаляет unsent запись старше cutoff.
+- [x] Run `go test -race -shuffle=on -count=1 ./internal/store` before task 4.
 
 ### Task 4: Проверить digest boundary behavior с DB-backed queue
 
