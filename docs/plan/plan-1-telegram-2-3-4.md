@@ -51,16 +51,16 @@ Files:
 
 - Modify: internal/app/service.go
 - Modify: internal/app/service_test.go
-- [ ] Изменить `app.State`: заменить `Unseen(context.Context, []alib.Book)` на `RecordDiscovered(context.Context, []alib.Book, time.Time) (int, error)` и `Pending(context.Context) ([]alib.Book, error)`.
-- [ ] Обновить `Service.Run` sequence: `Prune`, `Fetch`, `RecordDiscovered`, `Pending`, `Render pending`, `Send chunks`, `MarkSent` after each accepted chunk.
-- [ ] Сохранить `Result.Fetched` как число книг из fetch.
-- [ ] Сохранить `Result.New` как число впервые созданных DB records, а не размер pending queue.
-- [ ] Сохранить `Result.Sent` как число книг, успешно отмеченных после отправки.
-- [ ] Обновить fakeState в service tests под новый interface.
-- [ ] Добавить/обновить тест: после fetch сервис вызывает `RecordDiscovered` до `Pending` и отправки.
-- [ ] Добавить/обновить тест: сервис отправляет книги из `Pending`, включая книгу, отсутствующую в текущем fetch result.
-- [ ] Сохранить тесты на per-chunk acknowledgement, `retry_after`, context cancellation, silent/non-silent chunks.
-- [ ] Run `go test -race -shuffle=on -count=1 ./internal/app` before task 2.
+- [x] Изменить `app.State`: заменить `Unseen(context.Context, []alib.Book)` на `RecordDiscovered(context.Context, []alib.Book, time.Time) (int, error)` и `Pending(context.Context) ([]alib.Book, error)`.
+- [x] Обновить `Service.Run` sequence: `Prune`, `Fetch`, `RecordDiscovered`, `Pending`, `Render pending`, `Send chunks`, `MarkSent` after each accepted chunk.
+- [x] Сохранить `Result.Fetched` как число книг из fetch.
+- [x] Сохранить `Result.New` как число впервые созданных DB records, а не размер pending queue.
+- [x] Сохранить `Result.Sent` как число книг, успешно отмеченных после отправки.
+- [x] Обновить fakeState в service tests под новый interface.
+- [x] Добавить/обновить тест: после fetch сервис вызывает `RecordDiscovered` до `Pending` и отправки.
+- [x] Добавить/обновить тест: сервис отправляет книги из `Pending`, включая книгу, отсутствующую в текущем fetch result.
+- [x] Сохранить тесты на per-chunk acknowledgement, `retry_after`, context cancellation, silent/non-silent chunks.
+- [x] Run `go test -race -shuffle=on -count=1 ./internal/app` before task 2.
 
 ### Task 2: Перевести bbolt storage на JSON records с полным alib.Book
 

@@ -22,7 +22,7 @@ func Test_Service_marks_each_chunk_only_after_delivery(t *testing.T) {
 		{Title: "Вторая", BuyURL: "https://example.com/2"},
 	}
 	sendErr := errors.New("telegram unavailable")
-	state := &fakeState{unseen: books}
+	state := &fakeState{pending: books, recordedNew: len(books)}
 	sender := &fakeSender{failAt: 2, err: sendErr}
 	service := app.NewService(app.Dependencies{
 		Fetcher:      fakeFetcher{books: books},
@@ -38,6 +38,7 @@ func Test_Service_marks_each_chunk_only_after_delivery(t *testing.T) {
 	// Then
 	require.ErrorIs(t, err, sendErr)
 	require.Equal(t, 2, result.Fetched)
+	require.Equal(t, 2, result.New)
 	require.Equal(t, 1, result.Sent)
 	require.Equal(t, books[:1], state.marked)
 	require.Equal(t, now, state.markedAt)
@@ -52,7 +53,7 @@ func Test_Service_sends_single_chunk_with_sound(t *testing.T) {
 	sender := &fakeSender{}
 	service := app.NewService(app.Dependencies{
 		Fetcher:      fakeFetcher{books: []alib.Book{book}},
-		State:        &fakeState{unseen: []alib.Book{book}},
+		State:        &fakeState{pending: []alib.Book{book}, recordedNew: 1},
 		Sender:       sender,
 		MessageLimit: 4096,
 		Now:          time.Now,
@@ -63,6 +64,7 @@ func Test_Service_sends_single_chunk_with_sound(t *testing.T) {
 
 	// Then
 	require.NoError(t, err)
+	require.Equal(t, 1, result.New)
 	require.Equal(t, 1, result.Sent)
 	require.Equal(t, []bool{false}, sender.silent)
 }
@@ -77,7 +79,7 @@ func Test_Service_waits_and_retries_only_rate_limited_chunk(t *testing.T) {
 		{Title: "Вторая", BuyURL: "https://example.com/2"},
 	}
 	events := make([]string, 0)
-	state := &fakeState{unseen: books, events: &events}
+	state := &fakeState{pending: books, recordedNew: len(books), events: &events}
 	sender := &fakeSender{
 		failAt: 2,
 		err:    retryAfterError{delay: time.Second},
@@ -108,6 +110,8 @@ func Test_Service_waits_and_retries_only_rate_limited_chunk(t *testing.T) {
 	require.Equal(t, sender.messages[1], sender.messages[2])
 	require.Equal(t, []bool{true, false, false}, sender.silent)
 	require.Equal(t, []string{
+		"record",
+		"pending",
 		"send",
 		"mark:https://example.com/1",
 		"send",
@@ -122,7 +126,7 @@ func Test_Service_stops_rate_limit_wait_when_context_is_canceled(t *testing.T) {
 
 	// Given
 	book := alib.Book{Title: "Книга", BuyURL: "https://example.com/1"}
-	state := &fakeState{unseen: []alib.Book{book}}
+	state := &fakeState{pending: []alib.Book{book}, recordedNew: 1}
 	sender := &fakeSender{failAt: 1, err: retryAfterError{delay: time.Second}}
 	service := app.NewService(app.Dependencies{
 		Fetcher:      fakeFetcher{books: []alib.Book{book}},
@@ -144,7 +148,71 @@ func Test_Service_stops_rate_limit_wait_when_context_is_canceled(t *testing.T) {
 	require.Len(t, sender.messages, 1)
 }
 
-func Test_Service_does_not_send_seen_books(t *testing.T) {
+func Test_Service_records_discovered_before_loading_pending_and_sending(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	now := time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC)
+	books := []alib.Book{{Title: "Новая", BuyURL: "https://example.com/new"}}
+	events := make([]string, 0)
+	state := &fakeState{pending: books, recordedNew: 1, events: &events}
+	service := app.NewService(app.Dependencies{
+		Fetcher:      fakeFetcher{books: books, events: &events},
+		State:        state,
+		Sender:       &fakeSender{events: &events},
+		MessageLimit: 4096,
+		Now:          func() time.Time { return now },
+	})
+
+	// When
+	result, err := service.Run(context.Background())
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, books, state.recorded)
+	require.Equal(t, now, state.recordedAt)
+	require.Equal(t, app.Result{Fetched: 1, New: 1, Sent: 1}, result)
+	require.Equal(t, []string{
+		"fetch",
+		"record",
+		"pending",
+		"send",
+		"mark:https://example.com/new",
+	}, events)
+}
+
+func Test_Service_sends_pending_books_not_present_in_current_fetch(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	now := time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC)
+	fetched := []alib.Book{{Title: "Свежая", BuyURL: "https://example.com/fresh"}}
+	pending := []alib.Book{{Title: "Из прошлой попытки", BuyURL: "https://example.com/pending"}}
+	state := &fakeState{pending: pending, recordedNew: 1}
+	sender := &fakeSender{}
+	service := app.NewService(app.Dependencies{
+		Fetcher:      fakeFetcher{books: fetched},
+		State:        state,
+		Sender:       sender,
+		MessageLimit: 4096,
+		Now:          func() time.Time { return now },
+	})
+
+	// When
+	result, err := service.Run(context.Background())
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, fetched, state.recorded)
+	require.Equal(t, pending, state.marked)
+	require.Equal(t, now, state.markedAt)
+	require.Equal(t, app.Result{Fetched: 1, New: 1, Sent: 1}, result)
+	require.Len(t, sender.messages, 1)
+	require.Contains(t, sender.messages[0], "Из прошлой попытки")
+	require.NotContains(t, sender.messages[0], "Свежая")
+}
+
+func Test_Service_does_not_send_when_no_pending_books(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -191,10 +259,14 @@ func Test_Service_prunes_state_at_start_of_cycle(t *testing.T) {
 }
 
 type fakeFetcher struct {
-	books []alib.Book
+	events *[]string
+	books  []alib.Book
 }
 
 func (f fakeFetcher) Fetch(context.Context) ([]alib.Book, error) {
+	if f.events != nil {
+		*f.events = append(*f.events, "fetch")
+	}
 	return f.books, nil
 }
 
@@ -202,8 +274,11 @@ type fakeState struct {
 	events       *[]string
 	markedAt     time.Time
 	prunedBefore time.Time
-	unseen       []alib.Book
+	recordedAt   time.Time
+	pending      []alib.Book
 	marked       []alib.Book
+	recorded     []alib.Book
+	recordedNew  int
 	pruned       int
 }
 
@@ -212,8 +287,20 @@ func (f *fakeState) Prune(_ context.Context, before time.Time) (int, error) {
 	return f.pruned, nil
 }
 
-func (f *fakeState) Unseen(context.Context, []alib.Book) ([]alib.Book, error) {
-	return f.unseen, nil
+func (f *fakeState) RecordDiscovered(_ context.Context, books []alib.Book, observedAt time.Time) (int, error) {
+	f.recorded = append(f.recorded, books...)
+	f.recordedAt = observedAt
+	if f.events != nil {
+		*f.events = append(*f.events, "record")
+	}
+	return f.recordedNew, nil
+}
+
+func (f *fakeState) Pending(context.Context) ([]alib.Book, error) {
+	if f.events != nil {
+		*f.events = append(*f.events, "pending")
+	}
+	return f.pending, nil
 }
 
 func (f *fakeState) MarkSent(_ context.Context, books []alib.Book, sentAt time.Time) error {

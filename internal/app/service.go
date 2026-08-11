@@ -16,10 +16,11 @@ type Fetcher interface {
 	Fetch(context.Context) ([]alib.Book, error)
 }
 
-// State tracks which listings have already been delivered.
+// State tracks discovered listings and their delivery status.
 type State interface {
 	Prune(context.Context, time.Time) (int, error)
-	Unseen(context.Context, []alib.Book) ([]alib.Book, error)
+	RecordDiscovered(context.Context, []alib.Book, time.Time) (int, error)
+	Pending(context.Context) ([]alib.Book, error)
 	MarkSent(context.Context, []alib.Book, time.Time) error
 }
 
@@ -74,16 +75,21 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 	}
 	result.Fetched = len(books)
 
-	unseen, err := s.dependencies.State.Unseen(ctx, books)
+	created, err := s.dependencies.State.RecordDiscovered(ctx, books, cycleTime)
 	if err != nil {
-		return result, fmt.Errorf("filter listings: %w", err)
+		return result, fmt.Errorf("record discovered listings: %w", err)
 	}
-	result.New = len(unseen)
-	if len(unseen) == 0 {
+	result.New = created
+
+	pending, err := s.dependencies.State.Pending(ctx)
+	if err != nil {
+		return result, fmt.Errorf("load pending listings: %w", err)
+	}
+	if len(pending) == 0 {
 		return result, nil
 	}
 
-	chunks, err := digest.Render(unseen, s.dependencies.MessageLimit)
+	chunks, err := digest.Render(pending, s.dependencies.MessageLimit)
 	if err != nil {
 		return result, fmt.Errorf("render digest: %w", err)
 	}
