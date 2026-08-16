@@ -308,6 +308,66 @@ func Test_Open_leaves_valid_json_records_unchanged(t *testing.T) {
 	require.JSONEq(t, record, string(readRawRecord(t, path, buyURL)))
 }
 
+func Test_Open_rejects_malformed_json_record_without_replacing_it(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	path := filepath.Join(t.TempDir(), "state.db")
+	buyURL := "https://example.com/malformed-record"
+	malformedRecord := []byte(`{"book":`)
+	require.NoError(t, writeLegacyMarker(path, buyURL, malformedRecord))
+
+	// When
+	db, err := store.Open(path, time.Now())
+
+	// Then
+	require.Nil(t, db)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "decode book record")
+	require.Equal(t, malformedRecord, readRawRecord(t, path, buyURL))
+}
+
+func Test_Open_rejects_json_record_with_buy_url_different_from_key(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	path := filepath.Join(t.TempDir(), "state.db")
+	buyURL := "https://example.com/record-key"
+	record := []byte(`{"book":{"buy_url":"https://example.com/record-value"},"sent":true}`)
+	require.NoError(t, writeLegacyMarker(path, buyURL, record))
+
+	// When
+	db, err := store.Open(path, time.Now())
+
+	// Then
+	require.Nil(t, db)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "buy URL does not match key")
+	require.Equal(t, record, readRawRecord(t, path, buyURL))
+}
+
+func Test_Open_rolls_back_neighboring_legacy_migration_when_record_is_corrupt(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	path := filepath.Join(t.TempDir(), "state.db")
+	legacyURL := "https://example.com/a-legacy"
+	corruptURL := "https://example.com/z-corrupt"
+	legacyMarker := []byte{1}
+	corruptRecord := []byte(`{"book":`)
+	require.NoError(t, writeLegacyMarker(path, legacyURL, legacyMarker))
+	require.NoError(t, writeLegacyMarker(path, corruptURL, corruptRecord))
+
+	// When
+	db, err := store.Open(path, time.Now())
+
+	// Then
+	require.Nil(t, db)
+	require.Error(t, err)
+	require.Equal(t, legacyMarker, readRawRecord(t, path, legacyURL))
+	require.Equal(t, corruptRecord, readRawRecord(t, path, corruptURL))
+}
+
 func Test_Open_migrates_legacy_timestamp_marker_to_sent_record(t *testing.T) {
 	t.Parallel()
 

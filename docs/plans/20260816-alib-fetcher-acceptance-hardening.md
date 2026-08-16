@@ -105,17 +105,17 @@
 - Modify: `internal/store/store.go`
 - Modify: `internal/store/store_test.go`
 
-- [ ] Добавить regression test: malformed JSON object в `sent_books` заставляет `store.Open` завершиться ошибкой
+- [x] Добавить regression test: malformed JSON object в `sent_books` заставляет `store.Open` завершиться ошибкой
   и не перезаписывается legacy record.
-- [ ] Добавить regression test: JSON record с `Book.BuyURL`, не совпадающим с bbolt key, отклоняется как corrupt
+- [x] Добавить regression test: JSON record с `Book.BuyURL`, не совпадающим с bbolt key, отклоняется как corrupt
   state.
-- [ ] Сохранить tests миграции RFC3339 marker и opaque legacy marker без немедленного pruning.
-- [ ] Отличать JSON-object records новой схемы от raw legacy markers до запуска migration.
-- [ ] Для structured record возвращать decode/validation error вместо silent conversion в sent marker.
-- [ ] Проверять invariant `record.Book.BuyURL == string(bucketKey)` во всех read/update paths.
-- [ ] Сохранить transactional initialization: при одной повреждённой записи никакие соседние migrations не
+- [x] Сохранить tests миграции RFC3339 marker и opaque legacy marker без немедленного pruning.
+- [x] Отличать JSON-object records новой схемы от raw legacy markers до запуска migration.
+- [x] Для structured record возвращать decode/validation error вместо silent conversion в sent marker.
+- [x] Проверять invariant `record.Book.BuyURL == string(bucketKey)` во всех read/update paths.
+- [x] Сохранить transactional initialization: при одной повреждённой записи никакие соседние migrations не
   должны частично фиксироваться.
-- [ ] Run `make test` and `make lint`; both must pass before Task 4.
+- [x] Run `make test` and `make lint`; both must pass before Task 4.
 
 ### Task 4: Проверять контейнер до merge и исключить секреты из repository/build context
 
