@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"math"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -25,6 +26,7 @@ func Test_Load_applies_service_defaults(t *testing.T) {
 		"HTTP_TIMEOUT":       "",
 		"MESSAGE_LIMIT":      "",
 		"RUN_ON_STARTUP":     "",
+		"FRESH_BOOKS":        "",
 	})
 
 	// When
@@ -40,6 +42,112 @@ func Test_Load_applies_service_defaults(t *testing.T) {
 	require.Equal(t, 30*time.Second, loaded.HTTPTimeout)
 	require.Equal(t, 4000, loaded.MessageLimit)
 	require.True(t, loaded.RunOnStartup)
+	require.Nil(t, loaded.FreshBooks)
+}
+
+func Test_Load_disables_fresh_books_threshold_when_unset_or_empty(t *testing.T) {
+	testCases := map[string]bool{
+		"unset": false,
+		"empty": true,
+	}
+
+	for name, setValue := range testCases {
+		t.Run(name, func(t *testing.T) {
+			// Given
+			setEnvironment(t, map[string]string{
+				"TELEGRAM_BOT_TOKEN": "token",
+				"TELEGRAM_CHAT_ID":   "-100123",
+			})
+			if setValue {
+				t.Setenv("FRESH_BOOKS", "")
+			} else {
+				unsetEnvironment(t, "FRESH_BOOKS")
+			}
+
+			// When
+			loaded, err := config.Load()
+
+			// Then
+			require.NoError(t, err)
+			require.Nil(t, loaded.FreshBooks)
+		})
+	}
+}
+
+func Test_Load_parses_fresh_books_policy(t *testing.T) {
+	testCases := map[string]struct {
+		value       string
+		currentYear int
+		lowerYear   int
+	}{
+		"age": {
+			value:       "age:5",
+			currentYear: 2026,
+			lowerYear:   2021,
+		},
+		"age zero": {
+			value:       "age:0",
+			currentYear: 2026,
+			lowerYear:   2026,
+		},
+		"since": {
+			value:       "since:2021",
+			currentYear: 2026,
+			lowerYear:   2021,
+		},
+	}
+
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			// Given
+			setEnvironment(t, map[string]string{
+				"TELEGRAM_BOT_TOKEN": "token",
+				"TELEGRAM_CHAT_ID":   "-100123",
+				"FRESH_BOOKS":        testCase.value,
+			})
+
+			// When
+			loaded, err := config.Load()
+
+			// Then
+			require.NoError(t, err)
+			require.NotNil(t, loaded.FreshBooks)
+			require.Equal(t, testCase.lowerYear, loaded.FreshBooks.LowerYear(testCase.currentYear))
+		})
+	}
+}
+
+func Test_Load_rejects_invalid_fresh_books_policy(t *testing.T) {
+	testCases := []string{
+		"age:-1",
+		"age:+5",
+		"age:1.5",
+		"age:",
+		"since:999",
+		"since:0000",
+		"since:10000",
+		"since:20a1",
+		"fresh:2021",
+	}
+
+	for _, value := range testCases {
+		t.Run(value, func(t *testing.T) {
+			// Given
+			setEnvironment(t, map[string]string{
+				"TELEGRAM_BOT_TOKEN": "token",
+				"TELEGRAM_CHAT_ID":   "-100123",
+				"FRESH_BOOKS":        value,
+			})
+
+			// When
+			loaded, err := config.Load()
+
+			// Then
+			require.ErrorIs(t, err, config.ErrInvalid)
+			require.ErrorContains(t, err, "FRESH_BOOKS")
+			require.Empty(t, loaded)
+		})
+	}
 }
 
 func Test_Load_parses_custom_schedule(t *testing.T) {
@@ -183,4 +291,10 @@ func setEnvironment(t *testing.T, values map[string]string) {
 	for key, value := range values {
 		t.Setenv(key, value)
 	}
+}
+
+func unsetEnvironment(t *testing.T, key string) {
+	t.Helper()
+	t.Setenv(key, os.Getenv(key))
+	require.NoError(t, os.Unsetenv(key))
 }
