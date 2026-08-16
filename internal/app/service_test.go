@@ -75,6 +75,72 @@ func Test_Service_sends_single_chunk_with_sound(t *testing.T) {
 	require.Equal(t, []bool{true}, sender.attachRefresh)
 }
 
+func Test_Service_renders_freshness_using_cycle_time_in_configured_timezone(t *testing.T) {
+	t.Parallel()
+
+	moscow, err := time.LoadLocation("Europe/Moscow")
+	require.NoError(t, err)
+	testCases := map[string]struct {
+		policy    app.FreshBooksPolicy
+		location  *time.Location
+		cycleTime time.Time
+		emoji     string
+		bookYear  int
+	}{
+		"disabled threshold": {
+			cycleTime: time.Date(2026, time.August, 5, 12, 0, 0, 0, time.UTC),
+			location:  time.UTC,
+			bookYear:  2025,
+		},
+		"inclusive configured threshold": {
+			cycleTime: time.Date(2026, time.August, 5, 12, 0, 0, 0, time.UTC),
+			location:  time.UTC,
+			bookYear:  2021,
+			policy:    fixedFreshBooksPolicy(2021),
+			emoji:     "✨ ",
+		},
+		"January boundary in configured timezone": {
+			cycleTime: time.Date(2025, time.December, 31, 21, 30, 0, 0, time.UTC),
+			location:  moscow,
+			bookYear:  2025,
+			policy:    fixedFreshBooksPolicy(2026),
+			emoji:     "🔥 ",
+		},
+	}
+
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			// Given
+			book := alib.Book{
+				Title:           "Книга",
+				PublicationYear: testCase.bookYear,
+				BuyURL:          "https://example.com/book",
+			}
+			sender := &fakeSender{}
+			service := app.NewService(app.Dependencies{
+				Fetcher:      fakeFetcher{books: []alib.Book{book}},
+				State:        &fakeState{pending: []alib.Book{book}, recordedNew: 1},
+				Sender:       sender,
+				FreshBooks:   testCase.policy,
+				Location:     testCase.location,
+				MessageLimit: 4096,
+				Now:          func() time.Time { return testCase.cycleTime },
+			})
+
+			// When
+			result, runErr := service.Run(context.Background())
+
+			// Then
+			require.NoError(t, runErr)
+			require.Equal(t, app.Result{Fetched: 1, New: 1, Sent: 1}, result)
+			require.Len(t, sender.messages, 1)
+			require.Contains(t, sender.messages[0], testCase.emoji+"<b>Книга</b>")
+		})
+	}
+}
+
 func Test_Service_sends_only_final_chunk_with_sound(t *testing.T) {
 	t.Parallel()
 
@@ -278,12 +344,17 @@ func Test_Service_records_discovered_before_loading_pending_and_sending(t *testi
 	books := []alib.Book{{Title: "Новая", BuyURL: "https://example.com/new"}}
 	events := make([]string, 0)
 	state := &fakeState{pending: books, recordedNew: 1, events: &events}
+	nowCalls := 0
 	service := app.NewService(app.Dependencies{
 		Fetcher:      fakeFetcher{books: books, events: &events},
 		State:        state,
 		Sender:       &fakeSender{events: &events},
 		MessageLimit: 4096,
-		Now:          func() time.Time { return now },
+		Now: func() time.Time {
+			nowCalls++
+
+			return now
+		},
 	})
 
 	// When
@@ -291,8 +362,11 @@ func Test_Service_records_discovered_before_loading_pending_and_sending(t *testi
 
 	// Then
 	require.NoError(t, err)
+	require.Equal(t, 1, nowCalls)
+	require.Equal(t, now.Add(-14*24*time.Hour), state.prunedBefore)
 	require.Equal(t, books, state.recorded)
 	require.Equal(t, now, state.recordedAt)
+	require.Equal(t, now, state.markedAt)
 	require.Equal(t, app.Result{Fetched: 1, New: 1, Sent: 1}, result)
 	require.Equal(t, []string{
 		"fetch",
@@ -635,6 +709,12 @@ func (f *fakeSender) Send(_ context.Context, text string, silent bool, attachRef
 
 type retryAfterError struct {
 	delay time.Duration
+}
+
+type fixedFreshBooksPolicy int
+
+func (policy fixedFreshBooksPolicy) LowerYear(int) int {
+	return int(policy)
 }
 
 func (e retryAfterError) Error() string {

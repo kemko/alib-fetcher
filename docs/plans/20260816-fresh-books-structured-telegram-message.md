@@ -188,19 +188,19 @@ Telegram-сообщение получит маркеры `🔥`/`✨`, отде
 - Modify: `cmd/alib-fetcher/main_test.go`
 - Modify as required: `internal/process/*_test.go`
 
-- [ ] Добавить service-тесты с фиксированным cycle time, отключённым порогом и границей
+- [x] Добавить service-тесты с фиксированным cycle time, отключённым порогом и границей
   января в настроенной timezone.
-- [ ] Передать необязательную freshness policy и `Location` из `config.Config` через bootstrap
+- [x] Передать необязательную freshness policy и `Location` из `config.Config` через bootstrap
   в `app.Dependencies`.
-- [ ] Получать `cycleTime` один раз; использовать тот же момент для retention, persistence,
+- [x] Получать `cycleTime` один раз; использовать тот же момент для retention, persistence,
   обеих render phases и acknowledgement.
-- [ ] Для классификации emoji преобразовывать `cycleTime` в настроенную `TIMEZONE`.
-- [ ] Передавать одинаковые render options в проверку отдельной книги и финальный chunking.
-- [ ] Обновить тестовые dependencies, сохранив oversized-skip, delivery order, retry,
+- [x] Для классификации emoji преобразовывать `cycleTime` в настроенную `TIMEZONE`.
+- [x] Передавать одинаковые render options в проверку отдельной книги и финальный chunking.
+- [x] Обновить тестовые dependencies, сохранив oversized-skip, delivery order, retry,
   acknowledgement и refresh-button behavior.
-- [ ] Расширить `-once` integration test: проверить отсутствие обязательности `FRESH_BOOKS`, оба
+- [x] Расширить `-once` integration test: проверить отсутствие обязательности `FRESH_BOOKS`, оба
   настроенных режима, emoji, seller link, цену, содержание, абзацы и последнюю ссылку `Купить`.
-- [ ] Выполнить `make test`; все тесты должны пройти до Task 6.
+- [x] Выполнить `make test`; все тесты должны пройти до Task 6.
 
 ### Task 6: Verify acceptance criteria
 
