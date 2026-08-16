@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -293,6 +294,99 @@ func Test_Sender_uses_HTTP_status_when_rejection_has_no_description(t *testing.T
 	// Then
 	require.ErrorIs(t, err, telegram.ErrRejected)
 	require.Contains(t, err.Error(), "502 Bad Gateway")
+}
+
+func Test_Sender_uses_HTTP_status_for_non_JSON_HTTP_rejection(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "plain text", body: "upstream unavailable"},
+		{name: "malformed JSON", body: `{"ok":false`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Given
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				writer.WriteHeader(http.StatusBadGateway)
+				_, err := writer.Write([]byte(tt.body))
+				assert.NoError(t, err)
+			}))
+			t.Cleanup(server.Close)
+			sender, err := telegram.NewSender(telegram.Config{
+				APIBase: server.URL,
+				Token:   "test-token",
+				ChatID:  "-100123",
+				Timeout: time.Second,
+			})
+			require.NoError(t, err)
+
+			// When
+			err = sender.Send(context.Background(), "digest", false, false)
+
+			// Then
+			require.ErrorIs(t, err, telegram.ErrRejected)
+			assert.Contains(t, err.Error(), "502 Bad Gateway")
+			assert.NotContains(t, err.Error(), "decode Telegram response")
+		})
+	}
+}
+
+func Test_Sender_rejects_oversized_API_response(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, err := writer.Write([]byte(`{"ok":true}` + strings.Repeat(" ", 1<<20)))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+	sender, err := telegram.NewSender(telegram.Config{
+		APIBase: server.URL,
+		Token:   "test-token",
+		ChatID:  "-100123",
+		Timeout: time.Second,
+	})
+	require.NoError(t, err)
+
+	// When
+	err = sender.Send(context.Background(), "digest", false, false)
+
+	// Then
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds 1048576 bytes")
+	assert.NotErrorIs(t, err, telegram.ErrRequest)
+	assert.NotErrorIs(t, err, telegram.ErrRejected)
+}
+
+func Test_Sender_rejects_trailing_data_after_API_response(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, err := writer.Write([]byte(`{"ok":true}{"ok":true}`))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+	sender, err := telegram.NewSender(telegram.Config{
+		APIBase: server.URL,
+		Token:   "test-token",
+		ChatID:  "-100123",
+		Timeout: time.Second,
+	})
+	require.NoError(t, err)
+
+	// When
+	err = sender.Send(context.Background(), "digest", false, false)
+
+	// Then
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "decode Telegram response")
 }
 
 func Test_Sender_returns_decode_error_for_invalid_response(t *testing.T) {

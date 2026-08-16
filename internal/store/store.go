@@ -2,6 +2,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -290,8 +291,9 @@ func (s *Store) Close() error {
 func migrateLegacyMarkers(bucket *bolt.Bucket, migratedAt time.Time) error {
 	migrations := make([]legacyMigration, 0)
 	if err := bucket.ForEach(func(key, value []byte) error {
-		if _, err := decodeRecord(key, value); err == nil {
-			return nil
+		if isStructuredRecord(value) {
+			_, err := decodeRecord(key, value)
+			return err
 		}
 
 		sentAt := migratedAt.UTC()
@@ -317,16 +319,33 @@ func migrateLegacyMarkers(bucket *bolt.Bucket, migratedAt time.Time) error {
 	return nil
 }
 
+func isStructuredRecord(value []byte) bool {
+	trimmed := bytes.TrimSpace(value)
+
+	return len(trimmed) > 0 && trimmed[0] == '{'
+}
+
 func decodeRecord(key, value []byte) (bookRecord, error) {
 	var record bookRecord
 	if err := json.Unmarshal(value, &record); err != nil {
 		return bookRecord{}, fmt.Errorf("decode book record %q: %w", string(key), err)
 	}
-	if record.Book.BuyURL == "" {
-		return bookRecord{}, fmt.Errorf("decode book record %q: missing buy URL", string(key))
+	if err := validateRecord(key, record); err != nil {
+		return bookRecord{}, err
 	}
 
 	return record, nil
+}
+
+func validateRecord(key []byte, record bookRecord) error {
+	if record.Book.BuyURL == "" {
+		return fmt.Errorf("decode book record %q: missing buy URL", string(key))
+	}
+	if record.Book.BuyURL != string(key) {
+		return fmt.Errorf("decode book record %q: buy URL does not match key", string(key))
+	}
+
+	return nil
 }
 
 func encodeRecordTime(value time.Time) int64 {
@@ -338,6 +357,9 @@ func decodeRecordTime(value int64) time.Time {
 }
 
 func putRecord(bucket *bolt.Bucket, key []byte, record bookRecord) error {
+	if err := validateRecord(key, record); err != nil {
+		return err
+	}
 	encoded, err := json.Marshal(record)
 	if err != nil {
 		return fmt.Errorf("encode book record %q: %w", string(key), err)

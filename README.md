@@ -11,7 +11,7 @@ database, which also stores the pending send queue.
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | yes | - | Bot token from BotFather |
-| `TELEGRAM_CHAT_ID` | yes | - | Numeric chat ID or `@channel` username |
+| `TELEGRAM_CHAT_ID` | yes | - | Signed decimal `int64` chat ID or non-empty `@channel` username, without whitespace |
 | `CRON_SCHEDULE` | no | `0 0 * * *` | Standard five-field cron expression |
 | `TIMEZONE` | no | `Europe/Moscow` | IANA timezone used by the scheduler |
 | `RUN_ON_STARTUP` | no | `true` | Run one digest cycle immediately after scheduler startup |
@@ -20,6 +20,10 @@ database, which also stores the pending send queue.
 | `TELEGRAM_API_BASE` | no | `https://api.telegram.org` | Bot API base URL |
 | `HTTP_TIMEOUT` | no | `30s` | Timeout for each external request |
 | `MESSAGE_LIMIT` | no | `4000` | Safe Telegram message size, max `4096` |
+
+Configuration is validated before process startup. Invalid chat IDs, including
+plain text without `@`, an empty `@` username, whitespace, and numeric overflow,
+fail fast with an error naming `TELEGRAM_CHAT_ID`.
 
 Each digest first records every fetched listing in the state database as a
 pending record with the full parsed Alib payload: title, announcement text,
@@ -94,17 +98,24 @@ outside this service.
 The process emits structured JSON logs and stops gracefully on `SIGINT` or
 `SIGTERM`.
 
-On first run after upgrading from older timestamp-marker releases, existing
-state entries are migrated to JSON records. Back up `STATE_PATH` before
-upgrading; rolling back to an older release requires restoring or recreating the
-state database.
+On first run after upgrading from older timestamp-marker releases, raw legacy
+state entries are migrated to JSON records. Values that look like structured
+JSON records must decode successfully, and their stored purchase URL must match
+the bbolt key. A malformed or mismatched structured record makes state opening
+fail transactionally: it is not treated as a legacy marker, and no neighboring
+migration is committed. Back up `STATE_PATH` before upgrading. If validation
+fails, stop the service and restore a known-good backup; recreate the database
+only when resetting delivery history is acceptable. Rolling back to an older
+release also requires restoring or recreating the state database.
 
 ## Container
 
-Successful CI runs for pushes to `master` publish images as
-`ghcr.io/<owner>/<repository>:latest`. Pull requests and failed verification or
-vulnerability checks never publish an image. The final image runs as the
-distroless `nonroot` user. Keep the state directory on a named volume:
+After verification succeeds, CI validates the Compose configuration and builds
+the production image for both pull requests and pushes to `master`. Pull
+requests build without registry login or push. A successful `master` push uses
+that single build to publish `ghcr.io/<owner>/<repository>:latest`; failed
+verification or vulnerability checks publish nothing. The final image runs as
+the distroless `nonroot` user. Keep the state directory on a named volume:
 
 ```bash
 docker run -d --name alib-fetcher \
@@ -127,6 +138,12 @@ With Podman Desktop, use `podman compose up -d`. Compose stores the database in
 the persistent named volume `alib-fetcher-state`. Set `ALIB_FETCHER_IMAGE` to
 override the default `ghcr.io/kemko/alib-fetcher:latest` image.
 
+Keep `TELEGRAM_BOT_TOKEN` and other runtime credentials in the process
+environment or an untracked local `.env` file. Git ignores `.env` and `.env.*`,
+while allowing a credential-free `.env.example` to be tracked. Docker also
+excludes `.env*`, local `data/`, and database files from the build context.
+Never put real credentials in `.env.example`, Compose, or an image.
+
 ## Development
 
 Go 1.26.5 is required. Run the complete non-mutating quality gate:
@@ -139,7 +156,9 @@ Use `make fmt` to apply formatting. `make verify` checks formatting, runs strict
 linting and race-enabled tests, and builds `bin/alib-fetcher`. Quality targets
 automatically provision and use the pinned golangci-lint under ignored
 `bin/tools`; an unrelated binary earlier in `PATH` cannot affect verification.
-CI uses the same Make targets and additionally runs `govulncheck`.
+CI uses the same Make targets, additionally runs `govulncheck`, and builds the
+production container on pull requests and `master` pushes. Only a successful
+`master` push publishes the image.
 
 ## Security-only dependency updates
 

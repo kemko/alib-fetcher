@@ -123,39 +123,86 @@ func (s *Sender) post(ctx context.Context, method string, payload any, result an
 
 	response, err := s.client.Do(request)
 	if err != nil {
-		if contextErr := ctx.Err(); contextErr != nil {
-			return fmt.Errorf("call Telegram %s: %w", method, contextErr)
-		}
-		return ErrRequest
+		return requestError(ctx, "call Telegram "+method, err)
 	}
 	defer func() {
-		if closeErr := response.Body.Close(); closeErr != nil {
-			postErr = errors.Join(postErr, fmt.Errorf("close Telegram response: %w", closeErr))
+		if closeErr := response.Body.Close(); closeErr != nil && postErr != nil {
+			postErr = errors.Join(postErr, &safeCauseError{message: "close Telegram response", cause: closeErr})
 		}
 	}()
 
-	reader := io.LimitReader(response.Body, maxAPIResponseBytes)
-	var apiResult apiResponse
-	if decodeErr := json.NewDecoder(reader).Decode(&apiResult); decodeErr != nil {
-		return fmt.Errorf("decode Telegram response: %w", decodeErr)
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, maxAPIResponseBytes+1))
+	if err != nil {
+		return requestError(ctx, "read Telegram response", err)
 	}
-	if response.StatusCode != http.StatusOK || !apiResult.OK {
-		if apiResult.Description == "" {
-			apiResult.Description = response.Status
-		}
-		return &rejectedError{
-			description: apiResult.Description,
-			retryAfter:  time.Duration(apiResult.Parameters.RetryAfter) * time.Second,
-		}
+	apiResult, err := parseAPIResponse(response, responseBody)
+	if err != nil {
+		return err
 	}
 	if result == nil || !hasResult(apiResult.Result) {
 		return nil
 	}
-	if decodeErr := json.Unmarshal(apiResult.Result, result); decodeErr != nil {
-		return fmt.Errorf("decode Telegram result: %w", decodeErr)
+	if resultDecodeErr := json.Unmarshal(apiResult.Result, result); resultDecodeErr != nil {
+		return fmt.Errorf("decode Telegram result: %w", resultDecodeErr)
 	}
 
 	return nil
+}
+
+func parseAPIResponse(response *http.Response, body []byte) (apiResponse, error) {
+	if len(body) > maxAPIResponseBytes {
+		if response.StatusCode != http.StatusOK {
+			return apiResponse{}, newRejectedError(response, apiResponse{})
+		}
+
+		return apiResponse{}, fmt.Errorf("decode Telegram response: response exceeds %d bytes", maxAPIResponseBytes)
+	}
+
+	apiResult, decodeErr := decodeAPIResponse(body)
+	if response.StatusCode != http.StatusOK {
+		return apiResponse{}, newRejectedError(response, apiResult)
+	}
+	if decodeErr != nil {
+		return apiResponse{}, decodeErr
+	}
+	if !apiResult.OK {
+		return apiResponse{}, newRejectedError(response, apiResult)
+	}
+
+	return apiResult, nil
+}
+
+func decodeAPIResponse(body []byte) (apiResponse, error) {
+	var result apiResponse
+	if err := json.Unmarshal(body, &result); err != nil {
+		return apiResponse{}, fmt.Errorf("decode Telegram response: %w", err)
+	}
+
+	return result, nil
+}
+
+func newRejectedError(response *http.Response, result apiResponse) error {
+	description := result.Description
+	if description == "" {
+		description = response.Status
+	}
+	if description == "" {
+		description = fmt.Sprintf("HTTP status %d", response.StatusCode)
+	}
+
+	return &rejectedError{
+		description: description,
+		retryAfter:  time.Duration(result.Parameters.RetryAfter) * time.Second,
+	}
+}
+
+func requestError(ctx context.Context, operation string, cause error) error {
+	safeCause := &safeCauseError{message: operation, cause: cause}
+	if contextErr := ctx.Err(); contextErr != nil {
+		return errors.Join(ErrRequest, contextErr, safeCause)
+	}
+
+	return errors.Join(ErrRequest, safeCause)
 }
 
 func hasResult(result json.RawMessage) bool {
@@ -200,6 +247,11 @@ type rejectedError struct {
 	retryAfter  time.Duration
 }
 
+type safeCauseError struct {
+	cause   error
+	message string
+}
+
 func (e *rejectedError) Error() string {
 	return fmt.Sprintf("%s: %s", ErrRejected, e.description)
 }
@@ -210,4 +262,12 @@ func (e *rejectedError) Unwrap() error {
 
 func (e *rejectedError) RetryAfter() time.Duration {
 	return e.retryAfter
+}
+
+func (e *safeCauseError) Error() string {
+	return e.message
+}
+
+func (e *safeCauseError) Is(target error) bool {
+	return errors.Is(e.cause, target)
 }

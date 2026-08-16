@@ -1,7 +1,12 @@
 .git
 .github
+.env*
+.ralphex/
 .codegraph
 .omx
 bin
 coverage.out
+data/
+*.db
+**/*.db
 tnew7.txt
