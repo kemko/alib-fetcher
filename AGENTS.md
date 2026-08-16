@@ -60,9 +60,9 @@ Preserve these semantics:
   neighboring migrations.
 - Structured records using legacy `text_before_seller`, `text_before_buy`, and
   `text_after_buy` fields decode into the semantic `Book` model in memory. A
-  database open must not rewrite them; a later ordinary listing update writes
-  the current schema while preserving delivery state, queue order, and
-  timestamps.
+  database open must not rewrite them; the next mutating write, including
+  rediscovery or successful-delivery acknowledgement, writes the current schema
+  while preserving delivery state, queue order, and timestamps.
 - Service mode runs one cycle immediately after startup by default, then follows
   the cron schedule. `RUN_ON_STARTUP=false` skips the startup cycle. Overlapping
   cron jobs are skipped.
@@ -103,7 +103,9 @@ Preserve these semantics:
   by a title in `<b>` and a `Купить` link; seller links contain `bs.php4`.
   Logical lines are split on `<br>` and become semantic bibliography,
   publication year, content, seller, location, price, condition, purchase URL,
-  and photo fields without regex-based HTML parsing.
+  and photo fields without regex-based HTML parsing. Publication year is the
+  last four-digit year in the bibliography followed by `г` or `г.`; content
+  years are ignored.
 - `internal/app`: use-case orchestration through small `Fetcher`, `State`, and
   `Sender` interfaces. Keep policy here and transport/storage details in their
   adapter packages.
@@ -162,7 +164,9 @@ or absent `FRESH_BOOKS` disables `✨`, not `🔥`. The cycle time in `TIMEZONE`
 controls classification: the current year gets `🔥`; in January, the previous
 year also gets `🔥` regardless of the optional threshold. Other recognized
 years from the threshold through the current year get `✨`. Future and
-unrecognized years get neither marker.
+unrecognized years get neither marker. The recognized year is the last
+four-digit year in the bibliography followed by `г` or `г.`; years elsewhere in
+the listing do not participate.
 
 ## Digest and transport details
 
@@ -170,12 +174,12 @@ Messages start with `<b>Новые книги на Alib.ru</b>`. Each listing re
 order: emoji plus bold title and bibliography; optional content as a separate
 paragraph; seller, price, condition/other details, and photo status on separate
 lines; then a final `Купить` link in its own paragraph. The seller format is
-`Продавец: <a href="...">Name</a>, Location.`. Missing optional fields must not
-create extra empty paragraphs. The source `Смотрите` section is omitted and
-replaced with `Фото: есть` or `Фото: нет`. All dynamic text and URLs must be
-HTML-escaped. Limits are counted in Unicode runes, and chunks may split only
-between listings. A single listing that cannot fit returns
-`digest.ErrMessageTooLong`.
+`Продавец: <a href="...">Name</a>, Location.`; without seller URL, the name is
+plain text. Missing optional fields must not create extra empty paragraphs. The
+source `Смотрите` section is omitted and replaced with `Фото: есть` or
+`Фото: нет`. All dynamic text and URLs must be HTML-escaped. Limits are counted
+in Unicode runes, and chunks may split only between listings. A single listing
+that cannot fit returns `digest.ErrMessageTooLong`.
 
 The Alib client accepts only HTTP(S), sends `User-Agent: alib-fetcher/1.0`, and
 requires HTTP 200. The Telegram sender accepts only HTTP(S), caps response

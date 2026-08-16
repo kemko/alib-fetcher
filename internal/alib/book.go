@@ -8,22 +8,17 @@ import (
 
 // Book is one sale listing from Alib.ru.
 type Book struct {
-	Title        string `json:"title"`
-	Bibliography string `json:"bibliography,omitempty"`
-	Content      string `json:"content,omitempty"`
-	Seller       string `json:"seller"`
-	SellerURL    string `json:"seller_url"`
-	Location     string `json:"location,omitempty"`
-	Price        string `json:"price,omitempty"`
-	Condition    string `json:"condition,omitempty"`
-	BuyURL       string `json:"buy_url"`
-
-	// Deprecated fragment fields exist only while decoded legacy records remain in memory.
-	TextBeforeSeller string `json:"-"`
-	TextBeforeBuy    string `json:"-"`
-	TextAfterBuy     string `json:"-"`
-	PublicationYear  int    `json:"publication_year,omitempty"`
-	HasPhotos        bool   `json:"has_photos"`
+	Title           string `json:"title"`
+	Bibliography    string `json:"bibliography,omitempty"`
+	Content         string `json:"content,omitempty"`
+	Seller          string `json:"seller"`
+	SellerURL       string `json:"seller_url"`
+	Location        string `json:"location,omitempty"`
+	Price           string `json:"price,omitempty"`
+	Condition       string `json:"condition,omitempty"`
+	BuyURL          string `json:"buy_url"`
+	PublicationYear int    `json:"publication_year,omitempty"`
+	HasPhotos       bool   `json:"has_photos"`
 }
 
 type legacyBookJSON struct {
@@ -36,36 +31,35 @@ type legacyBookJSON struct {
 func (b *Book) UnmarshalJSON(data []byte) error {
 	type semanticBookJSON Book
 
-	var semantic semanticBookJSON
-	if err := json.Unmarshal(data, &semantic); err != nil {
+	decoded := struct {
+		legacyBookJSON
+		semanticBookJSON
+	}{}
+	if err := json.Unmarshal(data, &decoded); err != nil {
 		return err
 	}
 
-	var legacy legacyBookJSON
-	if err := json.Unmarshal(data, &legacy); err != nil {
-		return err
-	}
-
-	*b = Book(semantic)
-	if legacy.TextBeforeSeller == nil && legacy.TextBeforeBuy == nil && legacy.TextAfterBuy == nil {
+	*b = Book(decoded.semanticBookJSON)
+	if decoded.TextBeforeSeller == nil && decoded.TextBeforeBuy == nil && decoded.TextAfterBuy == nil {
 		return nil
 	}
 
-	b.TextBeforeSeller = legacyString(legacy.TextBeforeSeller)
-	b.TextBeforeBuy = legacyString(legacy.TextBeforeBuy)
-	b.TextAfterBuy = legacyString(legacy.TextAfterBuy)
-	b.convertLegacyFragments()
+	b.convertLegacyFragments(
+		legacyString(decoded.TextBeforeSeller),
+		legacyString(decoded.TextBeforeBuy),
+		legacyString(decoded.TextAfterBuy),
+	)
 
 	return nil
 }
 
-func (b *Book) convertLegacyFragments() {
+func (b *Book) convertLegacyFragments(textBeforeSeller, textBeforeBuy, textAfterBuy string) {
 	hasSeller := b.Seller != "" || b.SellerURL != ""
-	b.Bibliography = legacyBibliography(b.TextBeforeSeller, hasSeller)
+	b.Bibliography = legacyBibliography(textBeforeSeller, hasSeller)
 	b.PublicationYear = parsePublicationYear(b.Bibliography)
 	b.Seller = strings.TrimPrefix(b.Seller, sellerPrefix)
-	b.Location, b.Price = legacySaleDetails(b.TextBeforeSeller, b.TextBeforeBuy, hasSeller)
-	b.Content, b.Condition = legacyDescription(b.TextAfterBuy)
+	b.Location, b.Price = legacySaleDetails(textBeforeSeller, textBeforeBuy, hasSeller)
+	b.Content, b.Condition = legacyDescription(textAfterBuy)
 }
 
 func legacyString(value *string) string {
@@ -81,6 +75,19 @@ func legacyBibliography(text string, hasSeller bool) string {
 		beforePrice, _, _ := strings.Cut(text, priceLabel)
 
 		return strings.TrimSpace(beforePrice)
+	}
+
+	return trimSellerPreamble(text)
+}
+
+func trimSellerPreamble(text string) string {
+	const sellerWord = "продавца"
+
+	sellerWordStart := strings.LastIndex(text, sellerWord)
+	if sellerWordStart >= 0 {
+		if preambleStart := strings.LastIndex(text[:sellerWordStart], "("); preambleStart >= 0 {
+			return strings.TrimSpace(text[:preambleStart])
+		}
 	}
 
 	lastLineBreak := strings.LastIndex(text, "\n")

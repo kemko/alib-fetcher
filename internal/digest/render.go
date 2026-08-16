@@ -30,14 +30,8 @@ type Chunk struct {
 	Books []alib.Book
 }
 
-// Render formats books without freshness highlighting and splits only between listings.
-// It remains as a limit-only compatibility entrypoint until callers supply cycle options.
-func Render(books []alib.Book, limit int) ([]Chunk, error) {
-	return RenderWithOptions(books, Options{Limit: limit})
-}
-
-// RenderWithOptions formats books as Telegram HTML and splits only between listings.
-func RenderWithOptions(books []alib.Book, options Options) ([]Chunk, error) {
+// Render formats books as Telegram HTML and splits only between listings.
+func Render(books []alib.Book, options Options) ([]Chunk, error) {
 	if len(books) == 0 {
 		return nil, nil
 	}

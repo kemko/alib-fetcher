@@ -89,9 +89,20 @@ func parseBook(node *html.Node, baseURL *url.URL) (Book, bool) {
 	}
 
 	sellerPosition, sellerFound := findNode(lines, sellerNode)
+	if !positionBefore(titlePosition, buyPosition) || sellerFound &&
+		(!positionBefore(titlePosition, sellerPosition) || !positionBefore(sellerPosition, buyPosition)) {
+		return Book{}, false
+	}
 	bibliography := parseBibliography(lines, titlePosition, buyPosition, sellerPosition, sellerFound)
 	content, condition := parseDescription(lines, buyPosition)
-	seller, sellerURL, location := parseSeller(lines, sellerNode, sellerPosition, sellerFound, baseURL)
+	seller, sellerURL, location := parseSeller(
+		lines,
+		sellerNode,
+		sellerPosition,
+		buyPosition,
+		sellerFound,
+		baseURL,
+	)
 
 	return Book{
 		Title:           normalizedText(titleNode),
@@ -178,6 +189,10 @@ func findNode(lines [][]listingPart, node *html.Node) (listingPosition, bool) {
 	return listingPosition{}, false
 }
 
+func positionBefore(left, right listingPosition) bool {
+	return left.line < right.line || left.line == right.line && left.part < right.part
+}
+
 func parseBibliography(
 	lines [][]listingPart,
 	titlePosition, buyPosition, sellerPosition listingPosition,
@@ -197,7 +212,7 @@ func parseBibliography(
 		end := len(lines[lineIndex])
 		if lineIndex == saleLine {
 			if sellerFound && sellerPosition.line == saleLine {
-				end = start
+				end = sellerPosition.part
 			} else {
 				end = buyPosition.part
 			}
@@ -207,6 +222,9 @@ func parseBibliography(
 		}
 
 		line := normalizedParts(lines[lineIndex][start:end])
+		if sellerFound && lineIndex == sellerPosition.line {
+			line = trimSellerPreamble(line)
+		}
 		if lineIndex == saleLine {
 			line, _, _ = strings.Cut(line, priceLabel)
 		}
@@ -221,7 +239,7 @@ func parseBibliography(
 func parseSeller(
 	lines [][]listingPart,
 	sellerNode *html.Node,
-	sellerPosition listingPosition,
+	sellerPosition, buyPosition listingPosition,
 	sellerFound bool,
 	baseURL *url.URL,
 ) (string, string, string) {
@@ -230,7 +248,11 @@ func parseSeller(
 	}
 
 	line := lines[sellerPosition.line]
-	location := normalizedParts(line[sellerPosition.part+1:])
+	locationEnd := len(line)
+	if sellerPosition.line == buyPosition.line {
+		locationEnd = buyPosition.part
+	}
+	location := normalizedParts(line[sellerPosition.part+1 : locationEnd])
 	if beforePrice, _, found := strings.Cut(location, priceLabel); found {
 		location = beforePrice
 	}

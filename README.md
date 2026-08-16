@@ -41,6 +41,10 @@ current year and whether the January exception applies:
 The January `🔥` rule applies even when `FRESH_BOOKS` is empty or its configured
 boundary excludes the previous year.
 
+The parser recognizes the last four-digit year in the bibliography followed by
+`г` or `г.`. Years found only in content or other listing sections do not affect
+freshness markers.
+
 Each digest first records every fetched listing in the state database as a
 pending record with the full semantic Alib payload: title, bibliography,
 publication year, content, seller name and URL, location, price, condition and
@@ -62,12 +66,14 @@ Each Telegram listing is structured as:
 
 1. freshness marker, bold title, and bibliography;
 2. content in its own paragraph, when present;
-3. seller, price, condition/other details, and photo status on separate lines;
+3. seller as `Продавец: <a href="...">Name</a>, Location.`, then price,
+   condition/other details, and photo status on separate lines;
 4. a final `Купить` link in its own paragraph.
 
 The source photo-link section is replaced with `Фото: есть` or `Фото: нет`.
-Missing optional fields do not create empty paragraphs. Dynamic text and URLs
-are HTML-escaped. When a digest is split into multiple messages, only the final
+When seller URL is absent, seller name is rendered as plain text. Missing
+optional fields do not create empty paragraphs. Dynamic text and URLs are
+HTML-escaped. When a digest is split into multiple messages, only the final
 message uses the normal notification sound; earlier messages are silent.
 Whenever a digest sends at least one message, the final message includes an
 inline `Обновить` button.
@@ -128,15 +134,15 @@ state entries are migrated to JSON records. Structured records from releases
 that stored `text_before_seller`, `text_before_buy`, and `text_after_buy` remain
 readable: a narrow JSON compatibility decoder converts those fragments to the
 semantic `Book` model in memory. Opening the database does not rewrite valid
-legacy structured records; a later ordinary listing update writes the current
-schema. Values that look like structured JSON records must decode successfully,
-and their stored purchase URL must match the bbolt key. A malformed or
-mismatched structured record makes state opening fail transactionally: it is
-not treated as a legacy marker, and no neighboring migration is committed. Back
-up `STATE_PATH` before upgrading. If validation fails, stop the service and
-restore a known-good backup; recreate the database only when resetting delivery
-history is acceptable. Rolling back to an older release also requires restoring
-or recreating the state database.
+legacy structured records. The next mutating write, including rediscovery or a
+successful-delivery acknowledgement, writes the current schema. Values that look
+like structured JSON records must decode successfully, and their stored purchase
+URL must match the bbolt key. A malformed or mismatched structured record makes
+state opening fail transactionally: it is not treated as a legacy marker, and no
+neighboring migration is committed. Back up `STATE_PATH` before upgrading. If
+validation fails, stop the service and restore a known-good backup; recreate the
+database only when resetting delivery history is acceptable. Rolling back to an
+older release also requires restoring or recreating the state database.
 
 ## Container
 

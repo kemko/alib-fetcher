@@ -81,11 +81,12 @@ func Test_Service_renders_freshness_using_cycle_time_in_configured_timezone(t *t
 	moscow, err := time.LoadLocation("Europe/Moscow")
 	require.NoError(t, err)
 	testCases := map[string]struct {
-		policy    app.FreshBooksPolicy
-		location  *time.Location
-		cycleTime time.Time
-		emoji     string
-		bookYear  int
+		policy     app.FreshBooksPolicy
+		location   *time.Location
+		cycleTime  time.Time
+		emoji      string
+		bookYear   int
+		policyYear int
 	}{
 		"disabled threshold": {
 			cycleTime: time.Date(2026, time.August, 5, 12, 0, 0, 0, time.UTC),
@@ -100,11 +101,11 @@ func Test_Service_renders_freshness_using_cycle_time_in_configured_timezone(t *t
 			emoji:     "✨ ",
 		},
 		"January boundary in configured timezone": {
-			cycleTime: time.Date(2025, time.December, 31, 21, 30, 0, 0, time.UTC),
-			location:  moscow,
-			bookYear:  2025,
-			policy:    fixedFreshBooksPolicy(2026),
-			emoji:     "🔥 ",
+			cycleTime:  time.Date(2025, time.December, 31, 21, 30, 0, 0, time.UTC),
+			location:   moscow,
+			bookYear:   2026,
+			policyYear: 2026,
+			emoji:      "🔥 ",
 		},
 	}
 
@@ -118,12 +119,21 @@ func Test_Service_renders_freshness_using_cycle_time_in_configured_timezone(t *t
 				PublicationYear: testCase.bookYear,
 				BuyURL:          "https://example.com/book",
 			}
+			observedPolicyYear := 0
+			policy := testCase.policy
+			if testCase.policyYear != 0 {
+				policy = freshBooksPolicyFunc(func(currentYear int) int {
+					observedPolicyYear = currentYear
+
+					return currentYear
+				})
+			}
 			sender := &fakeSender{}
 			service := app.NewService(app.Dependencies{
 				Fetcher:      fakeFetcher{books: []alib.Book{book}},
 				State:        &fakeState{pending: []alib.Book{book}, recordedNew: 1},
 				Sender:       sender,
-				FreshBooks:   testCase.policy,
+				FreshBooks:   policy,
 				Location:     testCase.location,
 				MessageLimit: 4096,
 				Now:          func() time.Time { return testCase.cycleTime },
@@ -137,6 +147,9 @@ func Test_Service_renders_freshness_using_cycle_time_in_configured_timezone(t *t
 			require.Equal(t, app.Result{Fetched: 1, New: 1, Sent: 1}, result)
 			require.Len(t, sender.messages, 1)
 			require.Contains(t, sender.messages[0], testCase.emoji+"<b>Книга</b>")
+			if testCase.policyYear != 0 {
+				require.Equal(t, testCase.policyYear, observedPolicyYear)
+			}
 		})
 	}
 }
@@ -715,6 +728,12 @@ type fixedFreshBooksPolicy int
 
 func (policy fixedFreshBooksPolicy) LowerYear(int) int {
 	return int(policy)
+}
+
+type freshBooksPolicyFunc func(int) int
+
+func (policy freshBooksPolicyFunc) LowerYear(currentYear int) int {
+	return policy(currentYear)
 }
 
 func (e retryAfterError) Error() string {

@@ -314,7 +314,7 @@ func Test_Open_leaves_valid_json_records_unchanged(t *testing.T) {
 	require.JSONEq(t, record, string(readRawRecord(t, path, buyURL)))
 }
 
-func Test_Store_loads_legacy_pending_record_and_rewrites_it_only_on_ordinary_write(t *testing.T) {
+func Test_Store_loads_legacy_pending_record_and_rewrites_it_only_on_mutating_write(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -367,16 +367,9 @@ func Test_Store_loads_legacy_pending_record_and_rewrites_it_only_on_ordinary_wri
 		Condition:       "Состояние: Legacy condition",
 		BuyURL:          buyURL,
 		HasPhotos:       true,
-		TextBeforeSeller: "Legacy bibliography, 2025 г.\n" +
-			"(Условия продажи продавца",
-		TextBeforeBuy: ", Moscow.) Цена: 250 rub.",
-		TextAfterBuy:  "\nLegacy content\nСостояние: Legacy condition",
 	}
 	require.Equal(t, []alib.Book{expectedPending}, pending)
 	require.Equal(t, []byte(legacyRecord), rawAfterOpen)
-	expectedPending.TextBeforeSeller = ""
-	expectedPending.TextBeforeBuy = ""
-	expectedPending.TextAfterBuy = ""
 	require.Equal(t, expectedPending, rewritten.Book)
 	require.Equal(t, observedAt.UnixNano(), rewritten.ObservedAt)
 	require.Equal(t, uint64(27), rewritten.QueueOrder)

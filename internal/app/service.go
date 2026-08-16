@@ -149,7 +149,7 @@ func renderSendable(books []alib.Book, options digest.Options) ([]digest.Chunk, 
 	renderable := make([]alib.Book, 0, len(books))
 	skippedBuyURLs := make([]string, 0)
 	for _, book := range books {
-		if _, err := digest.RenderWithOptions([]alib.Book{book}, options); err != nil {
+		if _, err := digest.Render([]alib.Book{book}, options); err != nil {
 			if errors.Is(err, digest.ErrMessageTooLong) {
 				skippedBuyURLs = append(skippedBuyURLs, book.BuyURL)
 				continue
@@ -159,7 +159,7 @@ func renderSendable(books []alib.Book, options digest.Options) ([]digest.Chunk, 
 		renderable = append(renderable, book)
 	}
 
-	chunks, err := digest.RenderWithOptions(renderable, options)
+	chunks, err := digest.Render(renderable, options)
 	if err != nil {
 		return nil, nil, err
 	}

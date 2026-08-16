@@ -173,8 +173,8 @@ Telegram-сообщение получит маркеры `🔥`/`✨`, отде
 - [x] При отсутствии содержания отделять основную строку пустой строкой непосредственно
   от seller/price/details блока.
 - [x] Не создавать лишние пустые абзацы при отсутствии необязательных полей.
-- [x] Сохранить HTML escaping текста и URL, полный source text, rune-based limits и
-  разбиение только между книгами.
+- [x] Сохранить HTML escaping текста и URL, parsed content и condition/details text,
+  rune-based limits и разбиение только между книгами.
 - [x] Обновить chunking и `ErrMessageTooLong` тесты с учётом emoji и новых переносов.
 - [x] Выполнить `make test`; все тесты должны пройти до Task 5.
 

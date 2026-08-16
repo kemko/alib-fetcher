@@ -60,11 +60,35 @@ func Test_Book_unmarshals_legacy_fragments_into_semantic_fields(t *testing.T) {
 	// Then
 	require.NoError(t, err)
 	expected := semanticBook("https://www.alib.ru/book.html")
-	expected.TextBeforeSeller = "Научно-фантастический роман. М., 2026г.\n" +
-		"(До заказа внимательно прочтите условия продажи продавца"
-	expected.TextBeforeBuy = ", Москва.) Цена: 3 900 руб."
-	expected.TextAfterBuy = "\nВторая книга романа Каллисто.\nСостояние: Отличное.\nКомплект полный."
 	require.Equal(t, expected, book)
+}
+
+func Test_Book_unmarshals_legacy_bibliography_with_same_line_seller_preamble(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	legacy := []byte(`{
+		"title": "Книга.",
+		"text_before_seller": "М., 2026 г. (До заказа внимательно прочтите условия продажи продавца",
+		"seller": "BS - Seller",
+		"seller_url": "https://www.alib.ru/bs.php4?bs=Seller",
+		"text_before_buy": ", Москва.) Цена: 100 руб.",
+		"buy_url": "https://www.alib.ru/book.html",
+		"text_after_buy": "",
+		"has_photos": false
+	}`)
+
+	// When
+	var book alib.Book
+	err := json.Unmarshal(legacy, &book)
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, "М., 2026 г.", book.Bibliography)
+	require.Equal(t, 2026, book.PublicationYear)
+	require.Equal(t, "Seller", book.Seller)
+	require.Equal(t, "Москва", book.Location)
+	require.Equal(t, "100 руб.", book.Price)
 }
 
 func Test_Book_unmarshals_legacy_listing_without_seller(t *testing.T) {

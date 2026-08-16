@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func Test_RenderWithOptions_formats_structured_listing_and_escapes_HTML(t *testing.T) {
+func Test_Render_formats_structured_listing_and_escapes_HTML(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -36,7 +36,7 @@ func Test_RenderWithOptions_formats_structured_listing_and_escapes_HTML(t *testi
 	}
 
 	// When
-	chunks, err := digest.RenderWithOptions([]alib.Book{book}, options)
+	chunks, err := digest.Render([]alib.Book{book}, options)
 
 	// Then
 	require.NoError(t, err)
@@ -59,7 +59,7 @@ func Test_RenderWithOptions_formats_structured_listing_and_escapes_HTML(t *testi
 	}}, chunks)
 }
 
-func Test_RenderWithOptions_highlights_publication_year(t *testing.T) {
+func Test_Render_highlights_publication_year(t *testing.T) {
 	t.Parallel()
 
 	currentYear := 2026
@@ -156,7 +156,7 @@ func Test_RenderWithOptions_highlights_publication_year(t *testing.T) {
 			}
 
 			// When
-			chunks, err := digest.RenderWithOptions([]alib.Book{book}, digest.Options{
+			chunks, err := digest.Render([]alib.Book{book}, digest.Options{
 				Limit:               4096,
 				LocalTime:           test.localTime,
 				FreshBooksLowerYear: optionalYear(test.freshness, test.lowerYear),
@@ -184,7 +184,7 @@ func optionalYear(enabled bool, year int) *int {
 	return &year
 }
 
-func Test_RenderWithOptions_omits_optional_fields_without_extra_paragraphs(t *testing.T) {
+func Test_Render_omits_optional_fields_without_extra_paragraphs(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -198,7 +198,7 @@ func Test_RenderWithOptions_omits_optional_fields_without_extra_paragraphs(t *te
 	}
 
 	// When
-	chunks, err := digest.RenderWithOptions([]alib.Book{book}, digest.Options{Limit: 4096})
+	chunks, err := digest.Render([]alib.Book{book}, digest.Options{Limit: 4096})
 
 	// Then
 	require.NoError(t, err)
@@ -215,7 +215,7 @@ func Test_RenderWithOptions_omits_optional_fields_without_extra_paragraphs(t *te
 	require.NotContains(t, chunks[0].Text, "\n\n\n")
 }
 
-func Test_RenderWithOptions_splits_only_between_complete_listings(t *testing.T) {
+func Test_Render_splits_only_between_complete_listings(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -241,7 +241,7 @@ func Test_RenderWithOptions_splits_only_between_complete_listings(t *testing.T) 
 	messageLimit := len([]rune(firstMessage))
 
 	// When
-	chunks, err := digest.RenderWithOptions(books, digest.Options{Limit: messageLimit, LocalTime: localTime})
+	chunks, err := digest.Render(books, digest.Options{Limit: messageLimit, LocalTime: localTime})
 
 	// Then
 	require.NoError(t, err)
@@ -254,7 +254,7 @@ func Test_RenderWithOptions_splits_only_between_complete_listings(t *testing.T) 
 	}
 }
 
-func Test_RenderWithOptions_rejects_listing_over_rune_limit(t *testing.T) {
+func Test_Render_rejects_listing_over_rune_limit(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -264,7 +264,7 @@ func Test_RenderWithOptions_rejects_listing_over_rune_limit(t *testing.T) {
 	}
 
 	// When
-	chunks, err := digest.RenderWithOptions([]alib.Book{book}, digest.Options{Limit: 64})
+	chunks, err := digest.Render([]alib.Book{book}, digest.Options{Limit: 64})
 
 	// Then
 	require.ErrorIs(t, err, digest.ErrMessageTooLong)
@@ -272,11 +272,11 @@ func Test_RenderWithOptions_rejects_listing_over_rune_limit(t *testing.T) {
 	require.Empty(t, chunks)
 }
 
-func Test_RenderWithOptions_returns_no_chunks_for_no_books(t *testing.T) {
+func Test_Render_returns_no_chunks_for_no_books(t *testing.T) {
 	t.Parallel()
 
 	// When
-	chunks, err := digest.RenderWithOptions(nil, digest.Options{Limit: 4096})
+	chunks, err := digest.Render(nil, digest.Options{Limit: 4096})
 
 	// Then
 	require.NoError(t, err)

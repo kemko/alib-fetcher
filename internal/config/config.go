@@ -101,13 +101,13 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("%w: RUN_ON_STARTUP must be a boolean", ErrInvalid)
 	}
-	freshBooksPolicy, freshBooksEnabled, err := parseFreshBooks(os.Getenv("FRESH_BOOKS"))
-	if err != nil {
-		return Config{}, fmt.Errorf("%w: FRESH_BOOKS %w", ErrInvalid, err)
-	}
 	var freshBooks *FreshBooksPolicy
-	if freshBooksEnabled {
-		freshBooks = &freshBooksPolicy
+	if value := os.Getenv("FRESH_BOOKS"); value != "" {
+		policy, parseErr := parseFreshBooks(value)
+		if parseErr != nil {
+			return Config{}, fmt.Errorf("%w: FRESH_BOOKS %w", ErrInvalid, parseErr)
+		}
+		freshBooks = &policy
 	}
 
 	return Config{
@@ -125,32 +125,28 @@ func Load() (Config, error) {
 	}, nil
 }
 
-func parseFreshBooks(value string) (FreshBooksPolicy, bool, error) {
-	if value == "" {
-		return FreshBooksPolicy{}, false, nil
-	}
-
+func parseFreshBooks(value string) (FreshBooksPolicy, error) {
 	mode, argument, found := strings.Cut(value, ":")
 	if !found || !containsOnlyDigits(argument) {
-		return FreshBooksPolicy{}, false, errInvalidFreshBooks
+		return FreshBooksPolicy{}, errInvalidFreshBooks
 	}
 
 	parsed, err := strconv.Atoi(argument)
 	if err != nil {
-		return FreshBooksPolicy{}, false, errInvalidFreshBooks
+		return FreshBooksPolicy{}, errInvalidFreshBooks
 	}
 
 	switch mode {
 	case "age":
-		return FreshBooksPolicy{mode: freshBooksAge, value: parsed}, true, nil
+		return FreshBooksPolicy{mode: freshBooksAge, value: parsed}, nil
 	case "since":
 		if len(argument) != 4 || parsed < 1000 {
-			return FreshBooksPolicy{}, false, errInvalidFreshBooks
+			return FreshBooksPolicy{}, errInvalidFreshBooks
 		}
 
-		return FreshBooksPolicy{mode: freshBooksSince, value: parsed}, true, nil
+		return FreshBooksPolicy{mode: freshBooksSince, value: parsed}, nil
 	default:
-		return FreshBooksPolicy{}, false, errInvalidFreshBooks
+		return FreshBooksPolicy{}, errInvalidFreshBooks
 	}
 }
 

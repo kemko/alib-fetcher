@@ -101,6 +101,80 @@ func Test_Parse_does_not_extract_year_outside_bibliography(t *testing.T) {
 	require.Zero(t, books[0].PublicationYear)
 }
 
+func Test_Parse_extracts_bibliography_when_seller_is_on_title_line(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	page := `<p><b>Книга.</b> М., 2026 г. (До заказа внимательно прочтите условия продажи продавца
+<a href="/bs.php4?bs=Seller">BS - Seller</a>, Москва.) Цена: 100 руб.
+<a href="/book.html"><b>Купить</b></a></p>`
+	baseURL, err := url.Parse("https://www.alib.ru/tramka.phtml?tnew=7")
+	require.NoError(t, err)
+
+	// When
+	books, err := alib.Parse(bytes.NewBufferString(page), baseURL, "text/html")
+
+	// Then
+	require.NoError(t, err)
+	require.Len(t, books, 1)
+	require.Equal(t, "М., 2026 г.", books[0].Bibliography)
+	require.Equal(t, 2026, books[0].PublicationYear)
+	require.Equal(t, "Seller", books[0].Seller)
+	require.Equal(t, "Москва", books[0].Location)
+	require.Equal(t, "100 руб.", books[0].Price)
+}
+
+func Test_Parse_does_not_include_buy_link_in_location_when_price_is_missing(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	page := `<p><b>Книга.</b> М., 2026 г.<br>
+(До заказа внимательно прочтите условия продажи продавца
+<a href="/bs.php4?bs=Seller">BS - Seller</a>, Москва.)
+<a href="/book.html"><b>Купить</b></a></p>`
+	baseURL, err := url.Parse("https://www.alib.ru/tramka.phtml?tnew=7")
+	require.NoError(t, err)
+
+	// When
+	books, err := alib.Parse(bytes.NewBufferString(page), baseURL, "text/html")
+
+	// Then
+	require.NoError(t, err)
+	require.Len(t, books, 1)
+	require.Equal(t, "Москва", books[0].Location)
+	require.Empty(t, books[0].Price)
+}
+
+func Test_Parse_skips_listings_with_sale_nodes_before_title(t *testing.T) {
+	t.Parallel()
+
+	malformedListings := map[string]string{
+		"seller before title": `<p><a href="/bs.php4?bs=Seller">BS - Seller</a><br>
+<b>Malformed.</b> М., 2026 г. <a href="/malformed.html"><b>Купить</b></a></p>`,
+		"buy before title": `<p><a href="/malformed.html"><b>Купить</b></a><br>
+<b>Malformed.</b> М., 2026 г.</p>`,
+	}
+	for name, malformed := range malformedListings {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			// Given
+			page := malformed + `<p><b>Valid.</b> М., 2025 г.
+<a href="/valid.html"><b>Купить</b></a></p>`
+			baseURL, err := url.Parse("https://www.alib.ru/tramka.phtml?tnew=7")
+			require.NoError(t, err)
+
+			// When
+			books, err := alib.Parse(bytes.NewBufferString(page), baseURL, "text/html")
+
+			// Then
+			require.NoError(t, err)
+			require.Len(t, books, 1)
+			require.Equal(t, "Valid.", books[0].Title)
+		})
+	}
+}
+
 func Test_Parse_rejects_page_without_books(t *testing.T) {
 	t.Parallel()
 
