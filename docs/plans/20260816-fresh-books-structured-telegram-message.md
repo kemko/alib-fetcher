@@ -208,16 +208,16 @@ Telegram-сообщение получит маркеры `🔥`/`✨`, отде
 
 - Modify: `Makefile`
 
-- [ ] Добавить canonical `make coverage` target, создающий `coverage.out` и проверяющий порог не ниже 80%.
-- [ ] Добавить или обновить недостающие автоматические тесты для выявленных граничных случаев.
-- [ ] Выполнить `make fmt`, затем убедиться, что повторный format check не находит изменений.
-- [ ] Выполнить полный `make verify`: `fmt-check`, strict lint, race/shuffle/no-cache tests и build должны пройти.
-- [ ] Выполнить `make coverage`; покрытие должно быть не ниже 80%.
-- [ ] Выполнить `docker compose config --quiet` с фиктивными обязательными Telegram variables.
-- [ ] Автоматическими тестами подтвердить отключённый порог, оба режима `FRESH_BOOKS`,
+- [x] Добавить canonical `make coverage` target, создающий `coverage.out` и проверяющий порог не ниже 80%.
+- [x] Добавить или обновить недостающие автоматические тесты для выявленных граничных случаев.
+- [x] Выполнить `make fmt`, затем убедиться, что повторный format check не находит изменений.
+- [x] Выполнить полный `make verify`: `fmt-check`, strict lint, race/shuffle/no-cache tests и build должны пройти.
+- [x] Выполнить `make coverage`; покрытие должно быть не ниже 80%.
+- [x] Выполнить `docker compose config --quiet` с фиктивными обязательными Telegram variables.
+- [x] Автоматическими тестами подтвердить отключённый порог, оба режима `FRESH_BOOKS`,
   январское исключение, DOM parsing, порядок абзацев, seller link, положение `Купить`,
   HTML escaping и message limits.
-- [ ] Проверить diff: regex не используется для HTML; `tnew7.txt`, credentials, DB и binaries не добавлены.
+- [x] Проверить diff: regex не используется для HTML; `tnew7.txt`, credentials, DB и binaries не добавлены.
 
 ### Task 7: Update documentation
 
