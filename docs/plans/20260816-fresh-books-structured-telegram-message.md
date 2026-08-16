@@ -131,17 +131,17 @@ Telegram-сообщение получит маркеры `🔥`/`✨`, отде
 - Modify: `internal/store/store_test.go`
 - Modify only if required by tests: `internal/store/store.go`
 
-- [ ] Зафиксировать тестом новую JSON-схему семантического `Book`.
-- [ ] Добавить тест декодирования старой записи с `text_before_seller`, `text_before_buy` и `text_after_buy`.
-- [ ] Преобразовывать старую форму в новую модель через custom JSON unmarshal и узкие
+- [x] Зафиксировать тестом новую JSON-схему семантического `Book`.
+- [x] Добавить тест декодирования старой записи с `text_before_seller`, `text_before_buy` и `text_after_buy`.
+- [x] Преобразовывать старую форму в новую модель через custom JSON unmarshal и узкие
   `strings`-операции; regex и повторный разбор HTML не использовать.
-- [ ] Не переписывать валидные записи при `store.Open`; переводить их в новую схему только
+- [x] Не переписывать валидные записи при `store.Open`; переводить их в новую схему только
   при последующей обычной записи.
-- [ ] Проверить сохранение title, bibliography, content, seller/location, price, condition,
+- [x] Проверить сохранение title, bibliography, content, seller/location, price, condition,
   photo flag и `BuyURL`.
-- [ ] Сохранить транзакционную проверку JSON, совпадение `Book.BuyURL` с bbolt key и marker-only migration.
-- [ ] Проверить, что sent status, queue order и timestamps не теряются.
-- [ ] Выполнить `make test`; все тесты должны пройти до Task 4.
+- [x] Сохранить транзакционную проверку JSON, совпадение `Book.BuyURL` с bbolt key и marker-only migration.
+- [x] Проверить, что sent status, queue order и timestamps не теряются.
+- [x] Выполнить `make test`; все тесты должны пройти до Task 4.
 
 ### Task 4: Реализовать emoji и новый формат объявления
 
