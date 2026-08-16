@@ -101,6 +101,28 @@ func Test_Parse_does_not_extract_year_outside_bibliography(t *testing.T) {
 	require.Zero(t, books[0].PublicationYear)
 }
 
+func Test_Parse_excludes_anchor_only_photo_section(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	page := `<p><b>Книга.</b> М., 2026 г.<br>
+Цена: 100 руб. <a href="/book.html"><b>Купить</b></a><br>
+Описание.<br>Состояние: Хорошее.<br>
+<a href="/foto.php4?id=1">фото</a><br>Текст после фото.</p>`
+	baseURL, err := url.Parse("https://www.alib.ru/tramka.phtml?tnew=7")
+	require.NoError(t, err)
+
+	// When
+	books, err := alib.Parse(bytes.NewBufferString(page), baseURL, "text/html")
+
+	// Then
+	require.NoError(t, err)
+	require.Len(t, books, 1)
+	require.Equal(t, "Описание.", books[0].Content)
+	require.Equal(t, "Состояние: Хорошее.", books[0].Condition)
+	require.True(t, books[0].HasPhotos)
+}
+
 func Test_Parse_extracts_bibliography_when_seller_is_on_title_line(t *testing.T) {
 	t.Parallel()
 

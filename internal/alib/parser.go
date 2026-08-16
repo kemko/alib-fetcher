@@ -284,38 +284,71 @@ func parseDescription(lines [][]listingPart, buyPosition listingPosition) (strin
 		if lineIndex == buyPosition.line {
 			start = buyPosition.part + 1
 		}
-		line := normalizedParts(lines[lineIndex][start:])
-		if beforePhotos, _, found := strings.Cut(line, photoLabel); found {
-			line = beforePhotos
-			if strings.TrimSpace(line) == "" {
+		line, photoSectionFound := parseDescriptionLine(lines[lineIndex][start:])
+		if line == "" {
+			if photoSectionFound {
 				break
 			}
-		}
-		line = strings.TrimSpace(line)
-		if line == "" {
 			continue
 		}
 
-		if !conditionFound {
-			beforeCondition, afterLabel, found := strings.Cut(line, conditionLabel)
-			if !found {
-				contentLines = append(contentLines, line)
-				continue
+		if conditionFound {
+			conditionLines = append(conditionLines, line)
+			if photoSectionFound {
+				break
 			}
-			if beforeCondition = strings.TrimSpace(beforeCondition); beforeCondition != "" {
-				contentLines = append(contentLines, beforeCondition)
-			}
-			line = conditionLabel
-			if afterLabel = strings.TrimSpace(afterLabel); afterLabel != "" {
-				line += " " + afterLabel
-			}
-			conditionFound = true
+			continue
 		}
 
-		conditionLines = append(conditionLines, line)
+		beforeCondition, parsedCondition, found := splitCondition(line)
+		if found {
+			if beforeCondition != "" {
+				contentLines = append(contentLines, beforeCondition)
+			}
+			conditionLines = append(conditionLines, parsedCondition)
+			conditionFound = true
+		} else {
+			contentLines = append(contentLines, line)
+		}
+		if photoSectionFound {
+			break
+		}
 	}
 
 	return strings.Join(contentLines, "\n"), strings.Join(conditionLines, "\n")
+}
+
+func parseDescriptionLine(parts []listingPart) (string, bool) {
+	photoSectionFound := false
+	for partIndex, part := range parts {
+		if isPhotoLink(part.node) {
+			parts = parts[:partIndex]
+			photoSectionFound = true
+			break
+		}
+	}
+
+	line := normalizedParts(parts)
+	if beforePhotos, _, found := strings.Cut(line, photoLabel); found {
+		line = beforePhotos
+		photoSectionFound = true
+	}
+
+	return strings.TrimSpace(line), photoSectionFound
+}
+
+func splitCondition(line string) (string, string, bool) {
+	beforeCondition, afterLabel, found := strings.Cut(line, conditionLabel)
+	if !found {
+		return "", "", false
+	}
+
+	condition := conditionLabel
+	if afterLabel = strings.TrimSpace(afterLabel); afterLabel != "" {
+		condition += " " + afterLabel
+	}
+
+	return strings.TrimSpace(beforeCondition), condition, true
 }
 
 func parsePublicationYear(bibliography string) int {
@@ -367,13 +400,17 @@ func isASCIIDigit(character rune) bool {
 
 func hasPhotoLink(node *html.Node) bool {
 	for descendant := range node.Descendants() {
-		if descendant.Type == html.ElementNode && descendant.Data == "a" &&
-			strings.Contains(href(descendant), "foto.php4") {
+		if isPhotoLink(descendant) {
 			return true
 		}
 	}
 
 	return false
+}
+
+func isPhotoLink(node *html.Node) bool {
+	return node != nil && node.Type == html.ElementNode && node.Data == "a" &&
+		strings.Contains(href(node), "foto.php4")
 }
 
 func normalizedParts(parts []listingPart) string {
