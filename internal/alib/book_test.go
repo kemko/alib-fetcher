@@ -91,6 +91,31 @@ func Test_Book_unmarshals_legacy_bibliography_with_same_line_seller_preamble(t *
 	require.Equal(t, "100 руб.", book.Price)
 }
 
+func Test_Book_preserves_legacy_bibliography_without_seller_preamble(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	legacy := []byte(`{
+		"title": "Книга.",
+		"text_before_seller": "М., 2026 г.",
+		"seller": "BS - Seller",
+		"seller_url": "https://www.alib.ru/bs.php4?bs=Seller",
+		"text_before_buy": ", Москва. Цена: 100 руб.",
+		"buy_url": "https://www.alib.ru/book.html",
+		"text_after_buy": "",
+		"has_photos": false
+	}`)
+
+	// When
+	var book alib.Book
+	err := json.Unmarshal(legacy, &book)
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, "М., 2026 г.", book.Bibliography)
+	require.Equal(t, 2026, book.PublicationYear)
+}
+
 func Test_Book_unmarshals_legacy_listing_without_seller(t *testing.T) {
 	t.Parallel()
 

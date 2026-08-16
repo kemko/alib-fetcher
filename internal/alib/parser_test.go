@@ -124,6 +124,25 @@ func Test_Parse_extracts_bibliography_when_seller_is_on_title_line(t *testing.T)
 	require.Equal(t, "100 руб.", books[0].Price)
 }
 
+func Test_Parse_preserves_bibliography_without_seller_preamble(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	page := `<p><b>Книга.</b> М., 2026 г. <a href="/bs.php4?bs=Seller">BS - Seller</a>, Москва.
+Цена: 100 руб. <a href="/book.html"><b>Купить</b></a></p>`
+	baseURL, err := url.Parse("https://www.alib.ru/tramka.phtml?tnew=7")
+	require.NoError(t, err)
+
+	// When
+	books, err := alib.Parse(bytes.NewBufferString(page), baseURL, "text/html")
+
+	// Then
+	require.NoError(t, err)
+	require.Len(t, books, 1)
+	require.Equal(t, "М., 2026 г.", books[0].Bibliography)
+	require.Equal(t, 2026, books[0].PublicationYear)
+}
+
 func Test_Parse_does_not_include_buy_link_in_location_when_price_is_missing(t *testing.T) {
 	t.Parallel()
 
@@ -184,6 +203,22 @@ func Test_Parse_rejects_page_without_books(t *testing.T) {
 
 	// When
 	books, err := alib.Parse(bytes.NewBufferString("<html><body>empty</body></html>"), baseURL, "text/html")
+
+	// Then
+	require.ErrorIs(t, err, alib.ErrNoBooks)
+	require.Empty(t, books)
+}
+
+func Test_Parse_rejects_page_with_buy_link_without_href(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	page := `<p><b>Broken.</b> М., 2026 г. <a><b>Купить</b></a></p>`
+	baseURL, err := url.Parse("https://www.alib.ru/tramka.phtml?tnew=7")
+	require.NoError(t, err)
+
+	// When
+	books, err := alib.Parse(bytes.NewBufferString(page), baseURL, "text/html")
 
 	// Then
 	require.ErrorIs(t, err, alib.ErrNoBooks)

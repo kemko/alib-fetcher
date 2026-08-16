@@ -90,12 +90,7 @@ func trimSellerPreamble(text string) string {
 		}
 	}
 
-	lastLineBreak := strings.LastIndex(text, "\n")
-	if lastLineBreak < 0 {
-		return ""
-	}
-
-	return strings.TrimSpace(text[:lastLineBreak])
+	return strings.TrimSpace(text)
 }
 
 func legacySaleDetails(textBeforeSeller, textBeforeBuy string, hasSeller bool) (string, string) {

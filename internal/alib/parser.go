@@ -411,6 +411,10 @@ func href(node *html.Node) string {
 }
 
 func resolveURL(baseURL *url.URL, raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return ""
+	}
+
 	reference, err := url.Parse(raw)
 	if err != nil {
 		return ""
