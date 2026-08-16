@@ -66,15 +66,15 @@
 - Modify: `internal/config/config.go`
 - Modify: `internal/config/config_test.go`
 
-- [ ] Добавить regression tests: принимать signed decimal `int64` chat ID и непустой `@channel` username без
+- [x] Добавить regression tests: принимать signed decimal `int64` chat ID и непустой `@channel` username без
   whitespace.
-- [ ] Добавить regression tests: отклонять произвольный текст без `@`, пустой username `@`, whitespace и
+- [x] Добавить regression tests: отклонять произвольный текст без `@`, пустой username `@`, whitespace и
   numeric overflow.
-- [ ] Реализовать минимальный private validator для заявленного configuration contract.
-- [ ] Возвращать `config.ErrInvalid` с именем переменной, не включая token или другие секреты.
-- [ ] Исправить существующие negative tests, использующие невалидный placeholder `chat`, чтобы проверялся
+- [x] Реализовать минимальный private validator для заявленного configuration contract.
+- [x] Возвращать `config.ErrInvalid` с именем переменной, не включая token или другие секреты.
+- [x] Исправить существующие negative tests, использующие невалидный placeholder `chat`, чтобы проверялся
   целевой параметр.
-- [ ] Run `make test` and `make lint`; both must pass before Task 2.
+- [x] Run `make test` and `make lint`; both must pass before Task 2.
 
 ### Task 2: Сделать Telegram response handling строгим и однозначным
 

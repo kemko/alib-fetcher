@@ -1,6 +1,9 @@
 package config_test
 
 import (
+	"math"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -66,11 +69,72 @@ func Test_Load_parses_custom_schedule(t *testing.T) {
 	require.False(t, loaded.RunOnStartup)
 }
 
+func Test_Load_accepts_valid_telegram_chat_id(t *testing.T) {
+	testCases := []string{
+		strconv.FormatInt(math.MinInt64, 10),
+		"-100123",
+		"0",
+		"+123",
+		strconv.FormatInt(math.MaxInt64, 10),
+		"@channel",
+	}
+
+	for _, chatID := range testCases {
+		t.Run(chatID, func(t *testing.T) {
+			// Given
+			setEnvironment(t, map[string]string{
+				"TELEGRAM_BOT_TOKEN": "token",
+				"TELEGRAM_CHAT_ID":   chatID,
+			})
+
+			// When
+			loaded, err := config.Load()
+
+			// Then
+			require.NoError(t, err)
+			require.Equal(t, chatID, loaded.TelegramChatID)
+		})
+	}
+}
+
+func Test_Load_rejects_invalid_telegram_chat_id(t *testing.T) {
+	testCases := []string{
+		"chat",
+		"@",
+		"@channel name",
+		" @channel",
+		"@channel\n",
+		"123 456",
+		"9223372036854775808",
+		"-9223372036854775809",
+	}
+
+	for _, chatID := range testCases {
+		t.Run(strings.ReplaceAll(chatID, "\n", `\n`), func(t *testing.T) {
+			// Given
+			const token = "secret-token-value"
+			setEnvironment(t, map[string]string{
+				"TELEGRAM_BOT_TOKEN": token,
+				"TELEGRAM_CHAT_ID":   chatID,
+			})
+
+			// When
+			loaded, err := config.Load()
+
+			// Then
+			require.ErrorIs(t, err, config.ErrInvalid)
+			require.ErrorContains(t, err, "TELEGRAM_CHAT_ID")
+			require.NotContains(t, err.Error(), token)
+			require.Empty(t, loaded)
+		})
+	}
+}
+
 func Test_Load_rejects_invalid_run_on_startup(t *testing.T) {
 	// Given
 	setEnvironment(t, map[string]string{
 		"TELEGRAM_BOT_TOKEN": "token",
-		"TELEGRAM_CHAT_ID":   "chat",
+		"TELEGRAM_CHAT_ID":   "-100123",
 		"RUN_ON_STARTUP":     "sometimes",
 	})
 
@@ -86,7 +150,7 @@ func Test_Load_rejects_invalid_schedule(t *testing.T) {
 	// Given
 	setEnvironment(t, map[string]string{
 		"TELEGRAM_BOT_TOKEN": "token",
-		"TELEGRAM_CHAT_ID":   "chat",
+		"TELEGRAM_CHAT_ID":   "-100123",
 		"CRON_SCHEDULE":      "not a cron expression",
 	})
 
@@ -102,7 +166,7 @@ func Test_Load_accepts_cron_descriptor(t *testing.T) {
 	// Given
 	setEnvironment(t, map[string]string{
 		"TELEGRAM_BOT_TOKEN": "token",
-		"TELEGRAM_CHAT_ID":   "chat",
+		"TELEGRAM_CHAT_ID":   "-100123",
 		"CRON_SCHEDULE":      "@every 6h",
 	})
 

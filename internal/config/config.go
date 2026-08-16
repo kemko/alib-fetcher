@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/robfig/cron/v3"
 )
@@ -46,6 +48,12 @@ func Load() (Config, error) {
 	chatID := os.Getenv("TELEGRAM_CHAT_ID")
 	if token == "" || chatID == "" {
 		return Config{}, fmt.Errorf("%w: TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required", ErrInvalid)
+	}
+	if !validTelegramChatID(chatID) {
+		return Config{}, fmt.Errorf(
+			"%w: TELEGRAM_CHAT_ID must be a signed decimal int64 or @channel username",
+			ErrInvalid,
+		)
 	}
 
 	cronSpec := valueOrDefault("CRON_SCHEDULE", defaultCronSchedule)
@@ -94,4 +102,14 @@ func valueOrDefault(key, fallback string) string {
 	}
 
 	return fallback
+}
+
+func validTelegramChatID(chatID string) bool {
+	if strings.HasPrefix(chatID, "@") {
+		return len(chatID) > 1 && !strings.ContainsFunc(chatID, unicode.IsSpace)
+	}
+
+	_, err := strconv.ParseInt(chatID, 10, 64)
+
+	return err == nil
 }
