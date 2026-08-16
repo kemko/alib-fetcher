@@ -160,11 +160,11 @@
 - Modify: `README.md`
 - Modify: `AGENTS.md`
 
-- [ ] Document accepted `TELEGRAM_CHAT_ID` forms and fail-fast validation.
-- [ ] Document that malformed structured state records stop startup instead of being silently migrated; retain
+- [x] Document accepted `TELEGRAM_CHAT_ID` forms and fail-fast validation.
+- [x] Document that malformed structured state records stop startup instead of being silently migrated; retain
   backup/rollback guidance.
-- [ ] Update CI description: PRs validate image build, only successful `master` pushes publish.
-- [ ] Document `.env` handling without adding real credentials or example secrets.
-- [ ] Update repository guide invariants and CI map where behavior changed.
-- [ ] Run `make verify` after documentation changes.
-- [ ] Commit verified task-related changes using concise Conventional Commit message(s).
+- [x] Update CI description: PRs validate image build, only successful `master` pushes publish.
+- [x] Document `.env` handling without adding real credentials or example secrets.
+- [x] Update repository guide invariants and CI map where behavior changed.
+- [x] Run `make verify` after documentation changes.
+- [x] Commit verified task-related changes using concise Conventional Commit message(s).

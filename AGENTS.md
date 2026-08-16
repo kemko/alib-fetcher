@@ -54,7 +54,10 @@ Preserve these semantics:
   records are not pruned by retention.
 - Legacy bbolt marker values are migrated at open time to sent JSON records
   with only `Book.BuyURL` when full metadata cannot be recovered, and must not
-  be pruned immediately.
+  be pruned immediately. Values shaped as structured JSON records must decode
+  successfully and have `Book.BuyURL` equal to their bbolt key; otherwise open
+  fails transactionally without converting the corrupt value or committing
+  neighboring migrations.
 - Service mode runs one cycle immediately after startup by default, then follows
   the cron schedule. `RUN_ON_STARTUP=false` skips the startup cycle. Overlapping
   cron jobs are skipped.
@@ -109,9 +112,10 @@ Preserve these semantics:
 - `docker-compose.yml`: read-only, capability-dropped service with a persistent
   named state volume.
 - `.github/workflows/ci.yml`: runs `make verify` and `govulncheck` on pushes/PRs
-  to `master` in the `verify` job, then publishes
-  `ghcr.io/${github.repository}:latest` only after a successful push run on
-  `master`; ordinary quality commands must not be duplicated in CI.
+  to `master`, then validates Compose and builds the production image. Pull
+  requests never log in or push; a successful `master` push publishes
+  `ghcr.io/${github.repository}:latest` from its single image build. Ordinary
+  quality commands must not be duplicated in CI.
 - `.github/dependabot.yml`: normal scheduled version PRs are disabled; updates
   are intended to be security-only through repository security settings.
 
@@ -120,7 +124,8 @@ Preserve these semantics:
 Required:
 
 - `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_CHAT_ID` (numeric chat ID or `@channel`)
+- `TELEGRAM_CHAT_ID` (signed decimal `int64` chat ID or non-empty `@channel`
+  username, with no whitespace)
 
 Optional defaults:
 
@@ -135,8 +140,10 @@ Optional defaults:
 | `HTTP_TIMEOUT` | `30s` | positive Go duration applied per external request |
 | `MESSAGE_LIMIT` | `4000` | rune count, allowed range 64..4096 |
 
-Invalid configuration prevents process startup. Never log or expose the bot
-token; note that the sender internally puts it in the Bot API URL.
+Invalid configuration, including a malformed or overflowing
+`TELEGRAM_CHAT_ID`, prevents process startup. Errors name the invalid variable.
+Never log or expose the bot token; note that the sender internally puts it in
+the Bot API URL.
 
 ## Digest and transport details
 
@@ -221,7 +228,9 @@ TELEGRAM_BOT_TOKEN=... TELEGRAM_CHAT_ID=... CRON_SCHEDULE='*/30 * * * *' \
   STATE_PATH=./data/state.db go run ./cmd/alib-fetcher
 ```
 
-Local files `data/`, `bin/`, `coverage.out`, and `tnew7.txt` are ignored. Do not
+Local files `.env`, `.env.*`, `data/`, `bin/`, `coverage.out`, and `tnew7.txt`
+are ignored; a credential-free `.env.example` may be tracked. `.env*`, local
+data, and database files are excluded from the Docker build context. Do not
 commit credentials, state databases, captured production data, or generated
 binaries.
 
@@ -250,12 +259,15 @@ binaries.
 
 ## Deployment notes
 
-`master` is the CI and image-publishing branch. The container is expected to run
-with a read-only root filesystem and a writable persistent volume mounted at
-`/var/lib/alib-fetcher`; do not move mutable state elsewhere without updating
-the image, Compose, and README together. Preserve the nonroot runtime,
-capability drop, and `no-new-privileges` hardening.
+`master` is the CI and image-publishing branch. Pull requests and pushes build
+the production image only after verification; pull requests never publish, and
+a successful `master` push builds once and publishes `latest`. The container is
+expected to run with a read-only root filesystem and a writable persistent
+volume mounted at `/var/lib/alib-fetcher`; do not move mutable state elsewhere
+without updating the image, Compose, and README together. Preserve the nonroot
+runtime, capability drop, and `no-new-privileges` hardening.
 
 For Compose, `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` must come from the
 environment. `ALIB_FETCHER_IMAGE` overrides the image. Never bake secrets into
-the image or commit them in Compose.
+the image or commit them in Compose. Local `.env` files must stay untracked and
+out of the Docker build context; `.env.example` must never contain credentials.
