@@ -30,11 +30,18 @@ type Sender interface {
 	Send(ctx context.Context, text string, silent bool, attachRefresh bool) error
 }
 
-// Dependencies contains the service adapters, retry wait function, and Telegram message limit.
+// FreshBooksPolicy resolves an inclusive publication-year threshold for one cycle year.
+type FreshBooksPolicy interface {
+	LowerYear(currentYear int) int
+}
+
+// Dependencies contains the service adapters and digest policy.
 type Dependencies struct {
 	Fetcher        Fetcher
 	State          State
 	Sender         Sender
+	FreshBooks     FreshBooksPolicy
+	Location       *time.Location
 	Now            func() time.Time
 	Wait           func(context.Context, time.Duration) error
 	BeforeDelivery func(context.Context) error
@@ -65,6 +72,7 @@ func NewService(dependencies Dependencies) *Service {
 // Run executes one complete digest cycle.
 func (s *Service) Run(ctx context.Context) (Result, error) {
 	cycleTime := s.dependencies.Now()
+	renderOptions := s.renderOptions(cycleTime)
 	pruned, err := s.dependencies.State.Prune(ctx, cycleTime.Add(-14*24*time.Hour))
 	if err != nil {
 		return Result{}, fmt.Errorf("prune delivered listings: %w", err)
@@ -91,7 +99,7 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 		return result, nil
 	}
 
-	chunks, skippedBuyURLs, err := renderSendable(pending, s.dependencies.MessageLimit)
+	chunks, skippedBuyURLs, err := renderSendable(pending, renderOptions)
 	if err != nil {
 		return result, fmt.Errorf("render digest: %w", err)
 	}
@@ -119,11 +127,29 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 	return result, nil
 }
 
-func renderSendable(books []alib.Book, limit int) ([]digest.Chunk, []string, error) {
+func (s *Service) renderOptions(cycleTime time.Time) digest.Options {
+	localTime := cycleTime
+	if s.dependencies.Location != nil {
+		localTime = cycleTime.In(s.dependencies.Location)
+	}
+
+	options := digest.Options{
+		LocalTime: localTime,
+		Limit:     s.dependencies.MessageLimit,
+	}
+	if s.dependencies.FreshBooks != nil {
+		lowerYear := s.dependencies.FreshBooks.LowerYear(localTime.Year())
+		options.FreshBooksLowerYear = &lowerYear
+	}
+
+	return options
+}
+
+func renderSendable(books []alib.Book, options digest.Options) ([]digest.Chunk, []string, error) {
 	renderable := make([]alib.Book, 0, len(books))
 	skippedBuyURLs := make([]string, 0)
 	for _, book := range books {
-		if _, err := digest.Render([]alib.Book{book}, limit); err != nil {
+		if _, err := digest.Render([]alib.Book{book}, options); err != nil {
 			if errors.Is(err, digest.ErrMessageTooLong) {
 				skippedBuyURLs = append(skippedBuyURLs, book.BuyURL)
 				continue
@@ -133,7 +159,7 @@ func renderSendable(books []alib.Book, limit int) ([]digest.Chunk, []string, err
 		renderable = append(renderable, book)
 	}
 
-	chunks, err := digest.Render(renderable, limit)
+	chunks, err := digest.Render(renderable, options)
 	if err != nil {
 		return nil, nil, err
 	}

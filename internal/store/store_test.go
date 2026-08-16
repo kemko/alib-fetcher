@@ -20,6 +20,7 @@ type storedRecord struct {
 	Book       alib.Book `json:"book"`
 	ObservedAt int64     `json:"observed_at"`
 	SentAt     int64     `json:"sent_at,omitempty"`
+	QueueOrder uint64    `json:"queue_order,omitempty"`
 	Sent       bool      `json:"sent"`
 }
 
@@ -71,12 +72,15 @@ func Test_Store_persists_stable_json_schema(t *testing.T) {
 	require.JSONEq(t, fmt.Sprintf(`{
 		"book": {
 			"title": "Full title",
-			"text_before_seller": "Before seller",
+			"bibliography": "Full bibliography, 2026 г.",
+			"content": "Full content",
 			"seller": "Seller name",
 			"seller_url": "https://example.com/seller",
-			"text_before_buy": "Before buy",
+			"location": "Moscow",
+			"price": "100 rub.",
+			"condition": "Condition: Full",
 			"buy_url": "https://example.com/schema",
-			"text_after_buy": "After buy",
+			"publication_year": 2026,
 			"has_photos": true
 			},
 			"observed_at": %d,
@@ -115,6 +119,7 @@ func Test_Store_updates_sent_book_metadata_without_requeueing(t *testing.T) {
 	require.Empty(t, pending)
 	require.Equal(t, updated, record.Book)
 	require.True(t, record.Sent)
+	require.Equal(t, uint64(1), record.QueueOrder)
 	require.NotZero(t, record.SentAt)
 	require.True(t, decodeStoredTime(record.SentAt).Equal(sentAt.UTC()))
 	require.True(t, decodeStoredTime(record.ObservedAt).Equal(rediscoveredAt.UTC()))
@@ -295,6 +300,7 @@ func Test_Open_leaves_valid_json_records_unchanged(t *testing.T) {
 		},
 		"observed_at": %d,
 		"sent_at": %d,
+		"queue_order": 19,
 		"sent": true
 	}`, observedAt, sentAt)
 	require.NoError(t, writeLegacyMarker(path, buyURL, []byte(record)))
@@ -306,6 +312,72 @@ func Test_Open_leaves_valid_json_records_unchanged(t *testing.T) {
 
 	// Then
 	require.JSONEq(t, record, string(readRawRecord(t, path, buyURL)))
+}
+
+func Test_Store_loads_legacy_pending_record_and_rewrites_it_only_on_mutating_write(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	path := filepath.Join(t.TempDir(), "state.db")
+	buyURL := "https://example.com/legacy-pending"
+	observedAt := time.Date(2026, time.August, 4, 12, 0, 0, 123, time.UTC)
+	sentAt := time.Date(2026, time.August, 5, 13, 0, 0, 456, time.UTC)
+	legacyRecord := fmt.Sprintf(`{
+		"book": {
+			"title": "Legacy title",
+			"text_before_seller": "Legacy bibliography, 2025 г.\n(Условия продажи продавца",
+			"seller": "BS - Legacy seller",
+			"seller_url": "https://example.com/legacy-seller",
+			"text_before_buy": ", Moscow.) Цена: 250 rub.",
+			"buy_url": %q,
+			"text_after_buy": "\nLegacy content\nСостояние: Legacy condition",
+			"has_photos": true
+		},
+		"observed_at": %d,
+		"queue_order": 27,
+		"sent": false
+	}`, buyURL, observedAt.UnixNano())
+	require.NoError(t, writeLegacyMarker(path, buyURL, []byte(legacyRecord)))
+	db, err := store.Open(path, time.Now())
+	require.NoError(t, err)
+
+	// When
+	pending, pendingErr := db.Pending(context.Background())
+	require.NoError(t, db.Close())
+	rawAfterOpen := readRawRecord(t, path, buyURL)
+	db, err = store.Open(path, time.Now())
+	require.NoError(t, err)
+	markErr := db.MarkSent(context.Background(), []alib.Book{{BuyURL: buyURL}}, sentAt)
+	require.NoError(t, db.Close())
+	rewritten := readStoredRecord(t, path, buyURL)
+	rewrittenRaw := readRawRecord(t, path, buyURL)
+
+	// Then
+	require.NoError(t, pendingErr)
+	require.NoError(t, markErr)
+	expectedPending := alib.Book{
+		Title:           "Legacy title",
+		Bibliography:    "Legacy bibliography, 2025 г.",
+		PublicationYear: 2025,
+		Content:         "Legacy content",
+		Seller:          "Legacy seller",
+		SellerURL:       "https://example.com/legacy-seller",
+		Location:        "Moscow",
+		Price:           "250 rub.",
+		Condition:       "Состояние: Legacy condition",
+		BuyURL:          buyURL,
+		HasPhotos:       true,
+	}
+	require.Equal(t, []alib.Book{expectedPending}, pending)
+	require.Equal(t, []byte(legacyRecord), rawAfterOpen)
+	require.Equal(t, expectedPending, rewritten.Book)
+	require.Equal(t, observedAt.UnixNano(), rewritten.ObservedAt)
+	require.Equal(t, uint64(27), rewritten.QueueOrder)
+	require.True(t, rewritten.Sent)
+	require.Equal(t, sentAt.UnixNano(), rewritten.SentAt)
+	require.NotContains(t, string(rewrittenRaw), "text_before_seller")
+	require.NotContains(t, string(rewrittenRaw), "text_before_buy")
+	require.NotContains(t, string(rewrittenRaw), "text_after_buy")
 }
 
 func Test_Open_rejects_malformed_json_record_without_replacing_it(t *testing.T) {
@@ -395,9 +467,6 @@ func Test_Open_migrates_legacy_timestamp_marker_to_sent_record(t *testing.T) {
 	require.Equal(t, alib.Book{BuyURL: buyURL}, record.Book)
 	require.Empty(t, record.Book.Title)
 	require.Empty(t, record.Book.Seller)
-	require.Empty(t, record.Book.TextBeforeSeller)
-	require.Empty(t, record.Book.TextBeforeBuy)
-	require.Empty(t, record.Book.TextAfterBuy)
 	require.False(t, record.Book.HasPhotos)
 	require.True(t, record.Sent)
 	require.True(t, decodeStoredTime(record.SentAt).Equal(migratedAt.UTC()))
@@ -434,9 +503,6 @@ func Test_Open_migrates_unknown_legacy_marker_without_immediate_pruning(t *testi
 	require.Equal(t, book, record.Book)
 	require.Empty(t, record.Book.Title)
 	require.Empty(t, record.Book.Seller)
-	require.Empty(t, record.Book.TextBeforeSeller)
-	require.Empty(t, record.Book.TextBeforeBuy)
-	require.Empty(t, record.Book.TextAfterBuy)
 	require.False(t, record.Book.HasPhotos)
 	require.True(t, record.Sent)
 	require.NotZero(t, record.SentAt)
@@ -476,14 +542,17 @@ func Test_Store_rediscovered_legacy_sent_book_gets_full_payload_without_requeuei
 
 func fullBook(buyURL string) alib.Book {
 	return alib.Book{
-		Title:            "Full title",
-		TextBeforeSeller: "Before seller",
-		Seller:           "Seller name",
-		SellerURL:        "https://example.com/seller",
-		TextBeforeBuy:    "Before buy",
-		BuyURL:           buyURL,
-		TextAfterBuy:     "After buy",
-		HasPhotos:        true,
+		Title:           "Full title",
+		Bibliography:    "Full bibliography, 2026 г.",
+		PublicationYear: 2026,
+		Content:         "Full content",
+		Seller:          "Seller name",
+		SellerURL:       "https://example.com/seller",
+		Location:        "Moscow",
+		Price:           "100 rub.",
+		Condition:       "Condition: Full",
+		BuyURL:          buyURL,
+		HasPhotos:       true,
 	}
 }
 

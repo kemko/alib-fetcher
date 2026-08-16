@@ -13,8 +13,9 @@ database, which also stores the pending send queue.
 | `TELEGRAM_BOT_TOKEN` | yes | - | Bot token from BotFather |
 | `TELEGRAM_CHAT_ID` | yes | - | Signed decimal `int64` chat ID or non-empty `@channel` username, without whitespace |
 | `CRON_SCHEDULE` | no | `0 0 * * *` | Standard five-field cron expression |
-| `TIMEZONE` | no | `Europe/Moscow` | IANA timezone used by the scheduler |
+| `TIMEZONE` | no | `Europe/Moscow` | IANA timezone used by the scheduler and publication-year markers |
 | `RUN_ON_STARTUP` | no | `true` | Run one digest cycle immediately after scheduler startup |
+| `FRESH_BOOKS` | no | empty | Optional `✨` threshold: `age:N` or `since:YYYY` |
 | `STATE_PATH` | no | `/var/lib/alib-fetcher/state.db` | bbolt state database |
 | `ALIB_URL` | no | source URL above | Listing page, also useful for testing |
 | `TELEGRAM_API_BASE` | no | `https://api.telegram.org` | Bot API base URL |
@@ -25,12 +26,33 @@ Configuration is validated before process startup. Invalid chat IDs, including
 plain text without `@`, an empty `@` username, whitespace, and numeric overflow,
 fail fast with an error naming `TELEGRAM_CHAT_ID`.
 
+`FRESH_BOOKS=age:N` marks publication years from the current local year minus
+non-negative `N`, inclusive. For example, in 2026, `age:5` includes 2021.
+`FRESH_BOOKS=since:YYYY` uses the given four-digit year as the inclusive lower
+boundary. An absent or empty value disables only the optional `✨` marker; it
+does not disable `🔥`. The cycle time converted to `TIMEZONE` determines the
+current year and whether the January exception applies:
+
+- `🔥` marks the current year and, during January, the previous year;
+- `✨` marks other recognized years between the configured inclusive boundary
+  and the current year;
+- future and unrecognized publication years receive no marker.
+
+The January `🔥` rule applies even when `FRESH_BOOKS` is empty or its configured
+boundary excludes the previous year.
+
+The parser recognizes the last four-digit year in the bibliography followed by
+`г` or `г.`. Years found only in content or other listing sections do not affect
+freshness markers.
+
 Each digest first records every fetched listing in the state database as a
-pending record with the full parsed Alib payload: title, announcement text,
-seller data, purchase link, trailing text, and photo marker. Existing records
-keep their sent status while refreshing the parsed payload from the latest
-source page. The first successful run records every listing currently present on
-the source page as pending and sends them.
+pending record with the full semantic Alib payload: title, bibliography,
+publication year, content, seller name and URL, location, price, condition and
+other details, purchase URL, and photo marker. The parser derives these fields
+from DOM nodes and logical `<br>`-delimited lines; it does not parse HTML with
+regular expressions. Existing records keep their sent status while refreshing
+the parsed payload from the latest source page. The first successful run records
+every listing currently present on the source page as pending and sends them.
 
 Sending reads every pending record from the database in first-discovery order,
 not only books found in the current fetch result. Books that could not be sent
@@ -40,9 +62,18 @@ Telegram accepts it, and then its records become sent. Sent records older than
 are not removed by retention pruning. If one pending listing cannot fit in a
 Telegram message, other renderable pending listings are still sent while the
 oversized listing remains pending and the cycle reports the rendering error.
-Each Telegram listing keeps the full Alib announcement text and its seller and
-purchase links. The source photo-link section is replaced with `Фото: есть` or
-`Фото: нет`. When a digest is split into multiple messages, only the final
+Each Telegram listing is structured as:
+
+1. freshness marker, bold title, and bibliography;
+2. content in its own paragraph, when present;
+3. seller as `Продавец: <a href="...">Name</a>, Location.`, then price,
+   condition/other details, and photo status on separate lines;
+4. a final `Купить` link in its own paragraph.
+
+The source photo-link section is replaced with `Фото: есть` or `Фото: нет`.
+When seller URL is absent, seller name is rendered as plain text. Missing
+optional fields do not create empty paragraphs. Dynamic text and URLs are
+HTML-escaped. When a digest is split into multiple messages, only the final
 message uses the normal notification sound; earlier messages are silent.
 Whenever a digest sends at least one message, the final message includes an
 inline `Обновить` button.
@@ -99,14 +130,19 @@ The process emits structured JSON logs and stops gracefully on `SIGINT` or
 `SIGTERM`.
 
 On first run after upgrading from older timestamp-marker releases, raw legacy
-state entries are migrated to JSON records. Values that look like structured
-JSON records must decode successfully, and their stored purchase URL must match
-the bbolt key. A malformed or mismatched structured record makes state opening
-fail transactionally: it is not treated as a legacy marker, and no neighboring
-migration is committed. Back up `STATE_PATH` before upgrading. If validation
-fails, stop the service and restore a known-good backup; recreate the database
-only when resetting delivery history is acceptable. Rolling back to an older
-release also requires restoring or recreating the state database.
+state entries are migrated to JSON records. Structured records from releases
+that stored `text_before_seller`, `text_before_buy`, and `text_after_buy` remain
+readable: a narrow JSON compatibility decoder converts those fragments to the
+semantic `Book` model in memory. Opening the database does not rewrite valid
+legacy structured records. The next mutating write, including rediscovery or a
+successful-delivery acknowledgement, writes the current schema. Values that look
+like structured JSON records must decode successfully, and their stored purchase
+URL must match the bbolt key. A malformed or mismatched structured record makes
+state opening fail transactionally: it is not treated as a legacy marker, and no
+neighboring migration is committed. Back up `STATE_PATH` before upgrading. If
+validation fails, stop the service and restore a known-good backup; recreate the
+database only when resetting delivery history is acceptable. Rolling back to an
+older release also requires restoring or recreating the state database.
 
 ## Container
 
@@ -131,6 +167,17 @@ Alternatively, start the service with the Compose v3.8 configuration:
 ```bash
 export TELEGRAM_BOT_TOKEN=...
 export TELEGRAM_CHAT_ID=...
+docker compose up -d
+```
+
+With required Telegram variables already supplied by the environment or an
+untracked `.env`, runtime settings can be overridden without putting credentials
+in the command or Compose file:
+
+```bash
+FRESH_BOOKS=age:5 \
+TIMEZONE=Europe/Moscow \
+ALIB_FETCHER_IMAGE=ghcr.io/example/alib-fetcher:latest \
 docker compose up -d
 ```
 
@@ -159,6 +206,15 @@ automatically provision and use the pinned golangci-lint under ignored
 CI uses the same Make targets, additionally runs `govulncheck`, and builds the
 production container on pull requests and `master` pushes. Only a successful
 `master` push publishes the image.
+
+Run the coverage gate separately:
+
+```bash
+make coverage
+```
+
+It writes ignored `coverage.out` and fails when total statement coverage is
+below 80%.
 
 ## Security-only dependency updates
 

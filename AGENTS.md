@@ -58,6 +58,11 @@ Preserve these semantics:
   successfully and have `Book.BuyURL` equal to their bbolt key; otherwise open
   fails transactionally without converting the corrupt value or committing
   neighboring migrations.
+- Structured records using legacy `text_before_seller`, `text_before_buy`, and
+  `text_after_buy` fields decode into the semantic `Book` model in memory. A
+  database open must not rewrite them; the next mutating write, including
+  rediscovery or successful-delivery acknowledgement, writes the current schema
+  while preserving delivery state, queue order, and timestamps.
 - Service mode runs one cycle immediately after startup by default, then follows
   the cron schedule. `RUN_ON_STARTUP=false` skips the startup cycle. Overlapping
   cron jobs are skipped.
@@ -93,17 +98,23 @@ Preserve these semantics:
   lifetime, startup and scheduled digest runs, robfig/cron lifecycle, refresh
   callback polling, and shared digest-runner concurrency.
 - `internal/config`: environment loading, defaults, and validation.
-- `internal/alib`: HTTP client plus charset-aware HTML parser. The real page may
-  be Windows-1251. Listings are recognized inside `<p>` elements by a title in
-  `<b>` and a `Купить` link; seller links contain `bs.php4`.
+- `internal/alib`: HTTP client plus charset-aware, DOM-first HTML parser. The
+  real page may be Windows-1251. Listings are recognized inside `<p>` elements
+  by a title in `<b>` and a `Купить` link; seller links contain `bs.php4`.
+  Logical lines are split on `<br>` and become semantic bibliography,
+  publication year, content, seller, location, price, condition, purchase URL,
+  and photo fields without regex-based HTML parsing. Publication year is the
+  last four-digit year in the bibliography followed by `г` or `г.`; content
+  years are ignored.
 - `internal/app`: use-case orchestration through small `Fetcher`, `State`, and
   `Sender` interfaces. Keep policy here and transport/storage details in their
   adapter packages.
 - `internal/digest`: full-listing Telegram HTML rendering and chunking only
   between complete listings.
 - `internal/store`: bbolt storage in bucket `sent_books`; keys are buy URLs and
-  values are JSON records containing the full `alib.Book`, observed timestamp,
-  pending queue order, sent status, and sent timestamp for delivered records.
+  values are JSON records containing the full semantic `alib.Book`, observed
+  timestamp, pending queue order, sent status, and sent timestamp for delivered
+  records. `alib.Book` has a narrow decoder for persisted legacy fragment fields.
 - `internal/telegram`: Telegram Bot API client for `sendMessage`,
   `getUpdates`, `answerCallbackQuery`, and `editMessageReplyMarkup`; digest
   messages use HTML parse mode with link previews disabled.
@@ -132,8 +143,9 @@ Optional defaults:
 | Variable | Default | Validation/meaning |
 | --- | --- | --- |
 | `CRON_SCHEDULE` | `0 0 * * *` | robfig standard five-field cron; descriptors such as `@hourly` and `@every 6h` are accepted |
-| `TIMEZONE` | `Europe/Moscow` | IANA location used by cron |
+| `TIMEZONE` | `Europe/Moscow` | IANA location used by cron and publication-year markers |
 | `RUN_ON_STARTUP` | `true` | whether service mode runs one digest cycle immediately after startup |
+| `FRESH_BOOKS` | empty | optional inclusive `✨` threshold: `age:N` or `since:YYYY`; empty disables only `✨` |
 | `STATE_PATH` | `/var/lib/alib-fetcher/state.db` | bbolt database; parent directories are created with mode `0750`, DB with `0600` |
 | `ALIB_URL` | `https://www.alib.ru/tramka.phtml?tnew=7` | HTTP(S) source; override it in integration tests |
 | `TELEGRAM_API_BASE` | `https://api.telegram.org` | HTTP(S) API base; override it in tests |
@@ -145,14 +157,29 @@ Invalid configuration, including a malformed or overflowing
 Never log or expose the bot token; note that the sender internally puts it in
 the Bot API URL.
 
+`FRESH_BOOKS=age:N` accepts a non-negative integer and sets the inclusive lower
+year to `current local year - N`; `age:0` therefore includes only the current
+year. `FRESH_BOOKS=since:YYYY` accepts a four-digit inclusive lower year. Empty
+or absent `FRESH_BOOKS` disables `✨`, not `🔥`. The cycle time in `TIMEZONE`
+controls classification: the current year gets `🔥`; in January, the previous
+year also gets `🔥` regardless of the optional threshold. Other recognized
+years from the threshold through the current year get `✨`. Future and
+unrecognized years get neither marker. The recognized year is the last
+four-digit year in the bibliography followed by `г` or `г.`; years elsewhere in
+the listing do not participate.
+
 ## Digest and transport details
 
-Messages start with `<b>Новые книги на Alib.ru</b>`. Each listing contains its
-full source text with a bold title plus seller and `Купить` links. The source
-`Смотрите` section is omitted and replaced with `Фото: есть` or `Фото: нет`.
-All dynamic text and URLs must be HTML-escaped. Limits are counted in Unicode
-runes, and chunks may split only between listings. A single listing that cannot
-fit returns `digest.ErrMessageTooLong`.
+Messages start with `<b>Новые книги на Alib.ru</b>`. Each listing renders, in
+order: emoji plus bold title and bibliography; optional content as a separate
+paragraph; seller, price, condition/other details, and photo status on separate
+lines; then a final `Купить` link in its own paragraph. The seller format is
+`Продавец: <a href="...">Name</a>, Location.`; without seller URL, the name is
+plain text. Missing optional fields must not create extra empty paragraphs. The
+source `Смотрите` section is omitted and replaced with `Фото: есть` or
+`Фото: нет`. All dynamic text and URLs must be HTML-escaped. Limits are counted
+in Unicode runes, and chunks may split only between listings. A single listing
+that cannot fit returns `digest.ErrMessageTooLong`.
 
 The Alib client accepts only HTTP(S), sends `User-Agent: alib-fetcher/1.0`, and
 requires HTTP 200. The Telegram sender accepts only HTTP(S), caps response
@@ -188,6 +215,8 @@ cycle, including from a clean checkout:
 - `make lint` runs the complete configured linter set.
 - `make test` runs the complete test suite with the race detector, shuffled
   order, and no result cache.
+- `make coverage` writes `coverage.out` and fails when total statement coverage
+  is below 80%.
 - `make build` compiles `bin/alib-fetcher` with reproducible path trimming.
 - `make tools` installs the exact golangci-lint version used by CI under the
   ignored project-local `bin/tools` tree.
@@ -268,6 +297,8 @@ without updating the image, Compose, and README together. Preserve the nonroot
 runtime, capability drop, and `no-new-privileges` hardening.
 
 For Compose, `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` must come from the
-environment. `ALIB_FETCHER_IMAGE` overrides the image. Never bake secrets into
-the image or commit them in Compose. Local `.env` files must stay untracked and
-out of the Docker build context; `.env.example` must never contain credentials.
+environment. `FRESH_BOOKS`, `TIMEZONE`, and `ALIB_FETCHER_IMAGE` are
+credential-free runtime overrides; Compose passes an empty `FRESH_BOOKS` by
+default. Never bake secrets into the image or commit them in Compose. Local
+`.env` files must stay untracked and out of the Docker build context;
+`.env.example` must never contain credentials.

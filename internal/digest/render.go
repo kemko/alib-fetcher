@@ -6,14 +6,23 @@ import (
 	"fmt"
 	"html"
 	"strings"
-	"unicode"
+	"time"
 	"unicode/utf8"
 
 	"github.com/kemko/alib-fetcher/internal/alib"
 )
 
+const header = "<b>Новые книги на Alib.ru</b>\n\n"
+
 // ErrMessageTooLong indicates that one listing cannot fit into a message.
 var ErrMessageTooLong = errors.New("digest item exceeds message limit")
+
+// Options controls message size and publication-year highlighting.
+type Options struct {
+	LocalTime           time.Time
+	FreshBooksLowerYear *int
+	Limit               int
+}
 
 // Chunk is one Telegram message and the books acknowledged after it is sent.
 type Chunk struct {
@@ -22,22 +31,21 @@ type Chunk struct {
 }
 
 // Render formats books as Telegram HTML and splits only between listings.
-func Render(books []alib.Book, limit int) ([]Chunk, error) {
+func Render(books []alib.Book, options Options) ([]Chunk, error) {
 	if len(books) == 0 {
 		return nil, nil
 	}
 
-	const header = "<b>Новые книги на Alib.ru</b>\n\n"
 	chunks := make([]Chunk, 0, 1)
 	current := Chunk{Text: header, Books: make([]alib.Book, 0)}
 	for _, book := range books {
-		item := renderBook(book)
+		item := renderBook(book, options)
 		separator := ""
 		if len(current.Books) > 0 {
 			separator = "\n\n"
 		}
 
-		if utf8.RuneCountInString(current.Text+separator+item) > limit {
+		if utf8.RuneCountInString(current.Text+separator+item) > options.Limit {
 			if len(current.Books) == 0 {
 				return nil, fmt.Errorf("%w: %s", ErrMessageTooLong, book.BuyURL)
 			}
@@ -45,7 +53,7 @@ func Render(books []alib.Book, limit int) ([]Chunk, error) {
 			current = Chunk{Text: header, Books: make([]alib.Book, 0)}
 			separator = ""
 		}
-		if utf8.RuneCountInString(current.Text+item) > limit {
+		if utf8.RuneCountInString(current.Text+item) > options.Limit {
 			return nil, fmt.Errorf("%w: %s", ErrMessageTooLong, book.BuyURL)
 		}
 
@@ -56,55 +64,71 @@ func Render(books []alib.Book, limit int) ([]Chunk, error) {
 	return append(chunks, current), nil
 }
 
-func renderBook(book alib.Book) string {
-	rendered := "<b>" + html.EscapeString(strings.TrimSpace(book.Title)) + "</b>"
-	appendText(&rendered, book.TextBeforeSeller)
-	if book.Seller != "" {
-		appendLink(&rendered, book.SellerURL, book.Seller)
+func renderBook(book alib.Book, options Options) string {
+	mainLine := publicationEmoji(book.PublicationYear, options) +
+		"<b>" + html.EscapeString(strings.TrimSpace(book.Title)) + "</b>"
+	if bibliography := strings.TrimSpace(book.Bibliography); bibliography != "" {
+		mainLine += " " + html.EscapeString(bibliography)
 	}
-	appendText(&rendered, book.TextBeforeBuy)
-	appendLink(&rendered, book.BuyURL, "Купить")
-	appendText(&rendered, book.TextAfterBuy)
-	if !strings.HasSuffix(rendered, "\n") {
-		rendered += "\n"
+
+	paragraphs := []string{mainLine}
+	if content := strings.TrimSpace(book.Content); content != "" {
+		paragraphs = append(paragraphs, html.EscapeString(content))
+	}
+
+	details := make([]string, 0, 4)
+	if seller := strings.TrimSpace(book.Seller); seller != "" {
+		details = append(details, renderSeller(seller, book.SellerURL, book.Location))
+	}
+	if price := strings.TrimSpace(book.Price); price != "" {
+		details = append(details, "Цена: "+html.EscapeString(price))
+	}
+	if condition := strings.TrimSpace(book.Condition); condition != "" {
+		details = append(details, html.EscapeString(condition))
 	}
 	if book.HasPhotos {
-		rendered += "Фото: есть"
+		details = append(details, "Фото: есть")
 	} else {
-		rendered += "Фото: нет"
+		details = append(details, "Фото: нет")
+	}
+	paragraphs = append(paragraphs, strings.Join(details, "\n"))
+	paragraphs = append(paragraphs, renderLink(book.BuyURL, "Купить"))
+
+	return strings.Join(paragraphs, "\n\n")
+}
+
+func publicationEmoji(publicationYear int, options Options) string {
+	currentYear := options.LocalTime.Year()
+	if publicationYear <= 0 || publicationYear > currentYear {
+		return ""
+	}
+	if publicationYear == currentYear ||
+		(options.LocalTime.Month() == time.January && publicationYear == currentYear-1) {
+		return "🔥 "
+	}
+	if options.FreshBooksLowerYear != nil && publicationYear >= *options.FreshBooksLowerYear {
+		return "✨ "
+	}
+
+	return ""
+}
+
+func renderSeller(seller, sellerURL, location string) string {
+	rendered := "Продавец: " + renderLink(sellerURL, seller)
+	if location = strings.TrimSpace(location); location != "" {
+		rendered += ", " + html.EscapeString(location)
+	}
+	if !strings.HasSuffix(rendered, ".") {
+		rendered += "."
 	}
 
 	return rendered
 }
 
-func appendText(rendered *string, value string) {
-	if value == "" {
-		return
-	}
-	appendSeparator(rendered, value)
-	*rendered += html.EscapeString(value)
-}
-
-func appendLink(rendered *string, target, label string) {
-	appendSeparator(rendered, label)
+func renderLink(target, label string) string {
 	if target == "" {
-		*rendered += html.EscapeString(label)
-		return
+		return html.EscapeString(label)
 	}
 
-	*rendered += `<a href="` + html.EscapeString(target) + `">` + html.EscapeString(label) + `</a>`
-}
-
-func appendSeparator(rendered *string, next string) {
-	current := *rendered
-	last, _ := utf8.DecodeLastRuneInString(current)
-	first, _ := utf8.DecodeRuneInString(next)
-	if current == "" || next == "" || unicode.IsSpace(last) || unicode.IsSpace(first) {
-		return
-	}
-	if strings.ContainsRune(".,;:!?)]}»", first) || strings.ContainsRune("([{«", last) {
-		return
-	}
-
-	*rendered += " "
+	return `<a href="` + html.EscapeString(target) + `">` + html.EscapeString(label) + `</a>`
 }

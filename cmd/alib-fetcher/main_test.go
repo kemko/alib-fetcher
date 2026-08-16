@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/kemko/alib-fetcher/internal/telegram"
 
@@ -41,66 +44,97 @@ type linkPreviewOptions struct {
 }
 
 func Test_run_wires_once_mode_from_environment(t *testing.T) {
-	// Given
-	useOnceMode(t)
+	currentYear := time.Now().In(time.UTC).Year()
+	freshYear := currentYear - 5
+	testCases := map[string]struct {
+		freshBooks string
+		freshEmoji string
+		configured bool
+	}{
+		"unset": {},
+		"age": {
+			freshBooks: "age:5",
+			freshEmoji: "✨ ",
+			configured: true,
+		},
+		"since": {
+			freshBooks: fmt.Sprintf("since:%d", freshYear),
+			freshEmoji: "✨ ",
+			configured: true,
+		},
+	}
 
-	alibServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		assert.Equal(t, http.MethodGet, request.Method)
-		assert.Equal(t, "/tramka.phtml", request.URL.Path)
-		assert.Equal(t, "tnew=7", request.URL.RawQuery)
-		assert.Equal(t, "alib-fetcher/1.0", request.Header.Get("User-Agent"))
-		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, err := writer.Write([]byte(`<p><b>Книга.</b> Цена: 100 руб. <a href="/book.html"><b>Купить</b></a></p>`))
-		assert.NoError(t, err)
-	}))
-	t.Cleanup(alibServer.Close)
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			// Given
+			useOnceMode(t)
+			if testCase.configured {
+				t.Setenv("FRESH_BOOKS", testCase.freshBooks)
+			} else {
+				unsetEnvironment(t, "FRESH_BOOKS")
+			}
 
-	telegramRequests := make(chan struct{}, 8)
-	telegramServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		telegramRequests <- struct{}{}
-		assert.Equal(t, http.MethodPost, request.Method)
-		assert.Equal(t, "/bottest-token/sendMessage", request.URL.Path)
-		body, err := io.ReadAll(request.Body)
-		assert.NoError(t, err)
-		assert.NotContains(t, string(body), "test-token")
+			alibServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				assert.Equal(t, http.MethodGet, request.Method)
+				assert.Equal(t, "/tramka.phtml", request.URL.Path)
+				assert.Equal(t, "tnew=7", request.URL.RawQuery)
+				assert.Equal(t, "alib-fetcher/1.0", request.Header.Get("User-Agent"))
+				writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+				_, err := fmt.Fprintf(writer, `<p><b>Горячая книга.</b> М., %d г.<br>
+(До заказа внимательно прочтите условия продажи продавца <a href="/bs.php4?bs=BotSad">BS - BotSad</a>, Москва.)
+Цена: 3 900 руб. <a href="/hot.html"><b>Купить</b></a><br>
+Первая строка содержания.<br>Состояние: Отличное.<br>
+Смотрите: <a href="/foto.php4?id=1">фото</a></p>
+<p><b>Свежая книга.</b> М., %d г.<br>
+Цена: 500 руб. <a href="/fresh.html"><b>Купить</b></a></p>`, currentYear, freshYear)
+				assert.NoError(t, err)
+			}))
+			t.Cleanup(alibServer.Close)
 
-		var payload telegramMessagePayload
-		assert.NoError(t, json.Unmarshal(body, &payload))
-		assert.Equal(t, "-100123", payload.ChatID)
-		assert.Equal(t, "HTML", payload.ParseMode)
-		assert.False(t, payload.DisableNotification)
-		assert.True(t, payload.LinkPreviewOptions.Disabled)
-		assert.Contains(t, payload.Text, "<b>Новые книги на Alib.ru</b>")
-		assert.Contains(t, payload.Text, `<a href="`+alibServer.URL+`/book.html">Купить</a>`)
-		requireRefreshButton(t, payload)
+			telegramPayloads := make(chan telegramMessagePayload, 1)
+			telegramServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				assert.Equal(t, http.MethodPost, request.Method)
+				assert.Equal(t, "/bottest-token/sendMessage", request.URL.Path)
+				body, err := io.ReadAll(request.Body)
+				assert.NoError(t, err)
+				assert.NotContains(t, string(body), "test-token")
 
-		writer.Header().Set("Content-Type", "application/json")
-		_, err = writer.Write([]byte(`{"ok":true,"result":{}}`))
-		assert.NoError(t, err)
-	}))
-	t.Cleanup(telegramServer.Close)
+				var payload telegramMessagePayload
+				assert.NoError(t, json.Unmarshal(body, &payload))
+				telegramPayloads <- payload
 
-	t.Setenv("TELEGRAM_BOT_TOKEN", "test-token")
-	t.Setenv("TELEGRAM_CHAT_ID", "-100123")
-	t.Setenv("CRON_SCHEDULE", "0 0 * * *")
-	t.Setenv("TIMEZONE", "UTC")
-	t.Setenv("RUN_ON_STARTUP", "true")
-	t.Setenv("STATE_PATH", filepath.Join(t.TempDir(), "state.db"))
-	t.Setenv("ALIB_URL", alibServer.URL+"/tramka.phtml?tnew=7")
-	t.Setenv("TELEGRAM_API_BASE", telegramServer.URL)
-	t.Setenv("HTTP_TIMEOUT", "2s")
-	t.Setenv("MESSAGE_LIMIT", "4000")
-	var logs bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
+				writer.Header().Set("Content-Type", "application/json")
+				_, err = writer.Write([]byte(`{"ok":true,"result":{}}`))
+				assert.NoError(t, err)
+			}))
+			t.Cleanup(telegramServer.Close)
 
-	// When
-	err := run(logger)
+			setRunEnvironment(t, alibServer.URL, telegramServer.URL, filepath.Join(t.TempDir(), "state.db"))
+			var logs bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	// Then
-	require.NoError(t, err)
-	require.Len(t, telegramRequests, 1)
-	require.Contains(t, logs.String(), "digest.completed")
-	require.NotContains(t, logs.String(), "test-token")
+			// When
+			err := run(logger)
+
+			// Then
+			require.NoError(t, err)
+			require.Len(t, telegramPayloads, 1)
+			payload := <-telegramPayloads
+			require.Equal(t, "-100123", payload.ChatID)
+			require.Equal(t, "HTML", payload.ParseMode)
+			require.False(t, payload.DisableNotification)
+			require.True(t, payload.LinkPreviewOptions.Disabled)
+			require.Contains(t, payload.Text, fmt.Sprintf("🔥 <b>Горячая книга.</b> М., %d г.", currentYear))
+			require.Contains(t, payload.Text, "Первая строка содержания.\n\nПродавец: ")
+			require.Contains(t, payload.Text, `<a href="`+alibServer.URL+`/bs.php4?bs=BotSad">BotSad</a>, Москва.`)
+			require.Contains(t, payload.Text, "\nЦена: 3 900 руб.\nСостояние: Отличное.\nФото: есть\n\n")
+			require.Contains(t, payload.Text, testCase.freshEmoji+"<b>Свежая книга.</b>")
+			require.True(t, strings.HasSuffix(payload.Text, `<a href="`+alibServer.URL+`/fresh.html">Купить</a>`))
+			requireRefreshButton(t, payload)
+			require.Contains(t, logs.String(), "digest.completed")
+			require.NotContains(t, logs.String(), "test-token")
+		})
+	}
 }
 
 func Test_run_sends_only_final_wired_message_with_sound(t *testing.T) {
@@ -207,4 +241,26 @@ func requireRefreshButton(t *testing.T, payload telegramMessagePayload) {
 	require.Len(t, payload.ReplyMarkup.InlineKeyboard[0], 1)
 	require.Equal(t, "Обновить", payload.ReplyMarkup.InlineKeyboard[0][0].Text)
 	require.Equal(t, telegram.RefreshCallbackData, payload.ReplyMarkup.InlineKeyboard[0][0].CallbackData)
+}
+
+func setRunEnvironment(t *testing.T, alibURL, telegramAPIBase, statePath string) {
+	t.Helper()
+
+	t.Setenv("TELEGRAM_BOT_TOKEN", "test-token")
+	t.Setenv("TELEGRAM_CHAT_ID", "-100123")
+	t.Setenv("CRON_SCHEDULE", "0 0 * * *")
+	t.Setenv("TIMEZONE", "UTC")
+	t.Setenv("RUN_ON_STARTUP", "true")
+	t.Setenv("STATE_PATH", statePath)
+	t.Setenv("ALIB_URL", alibURL+"/tramka.phtml?tnew=7")
+	t.Setenv("TELEGRAM_API_BASE", telegramAPIBase)
+	t.Setenv("HTTP_TIMEOUT", "2s")
+	t.Setenv("MESSAGE_LIMIT", "4000")
+}
+
+func unsetEnvironment(t *testing.T, key string) {
+	t.Helper()
+
+	t.Setenv(key, "")
+	require.NoError(t, os.Unsetenv(key))
 }

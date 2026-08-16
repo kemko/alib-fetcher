@@ -48,9 +48,15 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	var freshBooks app.FreshBooksPolicy
+	if settings.FreshBooks != nil {
+		freshBooks = settings.FreshBooks
+	}
 	dependencies := app.Dependencies{
 		Fetcher:      fetcher,
 		Sender:       sender,
+		FreshBooks:   freshBooks,
+		Location:     settings.Location,
 		MessageLimit: settings.MessageLimit,
 		Now:          time.Now,
 	}

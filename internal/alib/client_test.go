@@ -33,9 +33,9 @@ func Test_Client_fetches_and_parses_page(t *testing.T) {
 	// Then
 	require.NoError(t, err)
 	require.Equal(t, []alib.Book{{
-		Title:            "Книга.",
-		TextBeforeSeller: "Цена: 100 руб.",
-		BuyURL:           server.URL + "/book.html",
+		Title:  "Книга.",
+		Price:  "100 руб.",
+		BuyURL: server.URL + "/book.html",
 	}}, books)
 }
 

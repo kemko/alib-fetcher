@@ -16,6 +16,8 @@ import (
 // ErrInvalid indicates that one or more environment values are unusable.
 var ErrInvalid = errors.New("invalid configuration")
 
+var errInvalidFreshBooks = errors.New("must use age:N with a non-negative integer or since:YYYY")
+
 const (
 	defaultAlibURL           = "https://www.alib.ru/tramka.phtml?tnew=7"
 	defaultCronSchedule      = "0 0 * * *"
@@ -28,9 +30,32 @@ const (
 	telegramHardMessageLimit = 4096
 )
 
+type freshBooksMode uint8
+
+const (
+	freshBooksAge freshBooksMode = iota
+	freshBooksSince
+)
+
+// FreshBooksPolicy describes an optional inclusive publication-year threshold.
+type FreshBooksPolicy struct {
+	mode  freshBooksMode
+	value int
+}
+
+// LowerYear returns the inclusive lower publication year for currentYear.
+func (policy FreshBooksPolicy) LowerYear(currentYear int) int {
+	if policy.mode == freshBooksAge {
+		return currentYear - policy.value
+	}
+
+	return policy.value
+}
+
 // Config contains validated process configuration.
 type Config struct {
 	Location        *time.Location
+	FreshBooks      *FreshBooksPolicy
 	TelegramToken   string
 	TelegramChatID  string
 	TelegramAPIBase string
@@ -76,6 +101,14 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("%w: RUN_ON_STARTUP must be a boolean", ErrInvalid)
 	}
+	var freshBooks *FreshBooksPolicy
+	if value := os.Getenv("FRESH_BOOKS"); value != "" {
+		policy, parseErr := parseFreshBooks(value)
+		if parseErr != nil {
+			return Config{}, fmt.Errorf("%w: FRESH_BOOKS %w", ErrInvalid, parseErr)
+		}
+		freshBooks = &policy
+	}
 
 	return Config{
 		TelegramToken:   token,
@@ -84,11 +117,50 @@ func Load() (Config, error) {
 		AlibURL:         valueOrDefault("ALIB_URL", defaultAlibURL),
 		StatePath:       valueOrDefault("STATE_PATH", defaultStatePath),
 		Location:        location,
+		FreshBooks:      freshBooks,
 		HTTPTimeout:     timeout,
 		MessageLimit:    messageLimit,
 		RunOnStartup:    runOnStartup,
 		cronSpec:        cronSpec,
 	}, nil
+}
+
+func parseFreshBooks(value string) (FreshBooksPolicy, error) {
+	mode, argument, found := strings.Cut(value, ":")
+	if !found || !containsOnlyDigits(argument) {
+		return FreshBooksPolicy{}, errInvalidFreshBooks
+	}
+
+	parsed, err := strconv.Atoi(argument)
+	if err != nil {
+		return FreshBooksPolicy{}, errInvalidFreshBooks
+	}
+
+	switch mode {
+	case "age":
+		return FreshBooksPolicy{mode: freshBooksAge, value: parsed}, nil
+	case "since":
+		if len(argument) != 4 || parsed < 1000 {
+			return FreshBooksPolicy{}, errInvalidFreshBooks
+		}
+
+		return FreshBooksPolicy{mode: freshBooksSince, value: parsed}, nil
+	default:
+		return FreshBooksPolicy{}, errInvalidFreshBooks
+	}
+}
+
+func containsOnlyDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, character := range value {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+
+	return true
 }
 
 // CronSpec returns the validated cron schedule.
