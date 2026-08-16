@@ -226,13 +226,13 @@ Telegram-сообщение получит маркеры `🔥`/`✨`, отде
 - Modify: `README.md`
 - Modify: `AGENTS.md`
 
-- [ ] Описать необязательный `FRESH_BOOKS`: отсутствие значения отключает только `✨`, а `🔥`
+- [x] Описать необязательный `FRESH_BOOKS`: отсутствие значения отключает только `✨`, а `🔥`
   продолжает работать.
-- [ ] Документировать синтаксис `age:N`/`since:YYYY`, включительные границы и январское правило.
-- [ ] Описать значения `🔥`/`✨` и новый порядок блоков Telegram-сообщения.
-- [ ] Обновить описание сохраняемой модели `Book`, JSON compatibility и DOM-first parsing.
-- [ ] Документировать `make coverage`.
-- [ ] Добавить credential-free Compose/runtime override example.
-- [ ] Повторно выполнить `make verify` и `make coverage`.
-- [ ] Повторно проверить Compose configuration и финальный diff.
-- [ ] Stage только относящиеся к задаче файлы и создать один сфокусированный Conventional Commit.
+- [x] Документировать синтаксис `age:N`/`since:YYYY`, включительные границы и январское правило.
+- [x] Описать значения `🔥`/`✨` и новый порядок блоков Telegram-сообщения.
+- [x] Обновить описание сохраняемой модели `Book`, JSON compatibility и DOM-first parsing.
+- [x] Документировать `make coverage`.
+- [x] Добавить credential-free Compose/runtime override example.
+- [x] Повторно выполнить `make verify` и `make coverage`.
+- [x] Повторно проверить Compose configuration и финальный diff.
+- [x] Stage только относящиеся к задаче файлы и создать один сфокусированный Conventional Commit.
