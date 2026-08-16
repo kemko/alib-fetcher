@@ -84,19 +84,19 @@
 - Modify: `internal/telegram/sender_test.go`
 - Create: `internal/telegram/sender_internal_test.go` only if custom `RoundTripper` is required
 
-- [ ] Добавить regression test: non-200 plain-text/malformed response возвращает `telegram.ErrRejected` и HTTP
+- [x] Добавить regression test: non-200 plain-text/malformed response возвращает `telegram.ErrRejected` и HTTP
   status, а не generic JSON decode error.
-- [ ] Добавить regression test: body read failure классифицируется как `telegram.ErrRequest`; canceled context
+- [x] Добавить regression test: body read failure классифицируется как `telegram.ErrRequest`; canceled context
   остаётся доступен через `errors.Is`.
-- [ ] Добавить regression tests для response больше 1 MiB и trailing non-whitespace data после JSON document.
-- [ ] Прочитать максимум `maxAPIResponseBytes+1`, явно отклонить oversized response и декодировать ровно один
+- [x] Добавить regression tests для response больше 1 MiB и trailing non-whitespace data после JSON document.
+- [x] Прочитать максимум `maxAPIResponseBytes+1`, явно отклонить oversized response и декодировать ровно один
   JSON document.
-- [ ] Для non-200/`ok:false` сохранить description и `retry_after`; при невалидном error body использовать HTTP
+- [x] Для non-200/`ok:false` сохранить description и `retry_after`; при невалидном error body использовать HTTP
   status.
-- [ ] После полного успешного чтения не превращать подтверждённый `ok:true` delivery в retryable failure только
+- [x] После полного успешного чтения не превращать подтверждённый `ok:true` delivery в retryable failure только
   из-за `Body.Close`; close error присоединять только к уже существующей read/protocol error.
-- [ ] Сохранить token-safe errors: transport details с URL/token наружу не возвращать.
-- [ ] Run `make test` and `make lint`; both must pass before Task 3.
+- [x] Сохранить token-safe errors: transport details с URL/token наружу не возвращать.
+- [x] Run `make test` and `make lint`; both must pass before Task 3.
 
 ### Task 3: Не маскировать повреждение state DB под legacy migration
 
