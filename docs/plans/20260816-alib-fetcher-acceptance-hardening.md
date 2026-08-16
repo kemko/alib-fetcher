@@ -125,16 +125,16 @@
 - Modify: `.dockerignore`
 - Modify: `.github/workflows/ci.yml`
 
-- [ ] Добавить `.env`/`.env.*` в `.gitignore`, оставив возможность tracked `.env.example`.
-- [ ] Исключить `.env*`, `data/`, state databases и `.ralphex/` из Docker build context.
-- [ ] Добавить automated checks через `git check-ignore --no-index` для representative `.env`, `.env.local` и
+- [x] Добавить `.env`/`.env.*` в `.gitignore`, оставив возможность tracked `.env.example`.
+- [x] Исключить `.env*`, `data/`, state databases и `.ralphex/` из Docker build context.
+- [x] Добавить automated checks через `git check-ignore --no-index` для representative `.env`, `.env.local` и
   `data/state.db`.
-- [ ] Перестроить image job: после `verify` собирать Docker image на PR и push; login/push `latest` выполнять
+- [x] Перестроить image job: после `verify` собирать Docker image на PR и push; login/push `latest` выполнять
   только для успешного push в `master`.
-- [ ] Не выполнять две одинаковые image builds на `master`.
-- [ ] Проверить Compose с dummy required environment через `docker compose config`.
-- [ ] Собрать production Dockerfile локально или в эквивалентном BuildKit environment.
-- [ ] Run `make verify`; must pass before Task 5.
+- [x] Не выполнять две одинаковые image builds на `master`.
+- [x] Проверить Compose с dummy required environment через `docker compose config`.
+- [x] Собрать production Dockerfile локально или в эквивалентном BuildKit environment.
+- [x] Run `make verify`; must pass before Task 5.
 
 ### Task 5: Verify acceptance criteria
 

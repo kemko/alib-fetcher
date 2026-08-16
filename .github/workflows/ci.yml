@@ -26,18 +26,28 @@ jobs:
         with:
           go-package: ./...
 
-  publish:
-    name: Publish image
+  image:
+    name: Build image
     needs: verify
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v5
+      - name: Verify local files are ignored
+        run: |
+          git check-ignore --no-index --quiet .env
+          git check-ignore --no-index --quiet .env.local
+          git check-ignore --no-index --quiet data/state.db
+      - name: Validate Compose configuration
+        env:
+          TELEGRAM_BOT_TOKEN: dummy-token
+          TELEGRAM_CHAT_ID: "-1001234567890"
+        run: docker compose config --quiet
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -50,7 +60,7 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
           cache-from: type=gha
