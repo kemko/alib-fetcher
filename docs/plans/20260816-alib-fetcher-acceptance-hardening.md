@@ -142,16 +142,16 @@
 
 - Modify tests only if verification exposes a real regression or missing assertion.
 
-- [ ] Run full canonical gate: `make verify`.
-- [ ] Run coverage using a temporary file outside repository and verify total statement coverage remains at
+- [x] Run full canonical gate: `make verify`.
+- [x] Run coverage using a temporary file outside repository and verify total statement coverage remains at
   least 80%.
-- [ ] Run production Docker image build.
-- [ ] Verify numeric and `@channel` chat IDs remain supported; invalid values fail before process startup.
-- [ ] Verify Telegram flood-control `retry_after`, context cancellation and token secrecy remain intact.
-- [ ] Verify valid legacy markers still migrate while corrupt structured records fail without mutation.
-- [ ] Verify PR workflow builds but does not push image; successful `master` push builds once and publishes
+- [x] Run production Docker image build.
+- [x] Verify numeric and `@channel` chat IDs remain supported; invalid values fail before process startup.
+- [x] Verify Telegram flood-control `retry_after`, context cancellation and token secrecy remain intact.
+- [x] Verify valid legacy markers still migrate while corrupt structured records fail without mutation.
+- [x] Verify PR workflow builds but does not push image; successful `master` push builds once and publishes
   `latest`.
-- [ ] Inspect final diff and index; include only task-related changes.
+- [x] Inspect final diff and index; include only task-related changes.
 
 ### Task 6: Update documentation
 
