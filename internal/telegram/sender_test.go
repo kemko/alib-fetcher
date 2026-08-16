@@ -386,7 +386,7 @@ func Test_Sender_rejects_trailing_data_after_API_response(t *testing.T) {
 
 	// Then
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "trailing data")
+	assert.Contains(t, err.Error(), "decode Telegram response")
 }
 
 func Test_Sender_returns_decode_error_for_invalid_response(t *testing.T) {

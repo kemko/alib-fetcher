@@ -56,6 +56,53 @@ func Test_Sender_ignores_close_failure_after_successful_response(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func Test_Sender_limits_API_response_read(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	reader := &countingReader{}
+	sender := newTestSenderWithBody(&testResponseBody{reader: reader})
+
+	// When
+	err := sender.Send(context.Background(), "digest", false, false)
+
+	// Then
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "response exceeds")
+	require.Equal(t, maxAPIResponseBytes+1, reader.bytesRead)
+}
+
+func Test_parseAPIResponse_accepts_response_at_size_limit(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	prefix := []byte(`{"ok":true}`)
+	body := append(prefix, bytes.Repeat([]byte(" "), maxAPIResponseBytes-len(prefix))...)
+	response := &http.Response{Status: "200 OK", StatusCode: http.StatusOK}
+
+	// When
+	result, err := parseAPIResponse(response, body)
+
+	// Then
+	require.NoError(t, err)
+	require.True(t, result.OK)
+}
+
+func Test_parseAPIResponse_classifies_oversized_HTTP_error_as_rejected(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	body := bytes.Repeat([]byte("x"), maxAPIResponseBytes+1)
+	response := &http.Response{Status: "502 Bad Gateway", StatusCode: http.StatusBadGateway}
+
+	// When
+	_, err := parseAPIResponse(response, body)
+
+	// Then
+	require.ErrorIs(t, err, ErrRejected)
+	require.Contains(t, err.Error(), "502 Bad Gateway")
+}
+
 func Test_Sender_hides_transport_error_details(t *testing.T) {
 	t.Parallel()
 
@@ -86,6 +133,19 @@ type testResponseBody struct {
 	readErr    error
 	closeErr   error
 	beforeRead func()
+}
+
+type countingReader struct {
+	bytesRead int
+}
+
+func (reader *countingReader) Read(buffer []byte) (int, error) {
+	for index := range buffer {
+		buffer[index] = ' '
+	}
+	reader.bytesRead += len(buffer)
+
+	return len(buffer), nil
 }
 
 func (body *testResponseBody) Read(buffer []byte) (int, error) {

@@ -26,28 +26,78 @@ jobs:
         with:
           go-package: ./...
 
+  container:
+    name: Verify container inputs
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - name: Verify local files are ignored
+        run: |
+          git check-ignore --no-index --quiet .env
+          git check-ignore --no-index --quiet .env.local
+          git check-ignore --no-index --quiet data/state.db
+          if git check-ignore --no-index --quiet .env.example; then
+            exit 1
+          fi
+          mkdir -p data nested .ralphex
+          touch .env .env.local data/state.db state.db nested/state.db .ralphex/secret
+          docker buildx build \
+            --file .github/docker-context.Dockerfile \
+            --output type=local,dest="${RUNNER_TEMP}/docker-context" \
+            .
+          test -f "${RUNNER_TEMP}/docker-context/context/go.mod"
+          test ! -e "${RUNNER_TEMP}/docker-context/context/.env"
+          test ! -e "${RUNNER_TEMP}/docker-context/context/.env.local"
+          test ! -e "${RUNNER_TEMP}/docker-context/context/data/state.db"
+          test ! -e "${RUNNER_TEMP}/docker-context/context/state.db"
+          test ! -e "${RUNNER_TEMP}/docker-context/context/nested/state.db"
+          test ! -e "${RUNNER_TEMP}/docker-context/context/.ralphex/secret"
+      - name: Validate Compose configuration
+        env:
+          TELEGRAM_BOT_TOKEN: dummy-token
+          TELEGRAM_CHAT_ID: "-1001234567890"
+        run: docker compose config --quiet
+
   image:
     name: Build image
-    needs: verify
+    needs: container
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - id: metadata
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: type=raw,value=latest
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  publish:
+    name: Publish image
+    needs: container
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v5
-      - name: Verify local files are ignored
-        run: |
-          git check-ignore --no-index --quiet .env
-          git check-ignore --no-index --quiet .env.local
-          git check-ignore --no-index --quiet data/state.db
-      - name: Validate Compose configuration
-        env:
-          TELEGRAM_BOT_TOKEN: dummy-token
-          TELEGRAM_CHAT_ID: "-1001234567890"
-        run: docker compose config --quiet
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
-        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -60,7 +110,7 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
-          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          push: true
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
           cache-from: type=gha

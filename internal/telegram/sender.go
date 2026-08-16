@@ -160,10 +160,6 @@ func parseAPIResponse(response *http.Response, body []byte) (apiResponse, error)
 
 	apiResult, decodeErr := decodeAPIResponse(body)
 	if response.StatusCode != http.StatusOK {
-		if decodeErr != nil {
-			apiResult = apiResponse{}
-		}
-
 		return apiResponse{}, newRejectedError(response, apiResult)
 	}
 	if decodeErr != nil {
@@ -177,22 +173,12 @@ func parseAPIResponse(response *http.Response, body []byte) (apiResponse, error)
 }
 
 func decodeAPIResponse(body []byte) (apiResponse, error) {
-	decoder := json.NewDecoder(bytes.NewReader(body))
 	var result apiResponse
-	if err := decoder.Decode(&result); err != nil {
+	if err := json.Unmarshal(body, &result); err != nil {
 		return apiResponse{}, fmt.Errorf("decode Telegram response: %w", err)
 	}
 
-	var trailing json.RawMessage
-	trailingErr := decoder.Decode(&trailing)
-	if errors.Is(trailingErr, io.EOF) {
-		return result, nil
-	}
-	if trailingErr != nil {
-		return apiResponse{}, fmt.Errorf("decode Telegram response: trailing data: %w", trailingErr)
-	}
-
-	return apiResponse{}, errors.New("decode Telegram response: trailing data after JSON document")
+	return result, nil
 }
 
 func newRejectedError(response *http.Response, result apiResponse) error {

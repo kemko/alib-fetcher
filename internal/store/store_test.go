@@ -314,7 +314,7 @@ func Test_Open_rejects_malformed_json_record_without_replacing_it(t *testing.T) 
 	// Given
 	path := filepath.Join(t.TempDir(), "state.db")
 	buyURL := "https://example.com/malformed-record"
-	malformedRecord := []byte(`{"book":`)
+	malformedRecord := []byte(" \n\t" + `{"book":`)
 	require.NoError(t, writeLegacyMarker(path, buyURL, malformedRecord))
 
 	// When
@@ -346,7 +346,7 @@ func Test_Open_rejects_json_record_with_buy_url_different_from_key(t *testing.T)
 	require.Equal(t, record, readRawRecord(t, path, buyURL))
 }
 
-func Test_Open_rolls_back_neighboring_legacy_migration_when_record_is_corrupt(t *testing.T) {
+func Test_Open_rolls_back_neighboring_legacy_migration_when_record_has_no_buy_url(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -354,7 +354,7 @@ func Test_Open_rolls_back_neighboring_legacy_migration_when_record_is_corrupt(t 
 	legacyURL := "https://example.com/a-legacy"
 	corruptURL := "https://example.com/z-corrupt"
 	legacyMarker := []byte{1}
-	corruptRecord := []byte(`{"book":`)
+	corruptRecord := []byte(`{"book":{},"sent":true}`)
 	require.NoError(t, writeLegacyMarker(path, legacyURL, legacyMarker))
 	require.NoError(t, writeLegacyMarker(path, corruptURL, corruptRecord))
 
@@ -364,6 +364,7 @@ func Test_Open_rolls_back_neighboring_legacy_migration_when_record_is_corrupt(t 
 	// Then
 	require.Nil(t, db)
 	require.Error(t, err)
+	require.Contains(t, err.Error(), "missing buy URL")
 	require.Equal(t, legacyMarker, readRawRecord(t, path, legacyURL))
 	require.Equal(t, corruptRecord, readRawRecord(t, path, corruptURL))
 }
