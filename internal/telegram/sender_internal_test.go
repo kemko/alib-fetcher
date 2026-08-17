@@ -169,7 +169,7 @@ func newTestSenderWithTransport(t *testing.T, transport http.RoundTripper) *Send
 		APIBase: "https://api.telegram.org",
 		Token:   "test-token",
 		ChatID:  "-100123",
-		Timeout: time.Second,
+		Timeout: 2 * time.Second,
 	}, &http.Client{Transport: transport})
 	require.NoError(t, err)
 

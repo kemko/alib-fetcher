@@ -140,7 +140,7 @@ func Test_Sender_listens_for_registered_refresh_callbacks(t *testing.T) {
 	assert.Equal(t, int32(3), callbackCount.Load())
 }
 
-func Test_Sender_listener_uses_short_poll_when_timeout_cannot_exceed_long_poll(t *testing.T) {
+func Test_Sender_listener_uses_minimum_poll_timeout(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -155,7 +155,7 @@ func Test_Sender_listener_uses_short_poll_when_timeout_cannot_exceed_long_poll(t
 		}
 		assert.Equal(t, "/bottest-token/getUpdates", request.URL.Path)
 		payload := readMultipartPayload(t, request)
-		assert.NotContains(t, payload, "timeout")
+		assert.Equal(t, "1", payload["timeout"])
 		assert.JSONEq(t, `["callback_query"]`, payload["allowed_updates"])
 		writer.Header().Set("Content-Type", "application/json")
 		_, err := writer.Write([]byte(`{
@@ -172,7 +172,7 @@ func Test_Sender_listener_uses_short_poll_when_timeout_cannot_exceed_long_poll(t
 		APIBase: server.URL,
 		Token:   "test-token",
 		ChatID:  "-100123",
-		Timeout: time.Second,
+		Timeout: 2 * time.Second,
 	})
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -316,7 +316,7 @@ func Test_Sender_listener_reports_poll_error_and_recovers(t *testing.T) {
 		APIBase: server.URL,
 		Token:   "test-token",
 		ChatID:  "-100123",
-		Timeout: time.Second,
+		Timeout: 2 * time.Second,
 	})
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -405,6 +405,6 @@ func newTestSender(apiBase string) (*telegram.Sender, error) {
 		APIBase: apiBase,
 		Token:   "test-token",
 		ChatID:  "-100123",
-		Timeout: time.Second,
+		Timeout: 2 * time.Second,
 	})
 }

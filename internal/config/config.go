@@ -22,6 +22,7 @@ const (
 	defaultAlibURL           = "https://www.alib.ru/tramka.phtml?tnew=7"
 	defaultCronSchedule      = "0 0 * * *"
 	defaultHTTPTimeout       = 30 * time.Second
+	minimumHTTPTimeout       = 2 * time.Second
 	defaultMessageLimit      = 4000
 	defaultRunOnStartup      = true
 	defaultStatePath         = "/var/lib/alib-fetcher/state.db"
@@ -90,8 +91,12 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("%w: load TIMEZONE: %w", ErrInvalid, err)
 	}
 	timeout, err := time.ParseDuration(valueOrDefault("HTTP_TIMEOUT", defaultHTTPTimeout.String()))
-	if err != nil || timeout <= 0 {
-		return Config{}, fmt.Errorf("%w: HTTP_TIMEOUT must be a positive Go duration", ErrInvalid)
+	if err != nil || timeout < minimumHTTPTimeout {
+		return Config{}, fmt.Errorf(
+			"%w: HTTP_TIMEOUT must be a Go duration of at least %s",
+			ErrInvalid,
+			minimumHTTPTimeout,
+		)
 	}
 	messageLimit, err := strconv.Atoi(valueOrDefault("MESSAGE_LIMIT", strconv.Itoa(defaultMessageLimit)))
 	if err != nil || messageLimit < 64 || messageLimit > telegramHardMessageLimit {

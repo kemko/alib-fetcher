@@ -39,7 +39,7 @@ func Test_Sender_posts_silent_rich_HTML_message(t *testing.T) {
 		APIBase: server.URL,
 		Token:   "test-token",
 		ChatID:  "-100123",
-		Timeout: time.Second,
+		Timeout: 2 * time.Second,
 	})
 	require.NoError(t, err)
 
@@ -67,7 +67,7 @@ func Test_Sender_posts_audible_HTML_message_with_notification_enabled(t *testing
 		APIBase: server.URL,
 		Token:   "test-token",
 		ChatID:  "-100123",
-		Timeout: time.Second,
+		Timeout: 2 * time.Second,
 	})
 	require.NoError(t, err)
 
@@ -109,7 +109,7 @@ func Test_Sender_posts_refresh_button_when_requested(t *testing.T) {
 		APIBase: server.URL,
 		Token:   "test-token",
 		ChatID:  "-100123",
-		Timeout: time.Second,
+		Timeout: 2 * time.Second,
 	})
 	require.NoError(t, err)
 
@@ -134,7 +134,7 @@ func Test_Sender_returns_API_description_on_rejection(t *testing.T) {
 		APIBase: server.URL,
 		Token:   "test-token",
 		ChatID:  "missing",
-		Timeout: time.Second,
+		Timeout: 2 * time.Second,
 	})
 	require.NoError(t, err)
 
@@ -166,7 +166,7 @@ func Test_Sender_classifies_chat_migration_as_rejection(t *testing.T) {
 		APIBase: server.URL,
 		Token:   "test-token",
 		ChatID:  "-100123",
-		Timeout: time.Second,
+		Timeout: 2 * time.Second,
 	})
 	require.NoError(t, err)
 
@@ -196,7 +196,7 @@ func Test_Sender_redacts_token_and_API_URL_from_rejection(t *testing.T) {
 		APIBase: server.URL,
 		Token:   "test-token",
 		ChatID:  "missing",
-		Timeout: time.Second,
+		Timeout: 2 * time.Second,
 	})
 	require.NoError(t, err)
 
@@ -229,7 +229,7 @@ func Test_Sender_exposes_Telegram_retry_delay(t *testing.T) {
 		APIBase: server.URL,
 		Token:   "test-token",
 		ChatID:  "-100123",
-		Timeout: time.Second,
+		Timeout: 2 * time.Second,
 	})
 	require.NoError(t, err)
 
@@ -258,7 +258,7 @@ func Test_NewSender_validates_configuration(t *testing.T) {
 				APIBase: "file:///tmp",
 				Token:   "test-token",
 				ChatID:  "-100123",
-				Timeout: time.Second,
+				Timeout: 2 * time.Second,
 			},
 		},
 		{
@@ -267,7 +267,7 @@ func Test_NewSender_validates_configuration(t *testing.T) {
 				APIBase: "://",
 				Token:   "test-token",
 				ChatID:  "-100123",
-				Timeout: time.Second,
+				Timeout: 2 * time.Second,
 			},
 		},
 		{
@@ -276,7 +276,7 @@ func Test_NewSender_validates_configuration(t *testing.T) {
 				APIBase: "https:///telegram",
 				Token:   "test-token",
 				ChatID:  "-100123",
-				Timeout: time.Second,
+				Timeout: 2 * time.Second,
 			},
 		},
 		{
@@ -284,7 +284,7 @@ func Test_NewSender_validates_configuration(t *testing.T) {
 			config: telegram.Config{
 				APIBase: "https://api.telegram.org",
 				ChatID:  "-100123",
-				Timeout: time.Second,
+				Timeout: 2 * time.Second,
 			},
 		},
 		{
@@ -292,7 +292,7 @@ func Test_NewSender_validates_configuration(t *testing.T) {
 			config: telegram.Config{
 				APIBase: "https://api.telegram.org",
 				Token:   "test-token",
-				Timeout: time.Second,
+				Timeout: 2 * time.Second,
 			},
 		},
 		{
@@ -301,6 +301,15 @@ func Test_NewSender_validates_configuration(t *testing.T) {
 				APIBase: "https://api.telegram.org",
 				Token:   "test-token",
 				ChatID:  "-100123",
+			},
+		},
+		{
+			name: "timeout shorter than minimum poll duration",
+			config: telegram.Config{
+				APIBase: "https://api.telegram.org",
+				Token:   "test-token",
+				ChatID:  "-100123",
+				Timeout: 1999 * time.Millisecond,
 			},
 		},
 	}
@@ -334,7 +343,7 @@ func Test_Sender_uses_HTTP_status_when_rejection_has_no_description(t *testing.T
 		APIBase: server.URL,
 		Token:   "test-token",
 		ChatID:  "-100123",
-		Timeout: time.Second,
+		Timeout: 2 * time.Second,
 	})
 	require.NoError(t, err)
 
@@ -361,7 +370,7 @@ func Test_Sender_rejects_success_body_with_unsuccessful_HTTP_status(t *testing.T
 		APIBase: server.URL,
 		Token:   "test-token",
 		ChatID:  "-100123",
-		Timeout: time.Second,
+		Timeout: 2 * time.Second,
 	})
 	require.NoError(t, err)
 
@@ -373,7 +382,7 @@ func Test_Sender_rejects_success_body_with_unsuccessful_HTTP_status(t *testing.T
 	require.Contains(t, err.Error(), "Bad Gateway")
 }
 
-func Test_Sender_returns_decode_error_for_non_JSON_HTTP_rejection(t *testing.T) {
+func Test_Sender_uses_HTTP_status_for_undecodable_HTTP_rejection(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -382,6 +391,7 @@ func Test_Sender_returns_decode_error_for_non_JSON_HTTP_rejection(t *testing.T) 
 	}{
 		{name: "plain text", body: "upstream unavailable"},
 		{name: "malformed JSON", body: `{"ok":false`},
+		{name: "oversized", body: `{"ok":false}` + strings.Repeat(" ", 1<<20)},
 	}
 
 	for _, tt := range tests {
@@ -399,7 +409,7 @@ func Test_Sender_returns_decode_error_for_non_JSON_HTTP_rejection(t *testing.T) 
 				APIBase: server.URL,
 				Token:   "test-token",
 				ChatID:  "-100123",
-				Timeout: time.Second,
+				Timeout: 2 * time.Second,
 			})
 			require.NoError(t, err)
 
@@ -408,8 +418,8 @@ func Test_Sender_returns_decode_error_for_non_JSON_HTTP_rejection(t *testing.T) 
 
 			// Then
 			require.Error(t, err)
-			assert.NotErrorIs(t, err, telegram.ErrRejected)
-			assert.Contains(t, err.Error(), "decode Telegram response")
+			require.ErrorIs(t, err, telegram.ErrRejected)
+			assert.Contains(t, err.Error(), "502 Bad Gateway")
 		})
 	}
 }
@@ -427,7 +437,7 @@ func Test_Sender_rejects_oversized_API_response(t *testing.T) {
 		APIBase: server.URL,
 		Token:   "test-token",
 		ChatID:  "-100123",
-		Timeout: time.Second,
+		Timeout: 2 * time.Second,
 	})
 	require.NoError(t, err)
 
@@ -454,7 +464,7 @@ func Test_Sender_rejects_trailing_data_after_API_response(t *testing.T) {
 		APIBase: server.URL,
 		Token:   "test-token",
 		ChatID:  "-100123",
-		Timeout: time.Second,
+		Timeout: 2 * time.Second,
 	})
 	require.NoError(t, err)
 
@@ -480,7 +490,7 @@ func Test_Sender_returns_decode_error_for_invalid_response(t *testing.T) {
 		APIBase: server.URL,
 		Token:   "test-token",
 		ChatID:  "-100123",
-		Timeout: time.Second,
+		Timeout: 2 * time.Second,
 	})
 	require.NoError(t, err)
 
@@ -501,7 +511,7 @@ func Test_Sender_returns_request_error_for_transport_failure(t *testing.T) {
 		APIBase: server.URL,
 		Token:   "test-token",
 		ChatID:  "-100123",
-		Timeout: time.Second,
+		Timeout: 2 * time.Second,
 	})
 	require.NoError(t, err)
 	server.Close()
@@ -521,7 +531,7 @@ func Test_Sender_returns_context_error_when_request_is_canceled(t *testing.T) {
 		APIBase: "https://api.telegram.org",
 		Token:   "test-token",
 		ChatID:  "-100123",
-		Timeout: time.Second,
+		Timeout: 2 * time.Second,
 	})
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())

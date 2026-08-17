@@ -152,7 +152,7 @@ Optional defaults:
 | `STATE_PATH` | `/var/lib/alib-fetcher/state.db` | bbolt database; parent directories are created with mode `0750`, DB with `0600` |
 | `ALIB_URL` | `https://www.alib.ru/tramka.phtml?tnew=7` | HTTP(S) source; override it in integration tests |
 | `TELEGRAM_API_BASE` | `https://api.telegram.org` | HTTP(S) API base; override it in tests |
-| `HTTP_TIMEOUT` | `30s` | positive Go duration applied per external request |
+| `HTTP_TIMEOUT` | `30s` | Go duration of at least `2s`, applied per external request |
 | `MESSAGE_LIMIT` | `4000` | rune count, allowed range 64..4096 |
 
 Invalid configuration, including a malformed or overflowing

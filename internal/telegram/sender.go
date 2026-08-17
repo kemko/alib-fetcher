@@ -26,7 +26,10 @@ const RefreshCallbackData = "refresh"
 
 const refreshButtonText = "Обновить"
 
-const maxAPIResponseBytes = 1 << 20
+const (
+	maxAPIResponseBytes = 1 << 20
+	minimumHTTPTimeout  = 2 * time.Second
+)
 
 var errResponseTooLarge = fmt.Errorf("response exceeds %d bytes", maxAPIResponseBytes)
 
@@ -97,8 +100,8 @@ func validateConfig(config Config) (string, error) {
 	if endpoint.Host == "" || config.Token == "" || config.ChatID == "" {
 		return "", errors.New("create Telegram sender: API host, token, and chat ID are required")
 	}
-	if config.Timeout <= 0 {
-		return "", errors.New("create Telegram sender: timeout must be positive")
+	if config.Timeout < minimumHTTPTimeout {
+		return "", fmt.Errorf("create Telegram sender: timeout must be at least %s", minimumHTTPTimeout)
 	}
 
 	endpoint.RawQuery = ""
@@ -136,13 +139,17 @@ func (s *Sender) Send(ctx context.Context, text string, silent bool, attachRefre
 func (s *Sender) normalizeSDKCallError(ctx context.Context, call *sdkCall, err error) error {
 	unsuccessfulStatus := call.statusCode != 0 &&
 		(call.statusCode < http.StatusOK || call.statusCode >= http.StatusMultipleChoices)
-	if err == nil && unsuccessfulStatus {
+	normalizedErr := s.normalizeSDKError(ctx, err)
+	if unsuccessfulStatus {
+		if normalizedErr != nil && (errors.Is(normalizedErr, ErrRejected) || ctx.Err() != nil) {
+			return normalizedErr
+		}
 		description := strings.TrimSpace(fmt.Sprintf("%d %s", call.statusCode, http.StatusText(call.statusCode)))
 
 		return &rejectedError{description: description}
 	}
 
-	return s.normalizeSDKError(ctx, err)
+	return normalizedErr
 }
 
 func (s *Sender) normalizeSDKError(ctx context.Context, err error) error {
