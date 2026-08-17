@@ -12,7 +12,10 @@ import (
 	"github.com/kemko/alib-fetcher/internal/alib"
 )
 
-const header = "<b>Новые книги на Alib.ru</b>\n\n"
+const (
+	header           = "<b>Новые книги на Alib.ru</b>\n\n"
+	listingSeparator = "\n\n<hr/>\n\n"
+)
 
 // ErrMessageTooLong indicates that one listing cannot fit into a message.
 var ErrMessageTooLong = errors.New("digest item exceeds message limit")
@@ -42,7 +45,7 @@ func Render(books []alib.Book, options Options) ([]Chunk, error) {
 		item := renderBook(book, options)
 		separator := ""
 		if len(current.Books) > 0 {
-			separator = "\n\n"
+			separator = listingSeparator
 		}
 
 		if utf8.RuneCountInString(current.Text+separator+item) > options.Limit {

@@ -49,13 +49,13 @@
 - Modify: `internal/digest/render.go`
 - Modify: `internal/digest/render_test.go`
 
-- [ ] Add or update a render test with multiple books in one chunk asserting exactly one `<hr/>` between adjacent books.
-- [ ] Assert no `<hr/>` appears before the first rendered book.
-- [ ] Assert no `<hr/>` appears after the last rendered book.
-- [ ] Change `digest.Render` separator from the current blank-line-only separator to an `<hr/>` separator.
-- [ ] Keep split behavior unchanged: when adding book plus separator would exceed `MESSAGE_LIMIT`, start a new chunk without leading `<hr/>`.
-- [ ] Update existing expected render strings affected by the new separator.
-- [ ] Run `make test` and fix failures before Task 2.
+- [x] Add or update a render test with multiple books in one chunk asserting exactly one `<hr/>` between adjacent books.
+- [x] Assert no `<hr/>` appears before the first rendered book.
+- [x] Assert no `<hr/>` appears after the last rendered book.
+- [x] Change `digest.Render` separator from the current blank-line-only separator to an `<hr/>` separator.
+- [x] Keep split behavior unchanged: when adding book plus separator would exceed `MESSAGE_LIMIT`, start a new chunk without leading `<hr/>`.
+- [x] Update existing expected render strings affected by the new separator.
+- [x] Run `make test` and fix failures before Task 2.
 
 ### Task 2: Перевести Telegram sender на sendRichMessage
 
