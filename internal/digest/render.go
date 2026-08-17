@@ -12,7 +12,11 @@ import (
 	"github.com/kemko/alib-fetcher/internal/alib"
 )
 
-const header = "<b>Новые книги на Alib.ru</b>\n\n"
+const (
+	header           = "<p><b>Новые книги на Alib.ru</b></p>"
+	lineBreak        = "<br>"
+	listingSeparator = "<hr/>"
+)
 
 // ErrMessageTooLong indicates that one listing cannot fit into a message.
 var ErrMessageTooLong = errors.New("digest item exceeds message limit")
@@ -32,48 +36,68 @@ type Chunk struct {
 
 // Render formats books as Telegram HTML and splits only between listings.
 func Render(books []alib.Book, options Options) ([]Chunk, error) {
+	chunks, _, err := render(books, options, false)
+
+	return chunks, err
+}
+
+// RenderSendable formats every listing that fits and reports the oversized listings it skipped.
+func RenderSendable(books []alib.Book, options Options) ([]Chunk, []string, error) {
+	return render(books, options, true)
+}
+
+func render(books []alib.Book, options Options, skipOversized bool) ([]Chunk, []string, error) {
 	if len(books) == 0 {
-		return nil, nil
+		return nil, nil, nil
+	}
+	if utf8.RuneCountInString(header) > options.Limit {
+		return nil, nil, fmt.Errorf("%w: %s", ErrMessageTooLong, books[0].BuyURL)
 	}
 
 	chunks := make([]Chunk, 0, 1)
+	skippedBuyURLs := make([]string, 0)
 	current := Chunk{Text: header, Books: make([]alib.Book, 0)}
 	for _, book := range books {
 		item := renderBook(book, options)
+		if utf8.RuneCountInString(item) > options.Limit {
+			if skipOversized {
+				skippedBuyURLs = append(skippedBuyURLs, book.BuyURL)
+				continue
+			}
+
+			return nil, nil, fmt.Errorf("%w: %s", ErrMessageTooLong, book.BuyURL)
+		}
 		separator := ""
 		if len(current.Books) > 0 {
-			separator = "\n\n"
+			separator = listingSeparator
 		}
 
 		if utf8.RuneCountInString(current.Text+separator+item) > options.Limit {
-			if len(current.Books) == 0 {
-				return nil, fmt.Errorf("%w: %s", ErrMessageTooLong, book.BuyURL)
-			}
 			chunks = append(chunks, current)
-			current = Chunk{Text: header, Books: make([]alib.Book, 0)}
+			current = Chunk{Books: make([]alib.Book, 0)}
 			separator = ""
-		}
-		if utf8.RuneCountInString(current.Text+item) > options.Limit {
-			return nil, fmt.Errorf("%w: %s", ErrMessageTooLong, book.BuyURL)
 		}
 
 		current.Text += separator + item
 		current.Books = append(current.Books, book)
 	}
+	if len(current.Books) == 0 {
+		return nil, skippedBuyURLs, nil
+	}
 
-	return append(chunks, current), nil
+	return append(chunks, current), skippedBuyURLs, nil
 }
 
 func renderBook(book alib.Book, options Options) string {
 	mainLine := publicationEmoji(book.PublicationYear, options) +
 		"<b>" + html.EscapeString(strings.TrimSpace(book.Title)) + "</b>"
 	if bibliography := strings.TrimSpace(book.Bibliography); bibliography != "" {
-		mainLine += " " + html.EscapeString(bibliography)
+		mainLine += " " + renderMultilineText(bibliography)
 	}
 
-	paragraphs := []string{mainLine}
+	paragraphs := []string{"<p>" + mainLine + "</p>"}
 	if content := strings.TrimSpace(book.Content); content != "" {
-		paragraphs = append(paragraphs, html.EscapeString(content))
+		paragraphs = append(paragraphs, "<p>"+renderMultilineText(content)+"</p>")
 	}
 
 	details := make([]string, 0, 4)
@@ -84,17 +108,25 @@ func renderBook(book alib.Book, options Options) string {
 		details = append(details, "Цена: "+html.EscapeString(price))
 	}
 	if condition := strings.TrimSpace(book.Condition); condition != "" {
-		details = append(details, html.EscapeString(condition))
+		details = append(details, renderMultilineText(condition))
 	}
 	if book.HasPhotos {
 		details = append(details, "Фото: есть")
 	} else {
 		details = append(details, "Фото: нет")
 	}
-	paragraphs = append(paragraphs, strings.Join(details, "\n"))
-	paragraphs = append(paragraphs, renderLink(book.BuyURL, "Купить"))
+	paragraphs = append(paragraphs, "<p>"+strings.Join(details, lineBreak)+"</p>")
+	paragraphs = append(paragraphs, "<p>"+renderLink(book.BuyURL, "Купить")+"</p>")
 
-	return strings.Join(paragraphs, "\n\n")
+	return strings.Join(paragraphs, "")
+}
+
+func renderMultilineText(value string) string {
+	escaped := html.EscapeString(value)
+	escaped = strings.ReplaceAll(escaped, "\r\n", "\n")
+	escaped = strings.ReplaceAll(escaped, "\r", "\n")
+
+	return strings.ReplaceAll(escaped, "\n", lineBreak)
 }
 
 func publicationEmoji(publicationYear int, options Options) string {

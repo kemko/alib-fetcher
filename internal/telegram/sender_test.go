@@ -15,29 +15,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func Test_Sender_posts_silent_HTML_message_with_preview_disabled(t *testing.T) {
+func Test_Sender_posts_silent_rich_HTML_message(t *testing.T) {
 	t.Parallel()
 
 	// Given
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		assert.Equal(t, "/bottest-token/sendMessage", request.URL.Path)
-		var payload struct {
-			ChatID             string          `json:"chat_id"`
-			Text               string          `json:"text"`
-			ParseMode          string          `json:"parse_mode"`
-			ReplyMarkup        json.RawMessage `json:"reply_markup"`
-			LinkPreviewOptions struct {
-				Disabled bool `json:"is_disabled"`
-			} `json:"link_preview_options"`
-			DisableNotification bool `json:"disable_notification"`
-		}
+		assert.Equal(t, "/bottest-token/sendRichMessage", request.URL.Path)
+		var payload map[string]json.RawMessage
 		assert.NoError(t, json.NewDecoder(request.Body).Decode(&payload))
-		assert.Equal(t, "-100123", payload.ChatID)
-		assert.Equal(t, "<b>digest</b>", payload.Text)
-		assert.Equal(t, "HTML", payload.ParseMode)
-		assert.True(t, payload.DisableNotification)
-		assert.True(t, payload.LinkPreviewOptions.Disabled)
-		assert.Empty(t, payload.ReplyMarkup)
+		assert.JSONEq(t, `"-100123"`, string(payload["chat_id"]))
+		assert.JSONEq(t, `{"html":"<b>digest</b>"}`, string(payload["rich_message"]))
+		assert.JSONEq(t, `true`, string(payload["disable_notification"]))
+		assert.NotContains(t, payload, "reply_markup")
+		assert.NotContains(t, payload, "text")
+		assert.NotContains(t, payload, "parse_mode")
+		assert.NotContains(t, payload, "link_preview_options")
 		writer.Header().Set("Content-Type", "application/json")
 		_, err := writer.Write([]byte(`{"ok":true,"result":{}}`))
 		assert.NoError(t, err)
@@ -63,7 +55,7 @@ func Test_Sender_posts_audible_HTML_message_with_notification_enabled(t *testing
 
 	// Given
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		assert.Equal(t, "/bottest-token/sendMessage", request.URL.Path)
+		assert.Equal(t, "/bottest-token/sendRichMessage", request.URL.Path)
 		var payload map[string]json.RawMessage
 		assert.NoError(t, json.NewDecoder(request.Body).Decode(&payload))
 		disableNotification, ok := payload["disable_notification"]
@@ -96,7 +88,7 @@ func Test_Sender_posts_refresh_button_when_requested(t *testing.T) {
 
 	// Given
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		assert.Equal(t, "/bottest-token/sendMessage", request.URL.Path)
+		assert.Equal(t, "/bottest-token/sendRichMessage", request.URL.Path)
 		var payload struct {
 			ReplyMarkup struct {
 				InlineKeyboard [][]struct {

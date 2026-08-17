@@ -99,7 +99,7 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 		return result, nil
 	}
 
-	chunks, skippedBuyURLs, err := renderSendable(pending, renderOptions)
+	chunks, skippedBuyURLs, err := digest.RenderSendable(pending, renderOptions)
 	if err != nil {
 		return result, fmt.Errorf("render digest: %w", err)
 	}
@@ -114,6 +114,9 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 		attachRefresh := index == len(chunks)-1
 		if sendErr := s.send(ctx, chunk.Text, silent, attachRefresh); sendErr != nil {
 			return result, fmt.Errorf("send digest: %w", sendErr)
+		}
+		if len(chunk.Books) == 0 {
+			continue
 		}
 		if markErr := s.dependencies.State.MarkSent(ackCtx, chunk.Books, cycleTime); markErr != nil {
 			return result, fmt.Errorf("record delivered listings: %w", markErr)
@@ -143,28 +146,6 @@ func (s *Service) renderOptions(cycleTime time.Time) digest.Options {
 	}
 
 	return options
-}
-
-func renderSendable(books []alib.Book, options digest.Options) ([]digest.Chunk, []string, error) {
-	renderable := make([]alib.Book, 0, len(books))
-	skippedBuyURLs := make([]string, 0)
-	for _, book := range books {
-		if _, err := digest.Render([]alib.Book{book}, options); err != nil {
-			if errors.Is(err, digest.ErrMessageTooLong) {
-				skippedBuyURLs = append(skippedBuyURLs, book.BuyURL)
-				continue
-			}
-			return nil, nil, err
-		}
-		renderable = append(renderable, book)
-	}
-
-	chunks, err := digest.Render(renderable, options)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return chunks, skippedBuyURLs, nil
 }
 
 func (s *Service) send(ctx context.Context, text string, silent bool, attachRefresh bool) error {

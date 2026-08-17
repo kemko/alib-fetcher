@@ -2,9 +2,9 @@
 
 Always-on Go service that fetches the latest listings from
 [`alib.ru/tramka.phtml?tnew=7`](https://www.alib.ru/tramka.phtml?tnew=7) and
-sends unseen books to a Telegram chat on a configurable cron schedule. Delivered
-listings are tracked by their unique `Купить` link in an embedded bbolt
-database, which also stores the pending send queue.
+delivers unseen books to a Telegram chat as Rich Messages on a configurable
+cron schedule. Delivered listings are tracked by their unique `Купить` link in
+an embedded bbolt database, which also stores the pending send queue.
 
 ## Configuration
 
@@ -18,7 +18,7 @@ database, which also stores the pending send queue.
 | `FRESH_BOOKS` | no | empty | Optional `✨` threshold: `age:N` or `since:YYYY` |
 | `STATE_PATH` | no | `/var/lib/alib-fetcher/state.db` | bbolt state database |
 | `ALIB_URL` | no | source URL above | Listing page, also useful for testing |
-| `TELEGRAM_API_BASE` | no | `https://api.telegram.org` | Bot API base URL |
+| `TELEGRAM_API_BASE` | no | `https://api.telegram.org` | Bot API base URL; custom/local servers require Bot API 10.1+ |
 | `HTTP_TIMEOUT` | no | `30s` | Timeout for each external request |
 | `MESSAGE_LIMIT` | no | `4000` | Safe Telegram message size, max `4096` |
 
@@ -62,7 +62,8 @@ Telegram accepts it, and then its records become sent. Sent records older than
 are not removed by retention pruning. If one pending listing cannot fit in a
 Telegram message, other renderable pending listings are still sent while the
 oversized listing remains pending and the cycle reports the rendering error.
-Each Telegram listing is structured as:
+Each Telegram Rich Message is sent through `sendRichMessage` with rendered HTML.
+Each listing inside that HTML is structured as:
 
 1. freshness marker, bold title, and bibliography;
 2. content in its own paragraph, when present;
@@ -73,8 +74,15 @@ Each Telegram listing is structured as:
 The source photo-link section is replaced with `Фото: есть` or `Фото: нет`.
 When seller URL is absent, seller name is rendered as plain text. Missing
 optional fields do not create empty paragraphs. Dynamic text and URLs are
-HTML-escaped. When a digest is split into multiple messages, only the final
-message uses the normal notification sound; earlier messages are silent.
+HTML-escaped. Paragraphs use `<p>`, and semantic line breaks inside a paragraph
+use `<br>`. Adjacent listings in one Rich Message are separated by `<hr/>`;
+no divider appears before the first listing or after the last. When a digest is
+split into multiple messages, the heading appears only in the first message.
+If the heading and first pending listing cannot fit together but the listing
+fits alone, the first message contains only the heading and the listing follows
+in a headerless message.
+Only the final message uses the normal notification sound; earlier messages are
+silent.
 Whenever a digest sends at least one message, the final message includes an
 inline `Обновить` button.
 Pressing it asks a running service with the same bot token to start one

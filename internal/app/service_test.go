@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kemko/alib-fetcher/internal/alib"
 	"github.com/kemko/alib-fetcher/internal/app"
@@ -32,7 +33,7 @@ func Test_Service_marks_each_chunk_only_after_delivery(t *testing.T) {
 		Fetcher:      fakeFetcher{books: books},
 		State:        state,
 		Sender:       sender,
-		MessageLimit: 120,
+		MessageLimit: 180,
 		Now:          func() time.Time { return now },
 	})
 
@@ -170,7 +171,7 @@ func Test_Service_sends_only_final_chunk_with_sound(t *testing.T) {
 		Fetcher:      fakeFetcher{books: books},
 		State:        state,
 		Sender:       sender,
-		MessageLimit: 120,
+		MessageLimit: 170,
 		Now:          func() time.Time { return now },
 	})
 
@@ -181,6 +182,11 @@ func Test_Service_sends_only_final_chunk_with_sound(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, app.Result{Fetched: 3, New: 3, Sent: 3}, result)
 	require.Len(t, sender.messages, 3)
+	header := "Новые книги на Alib.ru"
+	require.Contains(t, sender.messages[0], header)
+	require.NotContains(t, sender.messages[1], header)
+	require.NotContains(t, sender.messages[2], header)
+	require.Equal(t, 1, strings.Count(strings.Join(sender.messages, ""), header))
 	require.Contains(t, sender.messages[0], "Первая")
 	require.NotContains(t, sender.messages[0], "Вторая")
 	require.Contains(t, sender.messages[1], "Вторая")
@@ -190,6 +196,102 @@ func Test_Service_sends_only_final_chunk_with_sound(t *testing.T) {
 	require.Equal(t, now, state.markedAt)
 	require.Equal(t, []bool{true, true, false}, sender.silent)
 	require.Equal(t, []bool{false, false, true}, sender.attachRefresh)
+}
+
+func Test_Service_sends_later_chunk_that_fits_only_without_header(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	books, messageLimit := headerlessOnlyLaterBookFixture(t)
+	expectedChunks, err := digest.Render(books, digest.Options{Limit: messageLimit})
+	require.NoError(t, err)
+	require.Len(t, expectedChunks, 2)
+
+	state := &fakeState{pending: books}
+	sender := &fakeSender{}
+	service := app.NewService(app.Dependencies{
+		Fetcher:      fakeFetcher{},
+		State:        state,
+		Sender:       sender,
+		MessageLimit: messageLimit,
+		Now:          time.Now,
+	})
+
+	// When
+	result, err := service.Run(context.Background())
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, app.Result{Sent: 2}, result)
+	require.Equal(t, []string{expectedChunks[0].Text, expectedChunks[1].Text}, sender.messages)
+	require.Equal(t, books, state.marked)
+}
+
+func Test_Service_retries_headerless_only_chunk_after_partial_delivery_failure(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	now := time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC)
+	books, messageLimit := headerlessOnlyLaterBookFixture(t)
+	expectedChunks, err := digest.Render(books, digest.Options{Limit: messageLimit})
+	require.NoError(t, err)
+	require.Len(t, expectedChunks, 2)
+
+	state, err := store.Open(filepath.Join(t.TempDir(), "state.db"), now)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, state.Close()) })
+	sendErr := errors.New("telegram unavailable")
+	sender := &fakeSender{failAt: 2, err: sendErr}
+	service := app.NewService(app.Dependencies{
+		Fetcher:      fakeFetcher{books: books},
+		State:        state,
+		Sender:       sender,
+		MessageLimit: messageLimit,
+		Now:          func() time.Time { return now },
+	})
+
+	// When
+	firstResult, firstErr := service.Run(context.Background())
+	pendingAfterFailure, pendingErr := state.Pending(context.Background())
+	sender.failAt = 0
+	secondResult, secondErr := service.Run(context.Background())
+	pendingAfterRetry, retryPendingErr := state.Pending(context.Background())
+
+	// Then
+	require.ErrorIs(t, firstErr, sendErr)
+	require.Equal(t, app.Result{Fetched: 2, New: 2, Sent: 1}, firstResult)
+	require.NoError(t, pendingErr)
+	require.Equal(t, books[1:], pendingAfterFailure)
+	require.NoError(t, secondErr)
+	require.Equal(t, app.Result{Fetched: 2, Sent: 1}, secondResult)
+	require.NoError(t, retryPendingErr)
+	require.Empty(t, pendingAfterRetry)
+	header := `<p><b>Новые книги на Alib.ru</b></p>`
+	require.Equal(t, []string{
+		expectedChunks[0].Text,
+		expectedChunks[1].Text,
+		header,
+		expectedChunks[1].Text,
+	}, sender.messages)
+	require.Equal(t, []bool{true, false, true, false}, sender.silent)
+	require.Equal(t, []bool{false, true, false, true}, sender.attachRefresh)
+}
+
+func headerlessOnlyLaterBookFixture(t *testing.T) ([]alib.Book, int) {
+	t.Helper()
+
+	books := []alib.Book{
+		{Title: "Первая", BuyURL: "https://example.com/1"},
+		{Title: "Вторая длиннее первой", BuyURL: "https://example.com/2"},
+	}
+	firstBookChunks, err := digest.Render(books[:1], digest.Options{Limit: 4096})
+	require.NoError(t, err)
+	messageLimit := utf8.RuneCountInString(firstBookChunks[0].Text)
+	secondBookChunks, err := digest.Render(books[1:], digest.Options{Limit: 4096})
+	require.NoError(t, err)
+	require.Greater(t, utf8.RuneCountInString(secondBookChunks[0].Text), messageLimit)
+
+	return books, messageLimit
 }
 
 func Test_Service_runs_pre_delivery_hook_once_before_sending_and_marking(t *testing.T) {
@@ -291,7 +393,7 @@ func Test_Service_waits_and_retries_only_rate_limited_chunk(t *testing.T) {
 
 			return nil
 		},
-		MessageLimit: 120,
+		MessageLimit: 170,
 	})
 
 	// When
