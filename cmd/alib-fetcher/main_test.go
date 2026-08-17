@@ -132,13 +132,13 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 			require.NotContains(t, richHTML[:firstBookIndex], "<hr/>")
 			require.Contains(t, richHTML[firstBookIndex:secondBookIndex], "<hr/>")
 			require.NotContains(t, richHTML[secondBookIndex:], "<hr/>")
-			require.Contains(t, richHTML, "<p>Первая строка содержания.</p><p>Продавец: ")
+			require.Contains(t, richHTML, "<p>Первая строка содержания.</p><br/><br/><p>Продавец: ")
 			require.Contains(
 				t,
 				richHTML,
 				`<a href="`+alibServer.URL+`/bs.php4?bs=BotSad">BotSad</a>, Москва.`,
 			)
-			require.Contains(t, richHTML, "<br>Цена: 3 900 руб.<br>Состояние: Отличное.<br>Фото: есть</p>")
+			require.Contains(t, richHTML, "<br/>Цена: 3 900 руб.<br/>Состояние: Отличное.<br/>Фото: есть</p>")
 			require.True(
 				t,
 				strings.HasSuffix(richHTML, `<p><a href="`+alibServer.URL+`/fresh.html">Купить</a></p>`),

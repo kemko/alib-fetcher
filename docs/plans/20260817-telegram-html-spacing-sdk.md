@@ -74,17 +74,17 @@
 - Modify: `internal/digest/render_test.go`
 - Modify: `internal/app/service_test.go`
 
-- [ ] Добавить точный render test для книги с описанием: `main → <br/><br/> → content → <br/><br/> → details`.
-- [ ] Добавить точный render test для книги без описания: `main → <br/><br/> → details`, без
+- [x] Добавить точный render test для книги с описанием: `main → <br/><br/> → content → <br/><br/> → details`.
+- [x] Добавить точный render test для книги без описания: `main → <br/><br/> → details`, без
   дополнительного separator отсутствующего content.
-- [ ] Заменить canonical line break `<br>` на `<br/>`.
-- [ ] Нормализовать `\r\n`, `\r` и `\n` внутри динамических полей в `<br/>`.
-- [ ] Соединять непустые paragraph blocks через `<br/><br/>`; не создавать пустой content paragraph.
-- [ ] Сохранить отдельный paragraph и межблочный отступ перед ссылкой `Купить`.
-- [ ] Добавить assertion, что готовый Telegram HTML не содержит literal `\r` или `\n`.
-- [ ] Обновить expected HTML, rune limits и chunk boundaries с учётом длины `<br/>`.
-- [ ] Подтвердить тестами escaping, `<br/>` внутри multiline fields и `<hr/>` только между книгами.
-- [ ] Выполнить `make test`; все тесты должны пройти до Task 2.
+- [x] Заменить canonical line break `<br>` на `<br/>`.
+- [x] Нормализовать `\r\n`, `\r` и `\n` внутри динамических полей в `<br/>`.
+- [x] Соединять непустые paragraph blocks через `<br/><br/>`; не создавать пустой content paragraph.
+- [x] Сохранить отдельный paragraph и межблочный отступ перед ссылкой `Купить`.
+- [x] Добавить assertion, что готовый Telegram HTML не содержит literal `\r` или `\n`.
+- [x] Обновить expected HTML, rune limits и chunk boundaries с учётом длины `<br/>`.
+- [x] Подтвердить тестами escaping, `<br/>` внутри multiline fields и `<hr/>` только между книгами.
+- [x] Выполнить `make test`; все тесты должны пройти до Task 2.
 
 ### Task 2: Перевести Telegram API operations на SDK
 

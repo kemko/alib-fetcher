@@ -14,7 +14,8 @@ import (
 
 const (
 	header           = "<p><b>Новые книги на Alib.ru</b></p>"
-	lineBreak        = "<br>"
+	lineBreak        = "<br/>"
+	paragraphBreak   = lineBreak + lineBreak
 	listingSeparator = "<hr/>"
 )
 
@@ -118,7 +119,7 @@ func renderBook(book alib.Book, options Options) string {
 	paragraphs = append(paragraphs, "<p>"+strings.Join(details, lineBreak)+"</p>")
 	paragraphs = append(paragraphs, "<p>"+renderLink(book.BuyURL, "Купить")+"</p>")
 
-	return strings.Join(paragraphs, "")
+	return strings.Join(paragraphs, paragraphBreak)
 }
 
 func renderMultilineText(value string) string {
