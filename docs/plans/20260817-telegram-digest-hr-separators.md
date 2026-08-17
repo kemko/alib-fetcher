@@ -80,13 +80,13 @@
 - Modify: `cmd/alib-fetcher/main_test.go`
 - Modify: `README.md`
 
-- [ ] Update main integration test payload structs to decode `rich_message.html`.
-- [ ] Update once-mode wiring assertions to expect `/sendRichMessage`.
-- [ ] Assert generated rich HTML contains `<hr/>` between two books and no edge divider.
-- [ ] Preserve assertions for chat ID, silent/audible chunk behavior, final refresh button, and token redaction.
-- [ ] Update README digest/Telegram transport wording to mention Rich Messages and `<hr/>` separators between listings.
-- [ ] Update README examples/descriptions only where behavior changed; do not add config options.
-- [ ] Run `make test` and fix failures before Task 4.
+- [x] Update main integration test payload structs to decode `rich_message.html`.
+- [x] Update once-mode wiring assertions to expect `/sendRichMessage`.
+- [x] Assert generated rich HTML contains `<hr/>` between two books and no edge divider.
+- [x] Preserve assertions for chat ID, silent/audible chunk behavior, final refresh button, and token redaction.
+- [x] Update README digest/Telegram transport wording to mention Rich Messages and `<hr/>` separators between listings.
+- [x] Update README examples/descriptions only where behavior changed; do not add config options.
+- [x] Run `make test` and fix failures before Task 4.
 
 ### Task 4: Verify acceptance criteria
 

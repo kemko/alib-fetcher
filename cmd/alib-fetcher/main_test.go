@@ -120,18 +120,28 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 			payload := <-telegramPayloads
 			require.Equal(t, "-100123", payload.ChatID)
 			require.False(t, payload.DisableNotification)
-			require.Contains(t, payload.RichMessage.HTML, fmt.Sprintf("🔥 <b>Горячая книга.</b> М., %d г.", currentYear))
-			require.Contains(t, payload.RichMessage.HTML, "Первая строка содержания.\n\nПродавец: ")
+			richHTML := payload.RichMessage.HTML
+			firstBook := fmt.Sprintf("🔥 <b>Горячая книга.</b> М., %d г.", currentYear)
+			secondBook := testCase.freshEmoji + "<b>Свежая книга.</b>"
+			firstBookIndex := strings.Index(richHTML, firstBook)
+			secondBookIndex := strings.Index(richHTML, secondBook)
+			require.NotEqual(t, -1, firstBookIndex)
+			require.NotEqual(t, -1, secondBookIndex)
+			require.Less(t, firstBookIndex, secondBookIndex)
+			require.Equal(t, 1, strings.Count(richHTML, "<hr/>"))
+			require.NotContains(t, richHTML[:firstBookIndex], "<hr/>")
+			require.Contains(t, richHTML[firstBookIndex:secondBookIndex], "<hr/>")
+			require.NotContains(t, richHTML[secondBookIndex:], "<hr/>")
+			require.Contains(t, richHTML, "Первая строка содержания.\n\nПродавец: ")
 			require.Contains(
 				t,
-				payload.RichMessage.HTML,
+				richHTML,
 				`<a href="`+alibServer.URL+`/bs.php4?bs=BotSad">BotSad</a>, Москва.`,
 			)
-			require.Contains(t, payload.RichMessage.HTML, "\nЦена: 3 900 руб.\nСостояние: Отличное.\nФото: есть\n\n")
-			require.Contains(t, payload.RichMessage.HTML, testCase.freshEmoji+"<b>Свежая книга.</b>")
+			require.Contains(t, richHTML, "\nЦена: 3 900 руб.\nСостояние: Отличное.\nФото: есть\n\n")
 			require.True(
 				t,
-				strings.HasSuffix(payload.RichMessage.HTML, `<a href="`+alibServer.URL+`/fresh.html">Купить</a>`),
+				strings.HasSuffix(richHTML, `<a href="`+alibServer.URL+`/fresh.html">Купить</a>`),
 			)
 			requireRefreshButton(t, payload)
 			require.Contains(t, logs.String(), "digest.completed")

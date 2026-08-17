@@ -2,9 +2,9 @@
 
 Always-on Go service that fetches the latest listings from
 [`alib.ru/tramka.phtml?tnew=7`](https://www.alib.ru/tramka.phtml?tnew=7) and
-sends unseen books to a Telegram chat on a configurable cron schedule. Delivered
-listings are tracked by their unique `Купить` link in an embedded bbolt
-database, which also stores the pending send queue.
+delivers unseen books to a Telegram chat as Rich Messages on a configurable
+cron schedule. Delivered listings are tracked by their unique `Купить` link in
+an embedded bbolt database, which also stores the pending send queue.
 
 ## Configuration
 
@@ -62,7 +62,8 @@ Telegram accepts it, and then its records become sent. Sent records older than
 are not removed by retention pruning. If one pending listing cannot fit in a
 Telegram message, other renderable pending listings are still sent while the
 oversized listing remains pending and the cycle reports the rendering error.
-Each Telegram listing is structured as:
+Each Telegram Rich Message is sent through `sendRichMessage` with rendered HTML.
+Each listing inside that HTML is structured as:
 
 1. freshness marker, bold title, and bibliography;
 2. content in its own paragraph, when present;
@@ -73,8 +74,10 @@ Each Telegram listing is structured as:
 The source photo-link section is replaced with `Фото: есть` or `Фото: нет`.
 When seller URL is absent, seller name is rendered as plain text. Missing
 optional fields do not create empty paragraphs. Dynamic text and URLs are
-HTML-escaped. When a digest is split into multiple messages, only the final
-message uses the normal notification sound; earlier messages are silent.
+HTML-escaped. Adjacent listings in one Rich Message are separated by `<hr/>`;
+no divider appears before the first listing or after the last. When a digest is
+split into multiple messages, only the final message uses the normal
+notification sound; earlier messages are silent.
 Whenever a digest sends at least one message, the final message includes an
 inline `Обновить` button.
 Pressing it asks a running service with the same bot token to start one
