@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -26,7 +27,7 @@ func Test_Sender_classifies_response_body_read_failure(t *testing.T) {
 			cancel()
 		},
 	}
-	sender := newTestSenderWithBody(body)
+	sender := newTestSenderWithBody(t, body)
 
 	// When
 	err := sender.Send(ctx, "digest", false, false)
@@ -34,26 +35,26 @@ func Test_Sender_classifies_response_body_read_failure(t *testing.T) {
 	// Then
 	require.ErrorIs(t, err, ErrRequest)
 	require.ErrorIs(t, err, context.Canceled)
-	require.ErrorIs(t, err, closeErr)
 	assert.NotContains(t, err.Error(), "test-token")
 	assert.NotContains(t, err.Error(), "api.telegram.org")
 }
 
-func Test_Sender_ignores_close_failure_after_successful_response(t *testing.T) {
+func Test_Sender_does_not_report_close_failure_as_poll_error(t *testing.T) {
 	t.Parallel()
 
 	// Given
 	body := &testResponseBody{
-		reader:   bytes.NewReader([]byte(`{"ok":true}`)),
+		reader:   bytes.NewReader([]byte(`{"ok":true,"result":{}}`)),
 		closeErr: errors.New("close response failed"),
 	}
-	sender := newTestSenderWithBody(body)
+	sender := newTestSenderWithBody(t, body)
 
 	// When
 	err := sender.Send(context.Background(), "digest", false, false)
 
 	// Then
 	require.NoError(t, err)
+	assert.Empty(t, sender.sdkErrors)
 }
 
 func Test_Sender_limits_API_response_read(t *testing.T) {
@@ -61,7 +62,7 @@ func Test_Sender_limits_API_response_read(t *testing.T) {
 
 	// Given
 	reader := &countingReader{}
-	sender := newTestSenderWithBody(&testResponseBody{reader: reader})
+	sender := newTestSenderWithBody(t, &testResponseBody{reader: reader})
 
 	// When
 	err := sender.Send(context.Background(), "digest", false, false)
@@ -72,35 +73,19 @@ func Test_Sender_limits_API_response_read(t *testing.T) {
 	require.Equal(t, maxAPIResponseBytes+1, reader.bytesRead)
 }
 
-func Test_parseAPIResponse_accepts_response_at_size_limit(t *testing.T) {
+func Test_Sender_accepts_API_response_at_size_limit(t *testing.T) {
 	t.Parallel()
 
 	// Given
-	prefix := []byte(`{"ok":true}`)
-	body := append(prefix, bytes.Repeat([]byte(" "), maxAPIResponseBytes-len(prefix))...)
-	response := &http.Response{Status: "200 OK", StatusCode: http.StatusOK}
+	prefix := []byte(`{"ok":true,"result":{}}`)
+	response := append(prefix, bytes.Repeat([]byte(" "), maxAPIResponseBytes-len(prefix))...)
+	sender := newTestSenderWithBody(t, &testResponseBody{reader: bytes.NewReader(response)})
 
 	// When
-	result, err := parseAPIResponse(response, body)
+	err := sender.Send(context.Background(), "digest", false, false)
 
 	// Then
 	require.NoError(t, err)
-	require.True(t, result.OK)
-}
-
-func Test_parseAPIResponse_classifies_oversized_HTTP_error_as_rejected(t *testing.T) {
-	t.Parallel()
-
-	// Given
-	body := bytes.Repeat([]byte("x"), maxAPIResponseBytes+1)
-	response := &http.Response{Status: "502 Bad Gateway", StatusCode: http.StatusBadGateway}
-
-	// When
-	_, err := parseAPIResponse(response, body)
-
-	// Then
-	require.ErrorIs(t, err, ErrRejected)
-	require.Contains(t, err.Error(), "502 Bad Gateway")
 }
 
 func Test_Sender_hides_transport_error_details(t *testing.T) {
@@ -108,7 +93,7 @@ func Test_Sender_hides_transport_error_details(t *testing.T) {
 
 	// Given
 	transportErr := errors.New("Post https://api.telegram.org/bottest-token/sendRichMessage failed")
-	sender := newTestSenderWithTransport(roundTripperFunc(func(*http.Request) (*http.Response, error) {
+	sender := newTestSenderWithTransport(t, roundTripperFunc(func(*http.Request) (*http.Response, error) {
 		return nil, transportErr
 	}))
 
@@ -164,8 +149,10 @@ func (body *testResponseBody) Close() error {
 	return body.closeErr
 }
 
-func newTestSenderWithBody(body io.ReadCloser) *Sender {
-	return newTestSenderWithTransport(roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+func newTestSenderWithBody(t *testing.T, body io.ReadCloser) *Sender {
+	t.Helper()
+
+	return newTestSenderWithTransport(t, roundTripperFunc(func(request *http.Request) (*http.Response, error) {
 		return &http.Response{
 			Status:     "200 OK",
 			StatusCode: http.StatusOK,
@@ -176,10 +163,15 @@ func newTestSenderWithBody(body io.ReadCloser) *Sender {
 	}))
 }
 
-func newTestSenderWithTransport(transport http.RoundTripper) *Sender {
-	return &Sender{
-		client:   &http.Client{Transport: transport},
-		endpoint: "https://api.telegram.org/bottest-token",
-		chatID:   "-100123",
-	}
+func newTestSenderWithTransport(t *testing.T, transport http.RoundTripper) *Sender {
+	t.Helper()
+	sender, err := newSender(Config{
+		APIBase: "https://api.telegram.org",
+		Token:   "test-token",
+		ChatID:  "-100123",
+		Timeout: 2 * time.Second,
+	}, &http.Client{Transport: transport})
+	require.NoError(t, err)
+
+	return sender
 }

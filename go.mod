@@ -3,6 +3,7 @@ module github.com/kemko/alib-fetcher
 go 1.26.5
 
 require (
+	github.com/go-telegram/bot v1.23.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/stretchr/testify v1.11.1
 	go.etcd.io/bbolt v1.4.3

@@ -2,16 +2,17 @@
 package telegram
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"path"
+	"strings"
 	"time"
+
+	telegrambot "github.com/go-telegram/bot"
+	"github.com/go-telegram/bot/models"
 )
 
 // ErrRejected indicates that Telegram returned an unsuccessful API response.
@@ -26,12 +27,11 @@ const RefreshCallbackData = "refresh"
 const refreshButtonText = "Обновить"
 
 const (
-	answerCallbackQueryMethod = "answerCallbackQuery"
-	editMessageReplyMarkup    = "editMessageReplyMarkup"
-	getUpdatesMethod          = "getUpdates"
-	maxAPIResponseBytes       = 1 << 20
-	sendRichMessageMethod     = "sendRichMessage"
+	maxAPIResponseBytes   = 1 << 20
+	minimumSDKPollTimeout = 2 * time.Second
 )
+
+var errResponseTooLarge = fmt.Errorf("response exceeds %d bytes", maxAPIResponseBytes)
 
 // Config contains the Telegram Bot API connection settings.
 type Config struct {
@@ -43,54 +43,92 @@ type Config struct {
 
 // Sender delivers digest messages through the Telegram Bot API.
 type Sender struct {
-	client             *http.Client
-	endpoint           string
-	chatID             string
-	longPollTimeoutSec int
+	bot       *telegrambot.Bot
+	sdkErrors chan error
+	chatID    string
+	secrets   []string
 }
 
 // NewSender validates the API settings without exposing the bot token.
 func NewSender(config Config) (*Sender, error) {
-	endpoint, err := url.Parse(config.APIBase)
+	return newSender(config, &http.Client{Timeout: config.Timeout})
+}
+
+func newSender(config Config, client *http.Client) (*Sender, error) {
+	serverURL, err := validateConfig(config)
 	if err != nil {
-		return nil, fmt.Errorf("parse Telegram API URL: %w", err)
-	}
-	if endpoint.Scheme != "http" && endpoint.Scheme != "https" {
-		return nil, fmt.Errorf("parse Telegram API URL: unsupported scheme %q", endpoint.Scheme)
-	}
-	if endpoint.Host == "" || config.Token == "" || config.ChatID == "" {
-		return nil, errors.New("create Telegram sender: API host, token, and chat ID are required")
-	}
-	if config.Timeout <= 0 {
-		return nil, errors.New("create Telegram sender: timeout must be positive")
+		return nil, err
 	}
 
-	endpoint.Path = path.Join(endpoint.Path, "bot"+config.Token)
+	transport := client.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	client.Timeout = config.Timeout
+	client.Transport = &responseLimitRoundTripper{base: transport}
+	pollClient := &http.Client{
+		Transport:     client.Transport,
+		CheckRedirect: client.CheckRedirect,
+		Jar:           client.Jar,
+		Timeout:       config.Timeout,
+	}
+	sender := &Sender{
+		chatID:    config.ChatID,
+		secrets:   []string{config.Token, config.APIBase, serverURL},
+		sdkErrors: make(chan error, 1),
+	}
+	sdkBot, err := telegrambot.New(
+		config.Token,
+		telegrambot.WithServerURL(serverURL),
+		telegrambot.WithHTTPClient(sdkPollTimeout(config.Timeout), &sdkHTTPClient{
+			client:     client,
+			pollClient: pollClient,
+		}),
+		telegrambot.WithSkipGetMe(),
+		telegrambot.WithAllowedUpdates(telegrambot.AllowedUpdates{models.AllowedUpdateCallbackQuery}),
+		telegrambot.WithErrorsHandler(sender.handleSDKError),
+		telegrambot.WithDefaultHandler(ignoreSDKUpdate),
+		telegrambot.WithNotAsyncHandlers(),
+	)
+	if err != nil {
+		return nil, &safeCauseError{message: "create Telegram SDK client", cause: err}
+	}
+	sender.bot = sdkBot
+
+	return sender, nil
+}
+
+func validateConfig(config Config) (string, error) {
+	endpoint, err := url.Parse(config.APIBase)
+	if err != nil {
+		return "", &safeCauseError{message: "parse Telegram API URL: invalid URL", cause: err}
+	}
+	if endpoint.Scheme != "http" && endpoint.Scheme != "https" {
+		return "", fmt.Errorf("parse Telegram API URL: unsupported scheme %q", endpoint.Scheme)
+	}
+	if endpoint.Host == "" || config.Token == "" || config.ChatID == "" {
+		return "", errors.New("create Telegram sender: API host, token, and chat ID are required")
+	}
+	if config.Timeout <= 0 {
+		return "", errors.New("create Telegram sender: timeout must be positive")
+	}
+
 	endpoint.RawQuery = ""
 	endpoint.Fragment = ""
-	return &Sender{
-		client:             &http.Client{Timeout: config.Timeout},
-		endpoint:           endpoint.String(),
-		chatID:             config.ChatID,
-		longPollTimeoutSec: longPollTimeout(config.Timeout),
-	}, nil
+
+	return strings.TrimRight(endpoint.String(), "/"), nil
 }
 
 // Send posts one rich HTML digest message, optionally without a notification sound.
-func (s *Sender) Send(ctx context.Context, text string, silent bool, attachRefresh bool) (sendErr error) {
-	payload := struct {
-		ReplyMarkup         *replyMarkup     `json:"reply_markup,omitempty"`
-		ChatID              string           `json:"chat_id"`
-		RichMessage         inputRichMessage `json:"rich_message"`
-		DisableNotification bool             `json:"disable_notification"`
-	}{
+func (s *Sender) Send(ctx context.Context, text string, silent bool, attachRefresh bool) error {
+	params := &telegrambot.SendRichMessageParams{
 		ChatID:              s.chatID,
-		RichMessage:         inputRichMessage{HTML: text},
+		RichMessage:         models.InputRichMessage{HTML: text},
 		DisableNotification: silent,
 	}
 	if attachRefresh {
-		payload.ReplyMarkup = &replyMarkup{
-			InlineKeyboard: [][]inlineKeyboardButton{
+		params.ReplyMarkup = models.InlineKeyboardMarkup{
+			InlineKeyboard: [][]models.InlineKeyboardButton{
 				{
 					{
 						Text:         refreshButtonText,
@@ -101,93 +139,111 @@ func (s *Sender) Send(ctx context.Context, text string, silent bool, attachRefre
 		}
 	}
 
-	return s.post(ctx, sendRichMessageMethod, payload, nil)
+	sdkCtx, call := beginSDKCall(ctx)
+	_, err := s.bot.SendRichMessage(sdkCtx, params)
+
+	return s.normalizeSDKCallError(ctx, call, err)
 }
 
-func (s *Sender) post(ctx context.Context, method string, payload any, result any) (postErr error) {
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("encode Telegram request: %w", err)
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, s.endpoint+"/"+method, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("create Telegram request: %w", err)
-	}
-	request.Header.Set("Content-Type", "application/json")
-
-	response, err := s.client.Do(request)
-	if err != nil {
-		return requestError(ctx, "call Telegram "+method, err)
-	}
-	defer func() {
-		if closeErr := response.Body.Close(); closeErr != nil && postErr != nil {
-			postErr = errors.Join(postErr, &safeCauseError{message: "close Telegram response", cause: closeErr})
+func (s *Sender) normalizeSDKCallError(ctx context.Context, call *sdkCall, err error) error {
+	unsuccessfulStatus := call.statusCode != 0 &&
+		(call.statusCode < http.StatusOK || call.statusCode >= http.StatusMultipleChoices)
+	normalizedErr := s.normalizeSDKError(ctx, err)
+	if unsuccessfulStatus {
+		if normalizedErr != nil && (errors.Is(normalizedErr, ErrRejected) || ctx.Err() != nil) {
+			return normalizedErr
 		}
-	}()
+		description := strings.TrimSpace(fmt.Sprintf("%d %s", call.statusCode, http.StatusText(call.statusCode)))
 
-	responseBody, err := io.ReadAll(io.LimitReader(response.Body, maxAPIResponseBytes+1))
-	if err != nil {
-		return requestError(ctx, "read Telegram response", err)
+		return &rejectedError{description: description}
 	}
-	apiResult, err := parseAPIResponse(response, responseBody)
-	if err != nil {
-		return err
-	}
-	if result == nil || !hasResult(apiResult.Result) {
+
+	return normalizedErr
+}
+
+func (s *Sender) normalizeSDKError(ctx context.Context, err error) error {
+	if err == nil {
 		return nil
 	}
-	if resultDecodeErr := json.Unmarshal(apiResult.Result, result); resultDecodeErr != nil {
-		return fmt.Errorf("decode Telegram result: %w", resultDecodeErr)
+	if contextErr := ctx.Err(); contextErr != nil {
+		return errors.Join(
+			ErrRequest,
+			contextErr,
+			&safeCauseError{message: "call Telegram SDK", cause: err},
+		)
+	}
+	if errors.Is(err, errResponseTooLarge) {
+		return fmt.Errorf("decode Telegram response: %w", errResponseTooLarge)
 	}
 
-	return nil
-}
-
-func parseAPIResponse(response *http.Response, body []byte) (apiResponse, error) {
-	if len(body) > maxAPIResponseBytes {
-		if response.StatusCode != http.StatusOK {
-			return apiResponse{}, newRejectedError(response, apiResponse{})
+	var rateLimitErr *telegrambot.TooManyRequestsError
+	if errors.As(err, &rateLimitErr) {
+		retryAfter := time.Duration(rateLimitErr.RetryAfter) * time.Second
+		if retryAfter < 0 {
+			retryAfter = 0
 		}
 
-		return apiResponse{}, fmt.Errorf("decode Telegram response: response exceeds %d bytes", maxAPIResponseBytes)
+		return &rejectedError{
+			description: s.sanitizeError(rateLimitErr.Message),
+			retryAfter:  retryAfter,
+		}
+	}
+	if isSDKRejection(err) {
+		return &rejectedError{description: s.sanitizeError(err.Error())}
+	}
+	if strings.Contains(err.Error(), "error decode response") {
+		return &safeCauseError{message: "decode Telegram response", cause: err}
 	}
 
-	apiResult, decodeErr := decodeAPIResponse(body)
-	if response.StatusCode != http.StatusOK {
-		return apiResponse{}, newRejectedError(response, apiResult)
-	}
-	if decodeErr != nil {
-		return apiResponse{}, decodeErr
-	}
-	if !apiResult.OK {
-		return apiResponse{}, newRejectedError(response, apiResult)
+	var requestErr *sdkRequestError
+	if errors.As(err, &requestErr) {
+		return requestError(ctx, "call Telegram SDK", err)
 	}
 
-	return apiResult, nil
+	return &safeCauseError{message: s.sanitizeError(err.Error()), cause: err}
 }
 
-func decodeAPIResponse(body []byte) (apiResponse, error) {
-	var result apiResponse
-	if err := json.Unmarshal(body, &result); err != nil {
-		return apiResponse{}, fmt.Errorf("decode Telegram response: %w", err)
+func isSDKRejection(err error) bool {
+	var migrateErr *telegrambot.MigrateError
+	if errors.As(err, &migrateErr) {
+		return true
 	}
 
-	return result, nil
+	known := []error{
+		telegrambot.ErrorForbidden,
+		telegrambot.ErrorBadRequest,
+		telegrambot.ErrorUnauthorized,
+		telegrambot.ErrorNotFound,
+		telegrambot.ErrorConflict,
+	}
+	for _, target := range known {
+		if errors.Is(err, target) {
+			return true
+		}
+	}
+
+	return strings.Contains(err.Error(), "error response from telegram for method")
 }
 
-func newRejectedError(response *http.Response, result apiResponse) error {
-	description := result.Description
-	if description == "" {
-		description = response.Status
-	}
-	if description == "" {
-		description = fmt.Sprintf("HTTP status %d", response.StatusCode)
+func (s *Sender) handleSDKError(err error) {
+	if !strings.HasPrefix(err.Error(), "error get updates,") {
+		return
 	}
 
-	return &rejectedError{
-		description: description,
-		retryAfter:  time.Duration(result.Parameters.RetryAfter) * time.Second,
+	select {
+	case s.sdkErrors <- err:
+	default:
 	}
+}
+
+func (s *Sender) sanitizeError(message string) string {
+	for _, secret := range s.secrets {
+		if secret != "" {
+			message = strings.ReplaceAll(message, secret, "***")
+		}
+	}
+
+	return message
 }
 
 func requestError(ctx context.Context, operation string, cause error) error {
@@ -199,43 +255,6 @@ func requestError(ctx context.Context, operation string, cause error) error {
 	return errors.Join(ErrRequest, safeCause)
 }
 
-func hasResult(result json.RawMessage) bool {
-	trimmed := bytes.TrimSpace(result)
-
-	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
-}
-
-func longPollTimeout(timeout time.Duration) int {
-	seconds := int(timeout / time.Second)
-	if seconds <= 1 {
-		return 0
-	}
-
-	return seconds - 1
-}
-
-type inputRichMessage struct {
-	HTML string `json:"html"`
-}
-
-type replyMarkup struct {
-	InlineKeyboard [][]inlineKeyboardButton `json:"inline_keyboard"`
-}
-
-type inlineKeyboardButton struct {
-	Text         string `json:"text"`
-	CallbackData string `json:"callback_data"`
-}
-
-type apiResponse struct {
-	Description string          `json:"description"`
-	Result      json.RawMessage `json:"result"`
-	Parameters  struct {
-		RetryAfter int `json:"retry_after"`
-	} `json:"parameters"`
-	OK bool `json:"ok"`
-}
-
 type rejectedError struct {
 	description string
 	retryAfter  time.Duration
@@ -245,6 +264,32 @@ type safeCauseError struct {
 	cause   error
 	message string
 }
+
+type responseLimitRoundTripper struct {
+	base http.RoundTripper
+}
+
+type responseLimitBody struct {
+	body      io.ReadCloser
+	remaining int64
+}
+
+type sdkHTTPClient struct {
+	client     *http.Client
+	pollClient *http.Client
+}
+
+type sdkRequestError struct {
+	cause error
+}
+
+type sdkCall struct {
+	statusCode int
+}
+
+type sdkCallContextKey struct{}
+
+type sdkPollContextKey struct{}
 
 func (e *rejectedError) Error() string {
 	return fmt.Sprintf("%s: %s", ErrRejected, e.description)
@@ -264,4 +309,83 @@ func (e *safeCauseError) Error() string {
 
 func (e *safeCauseError) Is(target error) bool {
 	return errors.Is(e.cause, target)
+}
+
+func (transport *responseLimitRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	response, err := transport.base.RoundTrip(request)
+	if err != nil || response.Body == nil {
+		return response, err
+	}
+	response.Body = &responseLimitBody{
+		body:      response.Body,
+		remaining: maxAPIResponseBytes,
+	}
+
+	return response, nil
+}
+
+func (body *responseLimitBody) Read(buffer []byte) (int, error) {
+	if body.remaining == 0 {
+		var extra [1]byte
+		count, err := body.body.Read(extra[:])
+		if count > 0 {
+			return 0, errResponseTooLarge
+		}
+
+		return 0, wrapResponseReadError(err)
+	}
+	if int64(len(buffer)) > body.remaining {
+		buffer = buffer[:body.remaining]
+	}
+	count, err := body.body.Read(buffer)
+	body.remaining -= int64(count)
+
+	return count, wrapResponseReadError(err)
+}
+
+func (body *responseLimitBody) Close() error {
+	return body.body.Close()
+}
+
+func wrapResponseReadError(err error) error {
+	if err == nil || errors.Is(err, io.EOF) {
+		return err
+	}
+
+	return &sdkRequestError{cause: err}
+}
+
+func (e *sdkRequestError) Error() string {
+	return "Telegram request failed"
+}
+
+func (e *sdkRequestError) Is(target error) bool {
+	return errors.Is(e.cause, target)
+}
+
+func (client *sdkHTTPClient) Do(request *http.Request) (*http.Response, error) {
+	httpClient := client.client
+	if _, polling := request.Context().Value(sdkPollContextKey{}).(struct{}); polling {
+		httpClient = client.pollClient
+	}
+	//nolint:gosec // Operator-configured API base intentionally supports HTTP(S) test and proxy servers.
+	response, err := httpClient.Do(request)
+	if err != nil {
+		return response, &sdkRequestError{cause: err}
+	}
+	if call, ok := request.Context().Value(sdkCallContextKey{}).(*sdkCall); ok {
+		call.statusCode = response.StatusCode
+	}
+
+	return response, nil
+}
+
+func beginSDKCall(ctx context.Context) (context.Context, *sdkCall) {
+	call := &sdkCall{}
+
+	return context.WithValue(ctx, sdkCallContextKey{}, call), call
+}
+
+func sdkPollTimeout(timeout time.Duration) time.Duration {
+	return max(timeout, minimumSDKPollTimeout)
 }

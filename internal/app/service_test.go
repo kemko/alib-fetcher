@@ -55,7 +55,12 @@ func Test_Service_sends_single_chunk_with_sound(t *testing.T) {
 	t.Parallel()
 
 	// Given
-	book := alib.Book{Title: "Книга", BuyURL: "https://example.com/1"}
+	book := alib.Book{
+		Title:        "Книга",
+		Bibliography: "Первая строка\r\nВторая строка",
+		Content:      "Описание 1\rОписание 2\nОписание 3",
+		BuyURL:       "https://example.com/1",
+	}
 	sender := &fakeSender{}
 	service := app.NewService(app.Dependencies{
 		Fetcher:      fakeFetcher{books: []alib.Book{book}},
@@ -74,6 +79,10 @@ func Test_Service_sends_single_chunk_with_sound(t *testing.T) {
 	require.Equal(t, 1, result.Sent)
 	require.Equal(t, []bool{false}, sender.silent)
 	require.Equal(t, []bool{true}, sender.attachRefresh)
+	require.Contains(t, sender.messages[0], "Первая строка<br/>Вторая строка")
+	require.Contains(t, sender.messages[0], "Описание 1<br/>Описание 2<br/>Описание 3")
+	require.NotContains(t, sender.messages[0], "\r")
+	require.NotContains(t, sender.messages[0], "\n")
 }
 
 func Test_Service_renders_freshness_using_cycle_time_in_configured_timezone(t *testing.T) {
@@ -620,6 +629,9 @@ func Test_Service_sends_renderable_pending_books_when_one_pending_book_is_too_lo
 	oversized := alib.Book{Title: strings.Repeat("Очень длинная книга ", 20), BuyURL: "https://e/oversized"}
 	firstDeliverable := alib.Book{Title: "Обычная 1", BuyURL: "https://e/1"}
 	secondDeliverable := alib.Book{Title: "Обычная 2", BuyURL: "https://e/2"}
+	firstChunks, err := digest.Render([]alib.Book{firstDeliverable}, digest.Options{Limit: 4096})
+	require.NoError(t, err)
+	messageLimit := utf8.RuneCountInString(firstChunks[0].Text)
 	state := &fakeState{pending: []alib.Book{oversized, firstDeliverable, secondDeliverable}}
 	sender := &fakeSender{}
 	hookCalls := 0
@@ -632,7 +644,7 @@ func Test_Service_sends_renderable_pending_books_when_one_pending_book_is_too_lo
 
 			return nil
 		},
-		MessageLimit: 120,
+		MessageLimit: messageLimit,
 		Now:          func() time.Time { return now },
 	})
 

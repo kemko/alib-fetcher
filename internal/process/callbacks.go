@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/kemko/alib-fetcher/internal/telegram"
 )
@@ -17,19 +16,14 @@ const (
 	refreshStartedText        = "Проверяю новые книги"
 )
 
-const (
-	callbackPollErrorDelay = 5 * time.Second
-	callbackPollIdleDelay  = time.Second
-)
-
 // CallbackClient contains Telegram callback operations used by the process.
 type CallbackClient interface {
-	PollCallbacks(ctx context.Context, offset int) ([]telegram.Callback, int, error)
+	ListenCallbacks(ctx context.Context, handle telegram.CallbackHandler, reportError telegram.CallbackErrorHandler)
 	AnswerCallback(ctx context.Context, callbackID string, text string) error
 	RemoveReplyMarkup(ctx context.Context, chatID int64, messageID int) error
 }
 
-func startCallbackPolling(
+func startCallbackListening(
 	ctx context.Context,
 	callbacks CallbackClient,
 	runner *digestRunner,
@@ -39,65 +33,37 @@ func startCallbackPolling(
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		pollRefreshCallbacks(ctx, callbacks, runner, expectedChatID, logger)
+		callbacks.ListenCallbacks(
+			ctx,
+			func(callbackCtx context.Context, callback telegram.Callback) {
+				handleCallback(callbackCtx, callbacks, runner, callback, expectedChatID, logger)
+			},
+			func(errorCtx context.Context, err error) {
+				logger.ErrorContext(errorCtx, "callback.poll_failed", slog.Any(logKeyError, err))
+			},
+		)
 	}()
 
 	return done
 }
 
-func pollRefreshCallbacks(
+func handleCallback(
 	ctx context.Context,
 	callbacks CallbackClient,
 	runner *digestRunner,
+	callback telegram.Callback,
 	expectedChatID string,
 	logger *slog.Logger,
 ) {
-	offset := 0
-	for ctx.Err() == nil {
-		items, nextOffset, err := callbacks.PollCallbacks(ctx, offset)
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			logger.ErrorContext(ctx, "callback.poll_failed",
-				slog.Any(logKeyError, err),
-				slog.Int(logKeyUpdateOffset, offset),
-			)
-			if !waitForCallbackPoll(ctx, callbackPollErrorDelay) {
-				return
-			}
-			continue
-		}
-		offset = nextOffset
-		if len(items) == 0 {
-			if !waitForCallbackPoll(ctx, callbackPollIdleDelay) {
-				return
-			}
-			continue
-		}
-		for _, callback := range items {
-			if callback.Data != telegram.RefreshCallbackData {
-				continue
-			}
-			if !matchesExpectedChat(callback, expectedChatID) {
-				answerRefreshCallback(ctx, callbacks, callback.ID, refreshUnavailableText, logger)
-				continue
-			}
-			handleRefreshCallback(ctx, callbacks, runner, callback, logger)
-		}
+	if callback.Data != telegram.RefreshCallbackData {
+		return
 	}
-}
+	if !matchesExpectedChat(callback, expectedChatID) {
+		answerRefreshCallback(ctx, callbacks, callback.ID, refreshUnavailableText, logger)
 
-func waitForCallbackPoll(ctx context.Context, delay time.Duration) bool {
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-
-	select {
-	case <-ctx.Done():
-		return false
-	case <-timer.C:
-		return true
+		return
 	}
+	handleRefreshCallback(ctx, callbacks, runner, callback, logger)
 }
 
 func matchesExpectedChat(callback telegram.Callback, expectedChatID string) bool {

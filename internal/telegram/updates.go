@@ -2,6 +2,9 @@ package telegram
 
 import (
 	"context"
+
+	telegrambot "github.com/go-telegram/bot"
+	"github.com/go-telegram/bot/models"
 )
 
 // Callback contains one Telegram callback query from an inline button.
@@ -13,96 +16,93 @@ type Callback struct {
 	MessageID           int
 }
 
-// PollCallbacks long-polls Telegram callback updates and returns the next offset to persist in memory.
-func (s *Sender) PollCallbacks(ctx context.Context, offset int) ([]Callback, int, error) {
-	payload := getUpdatesRequest{
-		Offset:         offset,
-		Timeout:        s.longPollTimeoutSec,
-		AllowedUpdates: []string{"callback_query"},
-	}
-	var updates []update
-	if err := s.post(ctx, getUpdatesMethod, payload, &updates); err != nil {
-		return nil, offset, err
-	}
+// CallbackHandler processes one supported callback query.
+type CallbackHandler func(context.Context, Callback)
 
-	callbacks := make([]Callback, 0, len(updates))
-	nextOffset := offset
-	for _, item := range updates {
-		if item.UpdateID >= nextOffset {
-			nextOffset = item.UpdateID + 1
-		}
-		if item.CallbackQuery == nil {
-			continue
-		}
-		callbacks = append(callbacks, Callback{
-			ID:                  item.CallbackQuery.ID,
-			Data:                item.CallbackQuery.Data,
-			MessageChatUsername: item.CallbackQuery.Message.Chat.Username,
-			MessageChatID:       item.CallbackQuery.Message.Chat.ID,
-			MessageID:           item.CallbackQuery.Message.MessageID,
-		})
-	}
+// CallbackErrorHandler reports one SDK polling error.
+type CallbackErrorHandler func(context.Context, error)
 
-	return callbacks, nextOffset, nil
+// ListenCallbacks runs SDK-managed polling until ctx is canceled.
+func (s *Sender) ListenCallbacks(ctx context.Context, handle CallbackHandler, reportError CallbackErrorHandler) {
+	handlerID := s.bot.RegisterHandler(
+		telegrambot.HandlerTypeCallbackQueryData,
+		RefreshCallbackData,
+		telegrambot.MatchTypeExact,
+		func(_ context.Context, _ *telegrambot.Bot, update *models.Update) {
+			if handle == nil || update.CallbackQuery == nil {
+				return
+			}
+
+			handle(ctx, callbackFromSDK(update.CallbackQuery))
+		},
+	)
+	defer s.bot.UnregisterHandler(handlerID)
+
+	errorsDone := make(chan struct{})
+	go func() {
+		defer close(errorsDone)
+		s.reportCallbackErrors(ctx, reportError)
+	}()
+	pollCtx := context.WithValue(ctx, sdkPollContextKey{}, struct{}{})
+	s.bot.Start(pollCtx)
+	<-errorsDone
 }
 
 // AnswerCallback acknowledges a Telegram callback query.
 func (s *Sender) AnswerCallback(ctx context.Context, callbackID string, text string) error {
-	payload := answerCallbackRequest{
+	sdkCtx, call := beginSDKCall(ctx)
+	_, err := s.bot.AnswerCallbackQuery(sdkCtx, &telegrambot.AnswerCallbackQueryParams{
 		CallbackQueryID: callbackID,
 		Text:            text,
-	}
+	})
 
-	return s.post(ctx, answerCallbackQueryMethod, payload, nil)
+	return s.normalizeSDKCallError(ctx, call, err)
 }
 
 // RemoveReplyMarkup removes the inline keyboard from a message.
 func (s *Sender) RemoveReplyMarkup(ctx context.Context, chatID int64, messageID int) error {
-	payload := editReplyMarkupRequest{
+	sdkCtx, call := beginSDKCall(ctx)
+	_, err := s.bot.EditMessageReplyMarkup(sdkCtx, &telegrambot.EditMessageReplyMarkupParams{
 		ChatID:    chatID,
 		MessageID: messageID,
-		ReplyMarkup: replyMarkup{
-			InlineKeyboard: [][]inlineKeyboardButton{},
+		ReplyMarkup: models.InlineKeyboardMarkup{
+			InlineKeyboard: [][]models.InlineKeyboardButton{},
 		},
+	})
+
+	return s.normalizeSDKCallError(ctx, call, err)
+}
+
+func (s *Sender) reportCallbackErrors(ctx context.Context, reportError CallbackErrorHandler) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case sdkErr := <-s.sdkErrors:
+			if ctx.Err() != nil {
+				return
+			}
+			if reportError != nil {
+				reportError(ctx, s.normalizeSDKError(ctx, sdkErr))
+			}
+		}
+	}
+}
+
+func ignoreSDKUpdate(context.Context, *telegrambot.Bot, *models.Update) {}
+
+func callbackFromSDK(query *models.CallbackQuery) Callback {
+	callback := Callback{ID: query.ID, Data: query.Data}
+	switch {
+	case query.Message.Message != nil:
+		callback.MessageChatUsername = query.Message.Message.Chat.Username
+		callback.MessageChatID = query.Message.Message.Chat.ID
+		callback.MessageID = query.Message.Message.ID
+	case query.Message.InaccessibleMessage != nil:
+		callback.MessageChatUsername = query.Message.InaccessibleMessage.Chat.Username
+		callback.MessageChatID = query.Message.InaccessibleMessage.Chat.ID
+		callback.MessageID = query.Message.InaccessibleMessage.MessageID
 	}
 
-	return s.post(ctx, editMessageReplyMarkup, payload, nil)
-}
-
-type getUpdatesRequest struct {
-	AllowedUpdates []string `json:"allowed_updates"`
-	Offset         int      `json:"offset"`
-	Timeout        int      `json:"timeout"`
-}
-
-type answerCallbackRequest struct {
-	CallbackQueryID string `json:"callback_query_id"`
-	Text            string `json:"text"`
-}
-
-type editReplyMarkupRequest struct {
-	ReplyMarkup replyMarkup `json:"reply_markup"`
-	ChatID      int64       `json:"chat_id"`
-	MessageID   int         `json:"message_id"`
-}
-
-type update struct {
-	CallbackQuery *callbackQuery `json:"callback_query"`
-	UpdateID      int            `json:"update_id"`
-}
-
-type callbackQuery struct {
-	ID      string          `json:"id"`
-	Data    string          `json:"data"`
-	Message callbackMessage `json:"message"`
-}
-
-type callbackMessage struct {
-	Chat      callbackChat `json:"chat"`
-	MessageID int          `json:"message_id"`
-}
-
-type callbackChat struct {
-	Username string `json:"username"`
-	ID       int64  `json:"id"`
+	return callback
 }

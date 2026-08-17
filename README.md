@@ -19,13 +19,12 @@ an embedded bbolt database, which also stores the pending send queue.
 | `STATE_PATH` | no | `/var/lib/alib-fetcher/state.db` | bbolt state database |
 | `ALIB_URL` | no | source URL above | Listing page, also useful for testing |
 | `TELEGRAM_API_BASE` | no | `https://api.telegram.org` | Bot API base URL; custom/local servers require Bot API 10.1+ |
-| `HTTP_TIMEOUT` | no | `30s` | Timeout for each external request |
+| `HTTP_TIMEOUT` | no | `30s` | Positive Go duration applied to each external request |
 | `MESSAGE_LIMIT` | no | `4000` | Safe Telegram message size, max `4096` |
 
 Configuration is validated before process startup. Invalid chat IDs, including
 plain text without `@`, an empty `@` username, whitespace, and numeric overflow,
 fail fast with an error naming `TELEGRAM_CHAT_ID`.
-
 `FRESH_BOOKS=age:N` marks publication years from the current local year minus
 non-negative `N`, inclusive. For example, in 2026, `age:5` includes 2021.
 `FRESH_BOOKS=since:YYYY` uses the given four-digit year as the inclusive lower
@@ -62,7 +61,14 @@ Telegram accepts it, and then its records become sent. Sent records older than
 are not removed by retention pruning. If one pending listing cannot fit in a
 Telegram message, other renderable pending listings are still sent while the
 oversized listing remains pending and the cycle reports the rendering error.
-Each Telegram Rich Message is sent through `sendRichMessage` with rendered HTML.
+Telegram operations use the pinned
+[`github.com/go-telegram/bot`](https://github.com/go-telegram/bot) v1.23.0 SDK.
+Each Telegram Rich Message is sent through its `SendRichMessage` method with
+rendered HTML. The SDK also supplies request models, inline keyboards, callback
+answers, reply-markup edits, and polling machinery; digest ordering,
+acknowledgement, flood-control retry, chat filtering, and runner locking remain
+service policy. Custom `TELEGRAM_API_BASE` endpoints and test doubles must accept
+the SDK's `multipart/form-data` requests.
 Each listing inside that HTML is structured as:
 
 1. freshness marker, bold title, and bibliography;
@@ -74,10 +80,15 @@ Each listing inside that HTML is structured as:
 The source photo-link section is replaced with `Фото: есть` or `Фото: нет`.
 When seller URL is absent, seller name is rendered as plain text. Missing
 optional fields do not create empty paragraphs. Dynamic text and URLs are
-HTML-escaped. Paragraphs use `<p>`, and semantic line breaks inside a paragraph
-use `<br>`. Adjacent listings in one Rich Message are separated by `<hr/>`;
-no divider appears before the first listing or after the last. When a digest is
-split into multiple messages, the heading appears only in the first message.
+HTML-escaped. Paragraphs use `<p>`. Every encoded line break uses `<br/>`, and
+one blank line between non-empty paragraph blocks uses `<br/><br/>`; rendered
+Telegram HTML contains no literal CR or LF characters. A listing with content
+uses `main → <br/><br/> → content → <br/><br/> → details`; without content it
+uses exactly `main → <br/><br/> → details`. The final `Купить` paragraph also
+has one `<br/><br/>` separator before it. Adjacent listings in one Rich Message
+are separated by `<hr/>`; no divider appears before the first listing or after
+the last. When a digest is split into multiple messages, the heading appears
+only in the first message.
 If the heading and first pending listing cannot fit together but the listing
 fits alone, the first message contains only the heading and the listing follows
 in a headerless message.
@@ -125,14 +136,15 @@ and day of week; descriptors such as `@hourly` are also accepted. The state
 database is open only while a digest cycle is running, so a separate `-once`
 invocation can use it between scheduled cycles.
 
-Service mode also polls Telegram callback updates for the `Обновить` button.
+Service mode starts SDK-managed polling for Telegram callback updates matching
+the `Обновить` button. The SDK owns update offsets and polling retry/backoff.
 The `-once` command sends the button when it sends books, but exits without
-polling for callbacks. A running service that uses the same bot can process a
-button sent earlier by `-once`. Refresh callbacks from other chats are answered
-and ignored when their numeric chat ID or public `@channel` username does not
-match `TELEGRAM_CHAT_ID`. Do not configure a Telegram webhook or another
-`getUpdates` poller for the same bot token, or refresh callbacks may be consumed
-outside this service.
+starting callback polling. A running service that uses the same bot can process
+a button sent earlier by `-once`. Refresh callbacks from other chats are
+answered and ignored when their numeric chat ID or public `@channel` username
+does not match `TELEGRAM_CHAT_ID`. Do not configure a Telegram webhook or
+another `getUpdates` poller for the same bot token, or refresh callbacks may be
+consumed outside this service.
 
 The process emits structured JSON logs and stops gracefully on `SIGINT` or
 `SIGTERM`.

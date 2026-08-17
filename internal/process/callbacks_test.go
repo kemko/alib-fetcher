@@ -1,6 +1,7 @@
 package process
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -18,7 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func Test_pollRefreshCallbacks_advances_offset_and_ignores_unknown_callback_data(t *testing.T) {
+func Test_startCallbackListening_ignores_unknown_callback_data(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -32,8 +33,7 @@ func Test_pollRefreshCallbacks_advances_offset_and_ignores_unknown_callback_data
 				MessageID:     77,
 			},
 		},
-		nextOffset: 101,
-		cancel:     cancel,
+		cancel: cancel,
 	}
 	runner := &digestRunner{dependencies: app.Dependencies{
 		Fetcher:      emptyFetcher{},
@@ -43,16 +43,16 @@ func Test_pollRefreshCallbacks_advances_offset_and_ignores_unknown_callback_data
 	}, statePath: filepath.Join(t.TempDir(), "state.db"), logger: slog.New(slog.DiscardHandler)}
 
 	// When
-	done := startCallbackPolling(ctx, client, runner, "-100123", slog.New(slog.DiscardHandler))
+	done := startCallbackListening(ctx, client, runner, "-100123", slog.New(slog.DiscardHandler))
 	waitForCallbackLoop(t, done)
 
 	// Then
-	require.Equal(t, []int{0, 101}, client.pollOffsetsSnapshot())
+	require.Equal(t, int32(1), client.listens.Load())
 	require.Empty(t, client.answersSnapshot())
 	require.Empty(t, client.removalsSnapshot())
 }
 
-func Test_pollRefreshCallbacks_runs_digest_and_removes_old_button_before_new_send(t *testing.T) {
+func Test_startCallbackListening_runs_digest_and_removes_old_button_before_new_send(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -71,8 +71,7 @@ func Test_pollRefreshCallbacks_runs_digest_and_removes_old_button_before_new_sen
 				MessageID:           77,
 			},
 		},
-		nextOffset: 101,
-		events:     events,
+		events: events,
 	}
 	sender := &recordingSender{events: events, afterSend: cancel}
 	runner := &digestRunner{dependencies: app.Dependencies{
@@ -83,7 +82,7 @@ func Test_pollRefreshCallbacks_runs_digest_and_removes_old_button_before_new_sen
 	}, statePath: statePath, logger: slog.New(slog.DiscardHandler)}
 
 	// When
-	done := startCallbackPolling(ctx, client, runner, "@books", slog.New(slog.DiscardHandler))
+	done := startCallbackListening(ctx, client, runner, "@books", slog.New(slog.DiscardHandler))
 	waitForCallbackLoop(t, done)
 	runner.wait()
 	state, err := store.Open(statePath, now)
@@ -200,7 +199,7 @@ func Test_handleRefreshCallback_answers_duplicate_refresh_while_background_diges
 	}, client.answersSnapshot())
 }
 
-func Test_pollRefreshCallbacks_answers_and_ignores_refresh_from_unexpected_chat(t *testing.T) {
+func Test_startCallbackListening_answers_and_ignores_refresh_from_unexpected_chat(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -215,8 +214,7 @@ func Test_pollRefreshCallbacks_answers_and_ignores_refresh_from_unexpected_chat(
 				MessageID:     77,
 			},
 		},
-		nextOffset: 101,
-		cancel:     cancel,
+		cancel: cancel,
 	}
 	runner := &digestRunner{dependencies: app.Dependencies{
 		Fetcher:      countingFetcher{calls: &fetches},
@@ -226,25 +224,26 @@ func Test_pollRefreshCallbacks_answers_and_ignores_refresh_from_unexpected_chat(
 	}, statePath: filepath.Join(t.TempDir(), "state.db"), logger: slog.New(slog.DiscardHandler)}
 
 	// When
-	done := startCallbackPolling(ctx, client, runner, "-100123", slog.New(slog.DiscardHandler))
+	done := startCallbackListening(ctx, client, runner, "-100123", slog.New(slog.DiscardHandler))
 	waitForCallbackLoop(t, done)
 	runner.wait()
 
 	// Then
-	require.Equal(t, []int{0, 101}, client.pollOffsetsSnapshot())
+	require.Equal(t, int32(1), client.listens.Load())
 	require.Equal(t, []callbackAnswer{{id: "callback-1", text: refreshUnavailableText}}, client.answersSnapshot())
 	require.Empty(t, client.removalsSnapshot())
 	require.Zero(t, fetches.Load())
 }
 
-func Test_pollRefreshCallbacks_backs_off_after_poll_error(t *testing.T) {
+func Test_startCallbackListening_logs_listener_error_without_process_retry(t *testing.T) {
 	t.Parallel()
 
 	// Given
 	ctx, cancel := context.WithCancel(context.Background())
-	client := &failingCallbackClient{
-		firstPoll: make(chan struct{}),
-		err:       errors.New("telegram unavailable"),
+	var logs bytes.Buffer
+	client := &recordingCallbackClient{
+		listenErr: errors.New("telegram unavailable"),
+		cancel:    cancel,
 	}
 	runner := &digestRunner{
 		dependencies: app.Dependencies{
@@ -258,14 +257,14 @@ func Test_pollRefreshCallbacks_backs_off_after_poll_error(t *testing.T) {
 	}
 
 	// When
-	done := startCallbackPolling(ctx, client, runner, "", slog.New(slog.DiscardHandler))
-	waitForSignal(t, client.firstPoll)
-	time.Sleep(20 * time.Millisecond)
-	cancel()
+	done := startCallbackListening(ctx, client, runner, "", slog.New(slog.NewTextHandler(&logs, nil)))
 	waitForCallbackLoop(t, done)
 
 	// Then
-	require.Equal(t, int32(1), client.polls.Load())
+	require.Equal(t, int32(1), client.listens.Load())
+	require.Contains(t, logs.String(), "msg=callback.poll_failed")
+	require.Contains(t, logs.String(), "telegram unavailable")
+	require.NotContains(t, logs.String(), "update_offset")
 }
 
 type recordingSender struct {
@@ -291,36 +290,32 @@ func (s *recordingSender) Send(_ context.Context, text string, silent bool, atta
 }
 
 type recordingCallbackClient struct {
-	events      *recordedEvents
-	cancel      context.CancelFunc
-	callbacks   []telegram.Callback
-	answers     []callbackAnswer
-	removals    []removedReplyMarkup
-	pollOffsets []int
-	nextOffset  int
-	polls       int
-	mu          sync.Mutex
+	events    *recordedEvents
+	cancel    context.CancelFunc
+	listenErr error
+	callbacks []telegram.Callback
+	answers   []callbackAnswer
+	removals  []removedReplyMarkup
+	listens   atomic.Int32
+	mu        sync.Mutex
 }
 
-func (c *recordingCallbackClient) PollCallbacks(ctx context.Context, offset int) ([]telegram.Callback, int, error) {
-	c.mu.Lock()
-	c.pollOffsets = append(c.pollOffsets, offset)
-	if c.polls == 0 {
-		c.polls++
-		callbacks := c.callbacks
-		nextOffset := c.nextOffset
-		c.mu.Unlock()
-
-		return callbacks, nextOffset, nil
+func (c *recordingCallbackClient) ListenCallbacks(
+	ctx context.Context,
+	handle telegram.CallbackHandler,
+	reportError telegram.CallbackErrorHandler,
+) {
+	c.listens.Add(1)
+	for _, callback := range c.callbacks {
+		handle(ctx, callback)
 	}
-	cancel := c.cancel
-	c.mu.Unlock()
-	if cancel != nil {
-		cancel()
+	if c.listenErr != nil {
+		reportError(ctx, c.listenErr)
+	}
+	if c.cancel != nil {
+		c.cancel()
 	}
 	<-ctx.Done()
-
-	return nil, offset, ctx.Err()
 }
 
 func (c *recordingCallbackClient) AnswerCallback(_ context.Context, callbackID string, text string) error {
@@ -357,35 +352,6 @@ func (c *recordingCallbackClient) removalsSnapshot() []removedReplyMarkup {
 	defer c.mu.Unlock()
 
 	return append([]removedReplyMarkup(nil), c.removals...)
-}
-
-func (c *recordingCallbackClient) pollOffsetsSnapshot() []int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	return append([]int(nil), c.pollOffsets...)
-}
-
-type failingCallbackClient struct {
-	err       error
-	firstPoll chan struct{}
-	polls     atomic.Int32
-}
-
-func (c *failingCallbackClient) PollCallbacks(context.Context, int) ([]telegram.Callback, int, error) {
-	if c.polls.Add(1) == 1 {
-		close(c.firstPoll)
-	}
-
-	return nil, 0, c.err
-}
-
-func (c *failingCallbackClient) AnswerCallback(context.Context, string, string) error {
-	return nil
-}
-
-func (c *failingCallbackClient) RemoveReplyMarkup(context.Context, int64, int) error {
-	return nil
 }
 
 type callbackAnswer struct {
