@@ -90,6 +90,8 @@ func Test_Service_renders_freshness_using_cycle_time_in_configured_timezone(t *t
 
 	moscow, err := time.LoadLocation("Europe/Moscow")
 	require.NoError(t, err)
+	losAngeles, err := time.LoadLocation("America/Los_Angeles")
+	require.NoError(t, err)
 	testCases := map[string]struct {
 		policy     app.FreshBooksPolicy
 		location   *time.Location
@@ -116,6 +118,13 @@ func Test_Service_renders_freshness_using_cycle_time_in_configured_timezone(t *t
 			bookYear:   2026,
 			policyYear: 2026,
 			emoji:      "🔥 ",
+		},
+		"future year uses configured timezone": {
+			cycleTime:  time.Date(2027, time.January, 1, 0, 30, 0, 0, time.UTC),
+			location:   losAngeles,
+			bookYear:   2027,
+			policyYear: 2026,
+			emoji:      "🛸 ",
 		},
 	}
 

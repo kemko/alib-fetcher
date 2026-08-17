@@ -166,8 +166,9 @@ year. `FRESH_BOOKS=since:YYYY` accepts a four-digit inclusive lower year. Empty
 or absent `FRESH_BOOKS` disables `✨`, not `🔥`. The cycle time in `TIMEZONE`
 controls classification: the current year gets `🔥`; in January, the previous
 year also gets `🔥` regardless of the optional threshold. Other recognized
-years from the threshold through the current year get `✨`. Future and
-unrecognized years get neither marker. The recognized year is the last
+years from the threshold through the current year get `✨`. A recognized year
+greater than the current year gets `🛸` independently of `FRESH_BOOKS`; an
+unrecognized year gets no marker. The recognized year is the last
 four-digit year in the bibliography followed by `г` or `г.`; years elsewhere in
 the listing do not participate.
 
@@ -176,12 +177,12 @@ the listing do not participate.
 The first message starts with `<p><b>Новые книги на Alib.ru</b></p>`; later
 chunks start with a listing. If the header and first listing do not fit together
 but the listing fits alone, the first chunk contains only the header. Rich HTML
-paragraphs use `<p>`, every line break uses `<br/>`, and one blank line between
-non-empty paragraph blocks uses `<br/><br/>`. Rendered Telegram HTML contains no
-literal CR or LF characters. With content, block order is
-`main → <br/><br/> → content → <br/><br/> → details`; without content, it is
-exactly `main → <br/><br/> → details`. The final `Купить` paragraph has the same
-single inter-block separator. Adjacent listings within one chunk use `<hr/>`,
+paragraphs use `<p>`, every line break uses `<br/>`, and non-empty paragraph
+blocks use one `<br/>` separator. Rendered Telegram HTML contains no literal CR
+or LF characters. With content, block order is
+`main → <br/> → content → <br/> → details`; without content, it is exactly
+`main → <br/> → details`. The final `Купить` paragraph has the same single
+inter-block separator. Adjacent listings within one chunk use `<hr/>`,
 with no divider at chunk edges.
 Each listing renders, in order: emoji plus bold title and bibliography; optional
 content as a separate paragraph; seller, price, condition/other details, and

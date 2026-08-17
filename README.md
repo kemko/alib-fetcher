@@ -35,7 +35,9 @@ current year and whether the January exception applies:
 - `🔥` marks the current year and, during January, the previous year;
 - `✨` marks other recognized years between the configured inclusive boundary
   and the current year;
-- future and unrecognized publication years receive no marker.
+- `🛸` marks any recognized year greater than the current year, independently of
+  `FRESH_BOOKS`;
+- unrecognized publication years receive no marker.
 
 The January `🔥` rule applies even when `FRESH_BOOKS` is empty or its configured
 boundary excludes the previous year.
@@ -81,11 +83,11 @@ The source photo-link section is replaced with `Фото: есть` or `Фото
 When seller URL is absent, seller name is rendered as plain text. Missing
 optional fields do not create empty paragraphs. Dynamic text and URLs are
 HTML-escaped. Paragraphs use `<p>`. Every encoded line break uses `<br/>`, and
-one blank line between non-empty paragraph blocks uses `<br/><br/>`; rendered
-Telegram HTML contains no literal CR or LF characters. A listing with content
-uses `main → <br/><br/> → content → <br/><br/> → details`; without content it
-uses exactly `main → <br/><br/> → details`. The final `Купить` paragraph also
-has one `<br/><br/>` separator before it. Adjacent listings in one Rich Message
+non-empty paragraph blocks use one `<br/>` separator; rendered Telegram HTML
+contains no literal CR or LF characters. A listing with content uses
+`main → <br/> → content → <br/> → details`; without content it uses exactly
+`main → <br/> → details`. The final `Купить` paragraph also has one `<br/>`
+separator before it. Adjacent listings in one Rich Message
 are separated by `<hr/>`; no divider appears before the first listing or after
 the last. When a digest is split into multiple messages, the heading appears
 only in the first message.
