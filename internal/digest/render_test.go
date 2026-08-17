@@ -272,6 +272,35 @@ func Test_Render_splits_only_between_complete_listings(t *testing.T) {
 	}
 }
 
+func Test_Render_uses_header_only_chunk_when_first_listing_fits_only_without_header(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	book := alib.Book{
+		Title:  "Первая длинная книга",
+		BuyURL: "https://example.com/1",
+	}
+	header := `<p><b>Новые книги на Alib.ru</b></p>`
+	unlimitedChunks, err := digest.Render([]alib.Book{book}, digest.Options{Limit: 4096})
+	require.NoError(t, err)
+	require.Len(t, unlimitedChunks, 1)
+	require.True(t, strings.HasPrefix(unlimitedChunks[0].Text, header))
+	listing := strings.TrimPrefix(unlimitedChunks[0].Text, header)
+	messageLimit := utf8.RuneCountInString(listing)
+	require.LessOrEqual(t, utf8.RuneCountInString(header), messageLimit)
+	require.Greater(t, utf8.RuneCountInString(header+listing), messageLimit)
+
+	// When
+	chunks, err := digest.Render([]alib.Book{book}, digest.Options{Limit: messageLimit})
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, []digest.Chunk{
+		{Text: header, Books: []alib.Book{}},
+		{Text: listing, Books: []alib.Book{book}},
+	}, chunks)
+}
+
 func Test_Render_counts_divider_toward_message_limit(t *testing.T) {
 	t.Parallel()
 

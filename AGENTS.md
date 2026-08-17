@@ -171,12 +171,14 @@ the listing do not participate.
 ## Digest and transport details
 
 The first message starts with `<p><b>Новые книги на Alib.ru</b></p>`; later
-chunks start with a listing. Rich HTML paragraphs use `<p>`, and semantic line
-breaks inside a paragraph use `<br>`. Adjacent listings within one chunk use
-`<hr/>`, with no divider at chunk edges. Each listing renders, in order: emoji
-plus bold title and bibliography; optional content as a separate paragraph;
-seller, price, condition/other details, and photo status on separate lines;
-then a final `Купить` link in its own paragraph. The seller format is
+chunks start with a listing. If the header and first listing do not fit together
+but the listing fits alone, the first chunk contains only the header. Rich HTML
+paragraphs use `<p>`, and semantic line breaks inside a paragraph use `<br>`.
+Adjacent listings within one chunk use `<hr/>`, with no divider at chunk edges.
+Each listing renders, in order: emoji plus bold title and bibliography; optional
+content as a separate paragraph; seller, price, condition/other details, and
+photo status on separate lines; then a final `Купить` link in its own paragraph.
+The seller format is
 `Продавец: <a href="...">Name</a>, Location.`; without seller URL, the name is
 plain text. Missing optional fields must not create extra empty paragraphs. The
 source `Смотрите` section is omitted and replaced with `Фото: есть` or

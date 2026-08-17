@@ -115,6 +115,9 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 		if sendErr := s.send(ctx, chunk.Text, silent, attachRefresh); sendErr != nil {
 			return result, fmt.Errorf("send digest: %w", sendErr)
 		}
+		if len(chunk.Books) == 0 {
+			continue
+		}
 		if markErr := s.dependencies.State.MarkSent(ackCtx, chunk.Books, cycleTime); markErr != nil {
 			return result, fmt.Errorf("record delivered listings: %w", markErr)
 		}

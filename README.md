@@ -78,6 +78,9 @@ HTML-escaped. Paragraphs use `<p>`, and semantic line breaks inside a paragraph
 use `<br>`. Adjacent listings in one Rich Message are separated by `<hr/>`;
 no divider appears before the first listing or after the last. When a digest is
 split into multiple messages, the heading appears only in the first message.
+If the heading and first pending listing cannot fit together but the listing
+fits alone, the first message contains only the heading and the listing follows
+in a headerless message.
 Only the final message uses the normal notification sound; earlier messages are
 silent.
 Whenever a digest sends at least one message, the final message includes an

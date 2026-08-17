@@ -39,26 +39,26 @@ func Render(books []alib.Book, options Options) ([]Chunk, error) {
 	if len(books) == 0 {
 		return nil, nil
 	}
+	if utf8.RuneCountInString(header) > options.Limit {
+		return nil, fmt.Errorf("%w: %s", ErrMessageTooLong, books[0].BuyURL)
+	}
 
 	chunks := make([]Chunk, 0, 1)
 	current := Chunk{Text: header, Books: make([]alib.Book, 0)}
 	for _, book := range books {
 		item := renderBook(book, options)
+		if utf8.RuneCountInString(item) > options.Limit {
+			return nil, fmt.Errorf("%w: %s", ErrMessageTooLong, book.BuyURL)
+		}
 		separator := ""
 		if len(current.Books) > 0 {
 			separator = listingSeparator
 		}
 
 		if utf8.RuneCountInString(current.Text+separator+item) > options.Limit {
-			if len(current.Books) == 0 {
-				return nil, fmt.Errorf("%w: %s", ErrMessageTooLong, book.BuyURL)
-			}
 			chunks = append(chunks, current)
 			current = Chunk{Books: make([]alib.Book, 0)}
 			separator = ""
-		}
-		if utf8.RuneCountInString(current.Text+item) > options.Limit {
-			return nil, fmt.Errorf("%w: %s", ErrMessageTooLong, book.BuyURL)
 		}
 
 		current.Text += separator + item

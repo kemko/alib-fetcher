@@ -202,16 +202,7 @@ func Test_Service_sends_later_chunk_that_fits_only_without_header(t *testing.T) 
 	t.Parallel()
 
 	// Given
-	books := []alib.Book{
-		{Title: "Первая", BuyURL: "https://example.com/1"},
-		{Title: "Вторая длиннее первой", BuyURL: "https://example.com/2"},
-	}
-	firstBookChunks, err := digest.Render(books[:1], digest.Options{Limit: 4096})
-	require.NoError(t, err)
-	messageLimit := utf8.RuneCountInString(firstBookChunks[0].Text)
-	secondBookChunks, err := digest.Render(books[1:], digest.Options{Limit: 4096})
-	require.NoError(t, err)
-	require.Greater(t, utf8.RuneCountInString(secondBookChunks[0].Text), messageLimit)
+	books, messageLimit := headerlessOnlyLaterBookFixture(t)
 	expectedChunks, err := digest.Render(books, digest.Options{Limit: messageLimit})
 	require.NoError(t, err)
 	require.Len(t, expectedChunks, 2)
@@ -234,6 +225,73 @@ func Test_Service_sends_later_chunk_that_fits_only_without_header(t *testing.T) 
 	require.Equal(t, app.Result{Sent: 2}, result)
 	require.Equal(t, []string{expectedChunks[0].Text, expectedChunks[1].Text}, sender.messages)
 	require.Equal(t, books, state.marked)
+}
+
+func Test_Service_retries_headerless_only_chunk_after_partial_delivery_failure(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	now := time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC)
+	books, messageLimit := headerlessOnlyLaterBookFixture(t)
+	expectedChunks, err := digest.Render(books, digest.Options{Limit: messageLimit})
+	require.NoError(t, err)
+	require.Len(t, expectedChunks, 2)
+
+	state, err := store.Open(filepath.Join(t.TempDir(), "state.db"), now)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, state.Close()) })
+	sendErr := errors.New("telegram unavailable")
+	sender := &fakeSender{failAt: 2, err: sendErr}
+	service := app.NewService(app.Dependencies{
+		Fetcher:      fakeFetcher{books: books},
+		State:        state,
+		Sender:       sender,
+		MessageLimit: messageLimit,
+		Now:          func() time.Time { return now },
+	})
+
+	// When
+	firstResult, firstErr := service.Run(context.Background())
+	pendingAfterFailure, pendingErr := state.Pending(context.Background())
+	sender.failAt = 0
+	secondResult, secondErr := service.Run(context.Background())
+	pendingAfterRetry, retryPendingErr := state.Pending(context.Background())
+
+	// Then
+	require.ErrorIs(t, firstErr, sendErr)
+	require.Equal(t, app.Result{Fetched: 2, New: 2, Sent: 1}, firstResult)
+	require.NoError(t, pendingErr)
+	require.Equal(t, books[1:], pendingAfterFailure)
+	require.NoError(t, secondErr)
+	require.Equal(t, app.Result{Fetched: 2, Sent: 1}, secondResult)
+	require.NoError(t, retryPendingErr)
+	require.Empty(t, pendingAfterRetry)
+	header := `<p><b>Новые книги на Alib.ru</b></p>`
+	require.Equal(t, []string{
+		expectedChunks[0].Text,
+		expectedChunks[1].Text,
+		header,
+		expectedChunks[1].Text,
+	}, sender.messages)
+	require.Equal(t, []bool{true, false, true, false}, sender.silent)
+	require.Equal(t, []bool{false, true, false, true}, sender.attachRefresh)
+}
+
+func headerlessOnlyLaterBookFixture(t *testing.T) ([]alib.Book, int) {
+	t.Helper()
+
+	books := []alib.Book{
+		{Title: "Первая", BuyURL: "https://example.com/1"},
+		{Title: "Вторая длиннее первой", BuyURL: "https://example.com/2"},
+	}
+	firstBookChunks, err := digest.Render(books[:1], digest.Options{Limit: 4096})
+	require.NoError(t, err)
+	messageLimit := utf8.RuneCountInString(firstBookChunks[0].Text)
+	secondBookChunks, err := digest.Render(books[1:], digest.Options{Limit: 4096})
+	require.NoError(t, err)
+	require.Greater(t, utf8.RuneCountInString(secondBookChunks[0].Text), messageLimit)
+
+	return books, messageLimit
 }
 
 func Test_Service_runs_pre_delivery_hook_once_before_sending_and_marking(t *testing.T) {
