@@ -77,12 +77,12 @@ chunk пачки. Одиночное сообщение сохраняет за�
 
 - Modify: none expected
 
-- [ ] Выполнить `make verify`.
-- [ ] Выполнить `make coverage`.
-- [ ] Подтвердить statement coverage не ниже 80%.
-- [ ] Подтвердить тестами: single-chunk digest содержит заголовок; multi-chunk digest содержит его
+- [x] Выполнить `make verify`.
+- [x] Выполнить `make coverage`.
+- [x] Подтвердить statement coverage не ниже 80%.
+- [x] Подтвердить тестами: single-chunk digest содержит заголовок; multi-chunk digest содержит его
   ровно один раз в первом chunk; последующие chunks укладываются в лимит без заголовка.
-- [ ] Проверить итоговый diff, исключить посторонние изменения и подготовить Conventional Commit.
+- [x] Проверить итоговый diff, исключить посторонние изменения и подготовить Conventional Commit.
 
 ### Task 4: Update documentation
 
