@@ -72,7 +72,7 @@ func renderBook(book alib.Book, options Options) string {
 	mainLine := publicationEmoji(book.PublicationYear, options) +
 		"<b>" + html.EscapeString(strings.TrimSpace(book.Title)) + "</b>"
 	if bibliography := strings.TrimSpace(book.Bibliography); bibliography != "" {
-		mainLine += " " + html.EscapeString(bibliography)
+		mainLine += " " + renderMultilineText(bibliography)
 	}
 
 	paragraphs := []string{"<p>" + mainLine + "</p>"}

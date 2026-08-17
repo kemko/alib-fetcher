@@ -19,7 +19,7 @@ func Test_Render_formats_structured_listing_and_escapes_HTML(t *testing.T) {
 	lowerYear := 2021
 	book := alib.Book{
 		Title:           "Автор. A < B & книга.",
-		Bibliography:    "Полная библиография & ISBN.",
+		Bibliography:    "Полная библиография & ISBN.\nВторая строка.",
 		PublicationYear: 2021,
 		Content:         "Первая строка <содержания>.\nВторая & строка.",
 		Seller:          "Bot & Sad",
@@ -43,7 +43,7 @@ func Test_Render_formats_structured_listing_and_escapes_HTML(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []digest.Chunk{{
 		Text: `<p><b>Новые книги на Alib.ru</b></p>` +
-			`<p>✨ <b>Автор. A &lt; B &amp; книга.</b> Полная библиография &amp; ISBN.</p>` +
+			`<p>✨ <b>Автор. A &lt; B &amp; книга.</b> Полная библиография &amp; ISBN.<br>Вторая строка.</p>` +
 			`<p>Первая строка &lt;содержания&gt;.<br>Вторая &amp; строка.</p>` +
 			`<p>Продавец: <a href="https://example.com/seller?a=1&amp;b=2">Bot &amp; Sad</a>, Москва.` +
 			`<br>Цена: 3 900 руб.<br>Состояние: Отличное.<br>Комплект &lt;полный&gt;.<br>Фото: есть</p>` +

@@ -148,20 +148,19 @@ func (s *Service) renderOptions(cycleTime time.Time) digest.Options {
 func renderSendable(books []alib.Book, options digest.Options) ([]digest.Chunk, []string, error) {
 	renderable := make([]alib.Book, 0, len(books))
 	skippedBuyURLs := make([]string, 0)
+	var chunks []digest.Chunk
 	for _, book := range books {
-		if _, err := digest.Render([]alib.Book{book}, options); err != nil {
+		renderable = append(renderable, book)
+		candidateChunks, err := digest.Render(renderable, options)
+		if err != nil {
+			renderable = renderable[:len(renderable)-1]
 			if errors.Is(err, digest.ErrMessageTooLong) {
 				skippedBuyURLs = append(skippedBuyURLs, book.BuyURL)
 				continue
 			}
 			return nil, nil, err
 		}
-		renderable = append(renderable, book)
-	}
-
-	chunks, err := digest.Render(renderable, options)
-	if err != nil {
-		return nil, nil, err
+		chunks = candidateChunks
 	}
 
 	return chunks, skippedBuyURLs, nil

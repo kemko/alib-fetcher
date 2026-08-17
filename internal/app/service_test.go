@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kemko/alib-fetcher/internal/alib"
 	"github.com/kemko/alib-fetcher/internal/app"
@@ -195,6 +196,44 @@ func Test_Service_sends_only_final_chunk_with_sound(t *testing.T) {
 	require.Equal(t, now, state.markedAt)
 	require.Equal(t, []bool{true, true, false}, sender.silent)
 	require.Equal(t, []bool{false, false, true}, sender.attachRefresh)
+}
+
+func Test_Service_sends_later_chunk_that_fits_only_without_header(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	books := []alib.Book{
+		{Title: "Первая", BuyURL: "https://example.com/1"},
+		{Title: "Вторая длиннее первой", BuyURL: "https://example.com/2"},
+	}
+	firstBookChunks, err := digest.Render(books[:1], digest.Options{Limit: 4096})
+	require.NoError(t, err)
+	messageLimit := utf8.RuneCountInString(firstBookChunks[0].Text)
+	secondBookChunks, err := digest.Render(books[1:], digest.Options{Limit: 4096})
+	require.NoError(t, err)
+	require.Greater(t, utf8.RuneCountInString(secondBookChunks[0].Text), messageLimit)
+	expectedChunks, err := digest.Render(books, digest.Options{Limit: messageLimit})
+	require.NoError(t, err)
+	require.Len(t, expectedChunks, 2)
+
+	state := &fakeState{pending: books}
+	sender := &fakeSender{}
+	service := app.NewService(app.Dependencies{
+		Fetcher:      fakeFetcher{},
+		State:        state,
+		Sender:       sender,
+		MessageLimit: messageLimit,
+		Now:          time.Now,
+	})
+
+	// When
+	result, err := service.Run(context.Background())
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, app.Result{Sent: 2}, result)
+	require.Equal(t, []string{expectedChunks[0].Text, expectedChunks[1].Text}, sender.messages)
+	require.Equal(t, books, state.marked)
 }
 
 func Test_Service_runs_pre_delivery_hook_once_before_sending_and_marking(t *testing.T) {
