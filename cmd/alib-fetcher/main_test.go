@@ -216,7 +216,11 @@ func Test_run_sends_only_final_wired_message_with_sound(t *testing.T) {
 
 	for index, payload := range payloads {
 		require.Equal(t, "-100123", payload.ChatID)
-		require.Contains(t, payload.RichMessage.HTML, "<b>Новые книги на Alib.ru</b>")
+		if index == 0 {
+			require.Contains(t, payload.RichMessage.HTML, "<b>Новые книги на Alib.ru</b>")
+		} else {
+			require.NotContains(t, payload.RichMessage.HTML, "<b>Новые книги на Alib.ru</b>")
+		}
 		if index < len(payloads)-1 {
 			require.True(t, payload.DisableNotification)
 			require.Nil(t, payload.ReplyMarkup)

@@ -237,14 +237,19 @@ func Test_Render_splits_only_between_complete_listings(t *testing.T) {
 	// Given
 	books := []alib.Book{
 		{Title: "Первая", PublicationYear: 2026, BuyURL: "https://example.com/1"},
-		{Title: "Вторая", PublicationYear: 2025, BuyURL: "https://example.com/2"},
+		{Title: "Вторая длиннее первой", PublicationYear: 2025, BuyURL: "https://example.com/2"},
+		{Title: "Третья тоже длинная", PublicationYear: 2024, BuyURL: "https://example.com/3"},
 	}
 	localTime := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
-	firstMessage := `<p><b>Новые книги на Alib.ru</b></p><p>🔥 <b>Первая</b></p>` +
+	header := `<p><b>Новые книги на Alib.ru</b></p>`
+	firstMessage := header + `<p>🔥 <b>Первая</b></p>` +
 		`<p>Фото: нет</p><p><a href="https://example.com/1">Купить</a></p>`
-	secondMessage := `<p><b>Новые книги на Alib.ru</b></p><p>🔥 <b>Вторая</b></p>` +
+	secondMessage := `<p>🔥 <b>Вторая длиннее первой</b></p>` +
 		`<p>Фото: нет</p><p><a href="https://example.com/2">Купить</a></p>`
+	thirdMessage := `<p><b>Третья тоже длинная</b></p>` +
+		`<p>Фото: нет</p><p><a href="https://example.com/3">Купить</a></p>`
 	messageLimit := utf8.RuneCountInString(firstMessage)
+	require.Greater(t, utf8.RuneCountInString(header+secondMessage), messageLimit)
 
 	// When
 	chunks, err := digest.Render(books, digest.Options{Limit: messageLimit, LocalTime: localTime})
@@ -253,8 +258,14 @@ func Test_Render_splits_only_between_complete_listings(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []digest.Chunk{
 		{Text: firstMessage, Books: books[:1]},
-		{Text: secondMessage, Books: books[1:]},
+		{Text: secondMessage, Books: books[1:2]},
+		{Text: thirdMessage, Books: books[2:]},
 	}, chunks)
+	allMessages := strings.Join([]string{chunks[0].Text, chunks[1].Text, chunks[2].Text}, "")
+	require.Equal(t, 1, strings.Count(allMessages, "Новые книги на Alib.ru"))
+	require.Contains(t, chunks[0].Text, "Новые книги на Alib.ru")
+	require.NotContains(t, chunks[1].Text, "Новые книги на Alib.ru")
+	require.NotContains(t, chunks[2].Text, "Новые книги на Alib.ru")
 	for _, chunk := range chunks {
 		require.LessOrEqual(t, utf8.RuneCountInString(chunk.Text), messageLimit)
 		require.NotContains(t, chunk.Text, "<hr/>")

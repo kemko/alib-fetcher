@@ -54,7 +54,7 @@ func Render(books []alib.Book, options Options) ([]Chunk, error) {
 				return nil, fmt.Errorf("%w: %s", ErrMessageTooLong, book.BuyURL)
 			}
 			chunks = append(chunks, current)
-			current = Chunk{Text: header, Books: make([]alib.Book, 0)}
+			current = Chunk{Books: make([]alib.Book, 0)}
 			separator = ""
 		}
 		if utf8.RuneCountInString(current.Text+item) > options.Limit {

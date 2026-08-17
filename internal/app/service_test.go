@@ -170,7 +170,7 @@ func Test_Service_sends_only_final_chunk_with_sound(t *testing.T) {
 		Fetcher:      fakeFetcher{books: books},
 		State:        state,
 		Sender:       sender,
-		MessageLimit: 180,
+		MessageLimit: 170,
 		Now:          func() time.Time { return now },
 	})
 
@@ -291,7 +291,7 @@ func Test_Service_waits_and_retries_only_rate_limited_chunk(t *testing.T) {
 
 			return nil
 		},
-		MessageLimit: 180,
+		MessageLimit: 170,
 	})
 
 	// When
