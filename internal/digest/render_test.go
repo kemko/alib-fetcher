@@ -344,6 +344,39 @@ func Test_Render_rejects_listing_over_rune_limit(t *testing.T) {
 	require.Empty(t, chunks)
 }
 
+func Test_RenderSendable_skips_oversized_listings_in_one_pass(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	first := alib.Book{Title: "Первая", BuyURL: "https://example.com/1"}
+	oversized := alib.Book{
+		Title:  strings.Repeat("Очень длинная книга ", 20),
+		BuyURL: "https://example.com/oversized",
+	}
+	second := alib.Book{Title: "Вторая", BuyURL: "https://example.com/2"}
+
+	// When
+	chunks, skippedBuyURLs, err := digest.RenderSendable(
+		[]alib.Book{first, oversized, second},
+		digest.Options{Limit: 180},
+	)
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, []string{oversized.BuyURL}, skippedBuyURLs)
+	require.Equal(t, []digest.Chunk{
+		{
+			Text: `<p><b>Новые книги на Alib.ru</b></p>` +
+				`<p><b>Первая</b></p><p>Фото: нет</p><p><a href="https://example.com/1">Купить</a></p>`,
+			Books: []alib.Book{first},
+		},
+		{
+			Text:  `<p><b>Вторая</b></p><p>Фото: нет</p><p><a href="https://example.com/2">Купить</a></p>`,
+			Books: []alib.Book{second},
+		},
+	}, chunks)
+}
+
 func Test_Render_returns_no_chunks_for_no_books(t *testing.T) {
 	t.Parallel()
 

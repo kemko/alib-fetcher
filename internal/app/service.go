@@ -99,7 +99,7 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 		return result, nil
 	}
 
-	chunks, skippedBuyURLs, err := renderSendable(pending, renderOptions)
+	chunks, skippedBuyURLs, err := digest.RenderSendable(pending, renderOptions)
 	if err != nil {
 		return result, fmt.Errorf("render digest: %w", err)
 	}
@@ -146,27 +146,6 @@ func (s *Service) renderOptions(cycleTime time.Time) digest.Options {
 	}
 
 	return options
-}
-
-func renderSendable(books []alib.Book, options digest.Options) ([]digest.Chunk, []string, error) {
-	renderable := make([]alib.Book, 0, len(books))
-	skippedBuyURLs := make([]string, 0)
-	var chunks []digest.Chunk
-	for _, book := range books {
-		renderable = append(renderable, book)
-		candidateChunks, err := digest.Render(renderable, options)
-		if err != nil {
-			renderable = renderable[:len(renderable)-1]
-			if errors.Is(err, digest.ErrMessageTooLong) {
-				skippedBuyURLs = append(skippedBuyURLs, book.BuyURL)
-				continue
-			}
-			return nil, nil, err
-		}
-		chunks = candidateChunks
-	}
-
-	return chunks, skippedBuyURLs, nil
 }
 
 func (s *Service) send(ctx context.Context, text string, silent bool, attachRefresh bool) error {
