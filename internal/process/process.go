@@ -10,18 +10,17 @@ import (
 )
 
 const (
-	logKeyError        = "error"
-	logKeyFetched      = "fetched"
-	logKeyNew          = "new"
-	logKeyPruned       = "pruned"
-	logKeySchedule     = "cron_schedule"
-	logKeySent         = "sent"
-	logKeyTimezone     = "timezone"
-	logKeyTrigger      = "trigger"
-	logKeyUpdateOffset = "update_offset"
-	triggerRefresh     = "refresh"
-	triggerScheduled   = "scheduled"
-	triggerStartup     = "startup"
+	logKeyError      = "error"
+	logKeyFetched    = "fetched"
+	logKeyNew        = "new"
+	logKeyPruned     = "pruned"
+	logKeySchedule   = "cron_schedule"
+	logKeySent       = "sent"
+	logKeyTimezone   = "timezone"
+	logKeyTrigger    = "trigger"
+	triggerRefresh   = "refresh"
+	triggerScheduled = "scheduled"
+	triggerStartup   = "startup"
 )
 
 // Settings contains process-level service settings.
@@ -52,7 +51,7 @@ func Run(
 		return err
 	}
 
-	callbacksDone := startCallbackPolling(ctx, callbacks, runner, settings.TelegramChatID, logger)
+	callbacksDone := startCallbackListening(ctx, callbacks, runner, settings.TelegramChatID, logger)
 	logger.InfoContext(ctx, "scheduler.started",
 		slog.String(logKeySchedule, settings.CronSpec),
 		slog.String(logKeyTimezone, settings.Location.String()),

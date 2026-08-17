@@ -126,22 +126,22 @@
 - Modify: `internal/process/process.go`
 - Modify: `internal/process/process_test.go`
 
-- [ ] Заменить pull-контракт `PollCallbacks(offset)` на callback listener, запускающий SDK `Bot.Start(ctx)`.
-- [ ] Преобразовывать SDK callback query в узкий `telegram.Callback`; безопасно обрабатывать
+- [x] Заменить pull-контракт `PollCallbacks(offset)` на callback listener, запускающий SDK `Bot.Start(ctx)`.
+- [x] Преобразовывать SDK callback query в узкий `telegram.Callback`; безопасно обрабатывать
   отсутствующее или inaccessible message.
-- [ ] Зарегистрировать обработку stable `telegram.RefreshCallbackData`; unknown callback data игнорируется,
+- [x] Зарегистрировать обработку stable `telegram.RefreshCallbackData`; unknown callback data игнорируется,
   пока SDK самостоятельно продвигает update offset.
-- [ ] Удалить собственные offset bookkeeping, idle delay и poll-error retry loop из process layer.
-- [ ] Передавать SDK polling errors в существующий `callback.poll_failed` log event без token.
-- [ ] Запускать SDK listener только в service mode; `-once` продолжает отправлять кнопку без polling.
-- [ ] На shutdown дождаться завершения SDK listener и refresh runner.
-- [ ] Сохранить chat filtering, callback answers, shared runner lock, duplicate refresh skip и продолжение polling во время
+- [x] Удалить собственные offset bookkeeping, idle delay и poll-error retry loop из process layer.
+- [x] Передавать SDK polling errors в существующий `callback.poll_failed` log event без token.
+- [x] Запускать SDK listener только в service mode; `-once` продолжает отправлять кнопку без polling.
+- [x] На shutdown дождаться завершения SDK listener и refresh runner.
+- [x] Сохранить chat filtering, callback answers, shared runner lock, duplicate refresh skip и продолжение polling во время
   refresh digest.
-- [ ] Сохранить удаление старой кнопки только после появления renderable chunks и до первой
+- [x] Сохранить удаление старой кнопки только после появления renderable chunks и до первой
   новой отправки.
-- [ ] Обновить tests для service/once lifecycle, unknown callback, foreign chat, duplicate press, graceful cancellation, poll error logging
+- [x] Обновить tests для service/once lifecycle, unknown callback, foreign chat, duplicate press, graceful cancellation, poll error logging
   и ordering `answer → remove → send`.
-- [ ] Выполнить `make test`; все тесты должны пройти до Task 4.
+- [x] Выполнить `make test`; все тесты должны пройти до Task 4.
 
 ### Task 4: Обновить bootstrap, сквозные тесты и документацию
 

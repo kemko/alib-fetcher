@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	telegrambot "github.com/go-telegram/bot"
@@ -41,12 +40,10 @@ type Config struct {
 
 // Sender delivers digest messages through the Telegram Bot API.
 type Sender struct {
-	bot             *telegrambot.Bot
-	sdkErrors       chan error
-	callbackUpdates chan sdkCallbackUpdate
-	chatID          string
-	secrets         []string
-	startOnce       sync.Once
+	bot       *telegrambot.Bot
+	sdkErrors chan error
+	chatID    string
+	secrets   []string
 }
 
 // NewSender validates the API settings without exposing the bot token.
@@ -67,10 +64,9 @@ func newSender(config Config, client *http.Client) (*Sender, error) {
 	client.Timeout = config.Timeout
 	client.Transport = &responseLimitRoundTripper{base: transport}
 	sender := &Sender{
-		chatID:          config.ChatID,
-		secrets:         []string{config.Token, config.APIBase, serverURL},
-		sdkErrors:       make(chan error, 1),
-		callbackUpdates: make(chan sdkCallbackUpdate, 1),
+		chatID:    config.ChatID,
+		secrets:   []string{config.Token, config.APIBase, serverURL},
+		sdkErrors: make(chan error, 1),
 	}
 	sdkBot, err := telegrambot.New(
 		config.Token,
@@ -79,7 +75,7 @@ func newSender(config Config, client *http.Client) (*Sender, error) {
 		telegrambot.WithSkipGetMe(),
 		telegrambot.WithAllowedUpdates(telegrambot.AllowedUpdates{models.AllowedUpdateCallbackQuery}),
 		telegrambot.WithErrorsHandler(sender.handleSDKError),
-		telegrambot.WithDefaultHandler(sender.handleSDKUpdate),
+		telegrambot.WithDefaultHandler(ignoreSDKUpdate),
 		telegrambot.WithNotAsyncHandlers(),
 	)
 	if err != nil {

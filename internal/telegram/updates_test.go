@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func Test_Sender_polls_callback_updates(t *testing.T) {
+func Test_Sender_listens_for_registered_refresh_callbacks(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -38,6 +38,10 @@ func Test_Sender_polls_callback_updates(t *testing.T) {
 			"result": [
 				{
 					"update_id": 100,
+					"callback_query": {"id": "unknown", "data": "unknown"}
+				},
+				{
+					"update_id": 101,
 					"callback_query": {
 						"id": "callback-1",
 						"data": "refresh",
@@ -48,7 +52,22 @@ func Test_Sender_polls_callback_updates(t *testing.T) {
 						}
 					}
 				},
-				{"update_id": 101}
+				{
+					"update_id": 102,
+					"callback_query": {
+						"id": "callback-2",
+						"data": "refresh",
+						"message": {
+							"message_id": 78,
+							"date": 0,
+							"chat": {"id": -100124, "username": "archive"}
+						}
+					}
+				},
+				{
+					"update_id": 103,
+					"callback_query": {"id": "callback-3", "data": "refresh"}
+				}
 			]
 		}`))
 		assert.NoError(t, err)
@@ -63,13 +82,27 @@ func Test_Sender_polls_callback_updates(t *testing.T) {
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
+	callbacks := make(chan telegram.Callback, 3)
+	errors := make(chan error, 1)
+	done := make(chan struct{})
+	var callbackCount atomic.Int32
 
 	// When
-	callbacks, nextOffset, err := sender.PollCallbacks(ctx, 42)
+	go func() {
+		defer close(done)
+		sender.ListenCallbacks(ctx, func(_ context.Context, callback telegram.Callback) {
+			callbacks <- callback
+			if callbackCount.Add(1) == 3 {
+				cancel()
+			}
+		}, func(_ context.Context, err error) {
+			errors <- err
+		})
+	}()
+	waitForListener(t, done)
 
 	// Then
-	require.NoError(t, err)
-	assert.Equal(t, 101, nextOffset)
+	close(callbacks)
 	assert.Equal(t, []telegram.Callback{
 		{
 			ID:                  "callback-1",
@@ -78,14 +111,23 @@ func Test_Sender_polls_callback_updates(t *testing.T) {
 			MessageChatID:       -100123,
 			MessageID:           77,
 		},
-	}, callbacks)
-	callbacks, nextOffset, err = sender.PollCallbacks(ctx, nextOffset)
-	require.NoError(t, err)
-	assert.Empty(t, callbacks)
-	assert.Equal(t, 102, nextOffset)
+		{
+			ID:                  "callback-2",
+			Data:                telegram.RefreshCallbackData,
+			MessageChatUsername: "archive",
+			MessageChatID:       -100124,
+			MessageID:           78,
+		},
+		{
+			ID:   "callback-3",
+			Data: telegram.RefreshCallbackData,
+		},
+	}, collectCallbacks(callbacks))
+	assert.Empty(t, errors)
+	assert.Equal(t, int32(3), callbackCount.Load())
 }
 
-func Test_Sender_uses_short_poll_when_timeout_cannot_exceed_long_poll(t *testing.T) {
+func Test_Sender_listener_uses_short_poll_when_timeout_cannot_exceed_long_poll(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -120,14 +162,21 @@ func Test_Sender_uses_short_poll_when_timeout_cannot_exceed_long_poll(t *testing
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
+	callbacks := make(chan telegram.Callback, 1)
+	done := make(chan struct{})
 
 	// When
-	callbacks, nextOffset, err := sender.PollCallbacks(ctx, 42)
+	go func() {
+		defer close(done)
+		sender.ListenCallbacks(ctx, func(_ context.Context, callback telegram.Callback) {
+			callbacks <- callback
+			cancel()
+		}, func(context.Context, error) {})
+	}()
+	waitForListener(t, done)
 
 	// Then
-	require.NoError(t, err)
-	assert.Len(t, callbacks, 1)
-	assert.Equal(t, 43, nextOffset)
+	assert.Equal(t, telegram.Callback{ID: "callback-1", Data: telegram.RefreshCallbackData}, <-callbacks)
 }
 
 func Test_Sender_answers_callback_query(t *testing.T) {
@@ -212,32 +261,46 @@ func Test_Sender_returns_rejection_for_callback_API_failure(t *testing.T) {
 	require.Contains(t, err.Error(), "query is too old")
 }
 
-func Test_Sender_returns_decode_error_for_invalid_callback_response(t *testing.T) {
+func Test_Sender_listener_reports_sanitized_poll_error(t *testing.T) {
 	t.Parallel()
 
 	// Given
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
-		_, err := writer.Write([]byte(`not json`))
+		_, err := writer.Write([]byte(`{"ok":false,"description":"test-token rejected"}`))
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	sender, err := newTestSender(server.URL)
+	sender, err := telegram.NewSender(telegram.Config{
+		APIBase: server.URL,
+		Token:   "test-token",
+		ChatID:  "-100123",
+		Timeout: time.Second,
+	})
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
+	errors := make(chan error, 1)
+	done := make(chan struct{})
 
 	// When
-	callbacks, nextOffset, err := sender.PollCallbacks(ctx, 42)
+	go func() {
+		defer close(done)
+		sender.ListenCallbacks(ctx, func(context.Context, telegram.Callback) {}, func(_ context.Context, err error) {
+			errors <- err
+			cancel()
+		})
+	}()
+	waitForListener(t, done)
 
 	// Then
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "decode Telegram response")
-	assert.Nil(t, callbacks)
-	assert.Equal(t, 42, nextOffset)
+	pollErr := <-errors
+	require.ErrorIs(t, pollErr, telegram.ErrRejected)
+	assert.NotContains(t, pollErr.Error(), "test-token")
+	assert.NotContains(t, pollErr.Error(), server.URL)
 }
 
-func Test_Sender_returns_context_error_when_callback_poll_is_canceled(t *testing.T) {
+func Test_Sender_listener_stops_when_context_is_canceled(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -249,14 +312,35 @@ func Test_Sender_returns_context_error_when_callback_poll_is_canceled(t *testing
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
+	done := make(chan struct{})
 
 	// When
-	callbacks, nextOffset, err := sender.PollCallbacks(ctx, 42)
+	go func() {
+		defer close(done)
+		sender.ListenCallbacks(ctx, func(context.Context, telegram.Callback) {}, func(context.Context, error) {})
+	}()
 
 	// Then
-	require.ErrorIs(t, err, context.Canceled)
-	assert.Nil(t, callbacks)
-	assert.Equal(t, 42, nextOffset)
+	waitForListener(t, done)
+}
+
+func collectCallbacks(callbacks <-chan telegram.Callback) []telegram.Callback {
+	items := make([]telegram.Callback, 0, len(callbacks))
+	for callback := range callbacks {
+		items = append(items, callback)
+	}
+
+	return items
+}
+
+func waitForListener(t *testing.T, done <-chan struct{}) {
+	t.Helper()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("callback listener did not stop")
+	}
 }
 
 func newTestSender(apiBase string) (*telegram.Sender, error) {

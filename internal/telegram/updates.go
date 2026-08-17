@@ -16,30 +16,35 @@ type Callback struct {
 	MessageID           int
 }
 
-type sdkCallbackUpdate struct {
-	callback   *Callback
-	nextOffset int
-}
+// CallbackHandler processes one supported callback query.
+type CallbackHandler func(context.Context, Callback)
 
-// PollCallbacks exposes SDK-managed callback polling through the transitional process pull contract.
-func (s *Sender) PollCallbacks(ctx context.Context, offset int) ([]Callback, int, error) {
-	s.startOnce.Do(func() {
-		go s.bot.Start(ctx)
-	})
+// CallbackErrorHandler reports one SDK polling error.
+type CallbackErrorHandler func(context.Context, error)
 
-	select {
-	case <-ctx.Done():
-		return nil, offset, ctx.Err()
-	case sdkErr := <-s.sdkErrors:
-		return nil, offset, s.normalizeSDKError(ctx, sdkErr)
-	case update := <-s.callbackUpdates:
-		nextOffset := max(offset, update.nextOffset)
-		if update.callback == nil {
-			return []Callback{}, nextOffset, nil
-		}
+// ListenCallbacks runs SDK-managed polling until ctx is canceled.
+func (s *Sender) ListenCallbacks(ctx context.Context, handle CallbackHandler, reportError CallbackErrorHandler) {
+	handlerID := s.bot.RegisterHandler(
+		telegrambot.HandlerTypeCallbackQueryData,
+		RefreshCallbackData,
+		telegrambot.MatchTypeExact,
+		func(handlerCtx context.Context, _ *telegrambot.Bot, update *models.Update) {
+			if handle == nil || update.CallbackQuery == nil {
+				return
+			}
 
-		return []Callback{*update.callback}, nextOffset, nil
-	}
+			handle(handlerCtx, callbackFromSDK(update.CallbackQuery))
+		},
+	)
+	defer s.bot.UnregisterHandler(handlerID)
+
+	errorsDone := make(chan struct{})
+	go func() {
+		defer close(errorsDone)
+		s.reportCallbackErrors(ctx, reportError)
+	}()
+	s.bot.Start(ctx)
+	<-errorsDone
 }
 
 // AnswerCallback acknowledges a Telegram callback query.
@@ -65,23 +70,23 @@ func (s *Sender) RemoveReplyMarkup(ctx context.Context, chatID int64, messageID 
 	return s.normalizeSDKError(ctx, err)
 }
 
-func (s *Sender) handleSDKUpdate(ctx context.Context, _ *telegrambot.Bot, update *models.Update) {
-	nextOffset := 0
-	maxInt := int64(^uint(0) >> 1)
-	if update.ID >= 0 && update.ID < maxInt {
-		nextOffset = int(update.ID + 1)
-	}
-	envelope := sdkCallbackUpdate{nextOffset: nextOffset}
-	if update.CallbackQuery != nil {
-		callback := callbackFromSDK(update.CallbackQuery)
-		envelope.callback = &callback
-	}
-
-	select {
-	case <-ctx.Done():
-	case s.callbackUpdates <- envelope:
+func (s *Sender) reportCallbackErrors(ctx context.Context, reportError CallbackErrorHandler) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case sdkErr := <-s.sdkErrors:
+			if ctx.Err() != nil {
+				return
+			}
+			if reportError != nil {
+				reportError(ctx, s.normalizeSDKError(ctx, sdkErr))
+			}
+		}
 	}
 }
+
+func ignoreSDKUpdate(context.Context, *telegrambot.Bot, *models.Update) {}
 
 func callbackFromSDK(query *models.CallbackQuery) Callback {
 	callback := Callback{ID: query.ID, Data: query.Data}
