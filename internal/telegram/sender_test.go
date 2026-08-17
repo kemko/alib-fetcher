@@ -303,15 +303,6 @@ func Test_NewSender_validates_configuration(t *testing.T) {
 				ChatID:  "-100123",
 			},
 		},
-		{
-			name: "timeout shorter than minimum poll duration",
-			config: telegram.Config{
-				APIBase: "https://api.telegram.org",
-				Token:   "test-token",
-				ChatID:  "-100123",
-				Timeout: 1999 * time.Millisecond,
-			},
-		},
 	}
 
 	for _, tt := range tests {
@@ -326,6 +317,22 @@ func Test_NewSender_validates_configuration(t *testing.T) {
 			require.Nil(t, sender)
 		})
 	}
+}
+
+func Test_NewSender_accepts_short_positive_timeout(t *testing.T) {
+	t.Parallel()
+
+	// When
+	sender, err := telegram.NewSender(telegram.Config{
+		APIBase: "https://api.telegram.org",
+		Token:   "test-token",
+		ChatID:  "-100123",
+		Timeout: time.Millisecond,
+	})
+
+	// Then
+	require.NoError(t, err)
+	require.NotNil(t, sender)
 }
 
 func Test_Sender_uses_HTTP_status_when_rejection_has_no_description(t *testing.T) {

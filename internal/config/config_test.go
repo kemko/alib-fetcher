@@ -177,12 +177,12 @@ func Test_Load_parses_custom_schedule(t *testing.T) {
 	require.False(t, loaded.RunOnStartup)
 }
 
-func Test_Load_accepts_minimum_HTTP_timeout(t *testing.T) {
+func Test_Load_accepts_positive_HTTP_timeout(t *testing.T) {
 	// Given
 	setEnvironment(t, map[string]string{
 		"TELEGRAM_BOT_TOKEN": "token",
 		"TELEGRAM_CHAT_ID":   "-100123",
-		"HTTP_TIMEOUT":       "2s",
+		"HTTP_TIMEOUT":       "1ms",
 	})
 
 	// When
@@ -190,11 +190,11 @@ func Test_Load_accepts_minimum_HTTP_timeout(t *testing.T) {
 
 	// Then
 	require.NoError(t, err)
-	require.Equal(t, 2*time.Second, loaded.HTTPTimeout)
+	require.Equal(t, time.Millisecond, loaded.HTTPTimeout)
 }
 
 func Test_Load_rejects_invalid_HTTP_timeout(t *testing.T) {
-	testCases := []string{"invalid", "0s", "1s", "1999ms"}
+	testCases := []string{"invalid", "0s", "-1s"}
 
 	for _, timeout := range testCases {
 		t.Run(timeout, func(t *testing.T) {

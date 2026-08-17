@@ -19,15 +19,12 @@ an embedded bbolt database, which also stores the pending send queue.
 | `STATE_PATH` | no | `/var/lib/alib-fetcher/state.db` | bbolt state database |
 | `ALIB_URL` | no | source URL above | Listing page, also useful for testing |
 | `TELEGRAM_API_BASE` | no | `https://api.telegram.org` | Bot API base URL; custom/local servers require Bot API 10.1+ |
-| `HTTP_TIMEOUT` | no | `30s` | Go duration of at least `2s`, applied to each external request |
+| `HTTP_TIMEOUT` | no | `30s` | Positive Go duration applied to each external request |
 | `MESSAGE_LIMIT` | no | `4000` | Safe Telegram message size, max `4096` |
 
 Configuration is validated before process startup. Invalid chat IDs, including
 plain text without `@`, an empty `@` username, whitespace, and numeric overflow,
 fail fast with an error naming `TELEGRAM_CHAT_ID`.
-`HTTP_TIMEOUT` rejects values below `2s`, ensuring SDK callback polling always
-uses a positive long-poll timeout instead of repeatedly issuing immediate polls.
-
 `FRESH_BOOKS=age:N` marks publication years from the current local year minus
 non-negative `N`, inclusive. For example, in 2026, `age:5` includes 2021.
 `FRESH_BOOKS=since:YYYY` uses the given four-digit year as the inclusive lower

@@ -27,8 +27,8 @@ const RefreshCallbackData = "refresh"
 const refreshButtonText = "Обновить"
 
 const (
-	maxAPIResponseBytes = 1 << 20
-	minimumHTTPTimeout  = 2 * time.Second
+	maxAPIResponseBytes   = 1 << 20
+	minimumSDKPollTimeout = 2 * time.Second
 )
 
 var errResponseTooLarge = fmt.Errorf("response exceeds %d bytes", maxAPIResponseBytes)
@@ -66,6 +66,12 @@ func newSender(config Config, client *http.Client) (*Sender, error) {
 	}
 	client.Timeout = config.Timeout
 	client.Transport = &responseLimitRoundTripper{base: transport}
+	pollClient := &http.Client{
+		Transport:     client.Transport,
+		CheckRedirect: client.CheckRedirect,
+		Jar:           client.Jar,
+		Timeout:       sdkPollTimeout(config.Timeout),
+	}
 	sender := &Sender{
 		chatID:    config.ChatID,
 		secrets:   []string{config.Token, config.APIBase, serverURL},
@@ -74,7 +80,10 @@ func newSender(config Config, client *http.Client) (*Sender, error) {
 	sdkBot, err := telegrambot.New(
 		config.Token,
 		telegrambot.WithServerURL(serverURL),
-		telegrambot.WithHTTPClient(config.Timeout, &sdkHTTPClient{client: client}),
+		telegrambot.WithHTTPClient(sdkPollTimeout(config.Timeout), &sdkHTTPClient{
+			client:     client,
+			pollClient: pollClient,
+		}),
 		telegrambot.WithSkipGetMe(),
 		telegrambot.WithAllowedUpdates(telegrambot.AllowedUpdates{models.AllowedUpdateCallbackQuery}),
 		telegrambot.WithErrorsHandler(sender.handleSDKError),
@@ -100,8 +109,8 @@ func validateConfig(config Config) (string, error) {
 	if endpoint.Host == "" || config.Token == "" || config.ChatID == "" {
 		return "", errors.New("create Telegram sender: API host, token, and chat ID are required")
 	}
-	if config.Timeout < minimumHTTPTimeout {
-		return "", fmt.Errorf("create Telegram sender: timeout must be at least %s", minimumHTTPTimeout)
+	if config.Timeout <= 0 {
+		return "", errors.New("create Telegram sender: timeout must be positive")
 	}
 
 	endpoint.RawQuery = ""
@@ -266,7 +275,8 @@ type responseLimitBody struct {
 }
 
 type sdkHTTPClient struct {
-	client *http.Client
+	client     *http.Client
+	pollClient *http.Client
 }
 
 type sdkRequestError struct {
@@ -278,6 +288,8 @@ type sdkCall struct {
 }
 
 type sdkCallContextKey struct{}
+
+type sdkPollContextKey struct{}
 
 func (e *rejectedError) Error() string {
 	return fmt.Sprintf("%s: %s", ErrRejected, e.description)
@@ -352,8 +364,12 @@ func (e *sdkRequestError) Is(target error) bool {
 }
 
 func (client *sdkHTTPClient) Do(request *http.Request) (*http.Response, error) {
+	httpClient := client.client
+	if _, polling := request.Context().Value(sdkPollContextKey{}).(struct{}); polling {
+		httpClient = client.pollClient
+	}
 	//nolint:gosec // Operator-configured API base intentionally supports HTTP(S) test and proxy servers.
-	response, err := client.client.Do(request)
+	response, err := httpClient.Do(request)
 	if err != nil {
 		return response, &sdkRequestError{cause: err}
 	}
@@ -368,4 +384,8 @@ func beginSDKCall(ctx context.Context) (context.Context, *sdkCall) {
 	call := &sdkCall{}
 
 	return context.WithValue(ctx, sdkCallContextKey{}, call), call
+}
+
+func sdkPollTimeout(timeout time.Duration) time.Duration {
+	return max(timeout, minimumSDKPollTimeout)
 }

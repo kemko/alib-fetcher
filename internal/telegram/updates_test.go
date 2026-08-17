@@ -140,7 +140,7 @@ func Test_Sender_listens_for_registered_refresh_callbacks(t *testing.T) {
 	assert.Equal(t, int32(3), callbackCount.Load())
 }
 
-func Test_Sender_listener_uses_minimum_poll_timeout(t *testing.T) {
+func Test_Sender_listener_uses_safe_poll_timeout_for_short_HTTP_timeout(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -157,6 +157,7 @@ func Test_Sender_listener_uses_minimum_poll_timeout(t *testing.T) {
 		payload := readMultipartPayload(t, request)
 		assert.Equal(t, "1", payload["timeout"])
 		assert.JSONEq(t, `["callback_query"]`, payload["allowed_updates"])
+		time.Sleep(25 * time.Millisecond)
 		writer.Header().Set("Content-Type", "application/json")
 		_, err := writer.Write([]byte(`{
 			"ok": true,
@@ -172,7 +173,7 @@ func Test_Sender_listener_uses_minimum_poll_timeout(t *testing.T) {
 		APIBase: server.URL,
 		Token:   "test-token",
 		ChatID:  "-100123",
-		Timeout: 2 * time.Second,
+		Timeout: time.Millisecond,
 	})
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())

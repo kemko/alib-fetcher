@@ -28,12 +28,12 @@ func (s *Sender) ListenCallbacks(ctx context.Context, handle CallbackHandler, re
 		telegrambot.HandlerTypeCallbackQueryData,
 		RefreshCallbackData,
 		telegrambot.MatchTypeExact,
-		func(handlerCtx context.Context, _ *telegrambot.Bot, update *models.Update) {
+		func(_ context.Context, _ *telegrambot.Bot, update *models.Update) {
 			if handle == nil || update.CallbackQuery == nil {
 				return
 			}
 
-			handle(handlerCtx, callbackFromSDK(update.CallbackQuery))
+			handle(ctx, callbackFromSDK(update.CallbackQuery))
 		},
 	)
 	defer s.bot.UnregisterHandler(handlerID)
@@ -43,7 +43,8 @@ func (s *Sender) ListenCallbacks(ctx context.Context, handle CallbackHandler, re
 		defer close(errorsDone)
 		s.reportCallbackErrors(ctx, reportError)
 	}()
-	s.bot.Start(ctx)
+	pollCtx := context.WithValue(ctx, sdkPollContextKey{}, struct{}{})
+	s.bot.Start(pollCtx)
 	<-errorsDone
 }
 
