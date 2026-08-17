@@ -181,6 +181,11 @@ func Test_Service_sends_only_final_chunk_with_sound(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, app.Result{Fetched: 3, New: 3, Sent: 3}, result)
 	require.Len(t, sender.messages, 3)
+	header := "Новые книги на Alib.ru"
+	require.Contains(t, sender.messages[0], header)
+	require.NotContains(t, sender.messages[1], header)
+	require.NotContains(t, sender.messages[2], header)
+	require.Equal(t, 1, strings.Count(strings.Join(sender.messages, ""), header))
 	require.Contains(t, sender.messages[0], "Первая")
 	require.NotContains(t, sender.messages[0], "Вторая")
 	require.Contains(t, sender.messages[1], "Вторая")

@@ -77,8 +77,9 @@ optional fields do not create empty paragraphs. Dynamic text and URLs are
 HTML-escaped. Paragraphs use `<p>`, and semantic line breaks inside a paragraph
 use `<br>`. Adjacent listings in one Rich Message are separated by `<hr/>`;
 no divider appears before the first listing or after the last. When a digest is
-split into multiple messages, only the final message uses the normal
-notification sound; earlier messages are silent.
+split into multiple messages, the heading appears only in the first message.
+Only the final message uses the normal notification sound; earlier messages are
+silent.
 Whenever a digest sends at least one message, the final message includes an
 inline `Обновить` button.
 Pressing it asks a running service with the same bot token to start one
