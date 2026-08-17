@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,20 +19,19 @@ func Test_Sender_polls_callback_updates(t *testing.T) {
 	t.Parallel()
 
 	// Given
+	var requestCount atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		assert.Equal(t, http.MethodPost, request.Method)
-		assert.Equal(t, "/bottest-token/getUpdates", request.URL.Path)
-		var payload struct {
-			AllowedUpdates []string `json:"allowed_updates"`
-			Offset         int      `json:"offset"`
-			Timeout        int      `json:"timeout"`
-		}
-		if !assert.NoError(t, json.NewDecoder(request.Body).Decode(&payload)) {
+		if requestCount.Add(1) > 1 {
+			<-request.Context().Done()
+
 			return
 		}
-		assert.Equal(t, 42, payload.Offset)
-		assert.Equal(t, 4, payload.Timeout)
-		assert.Equal(t, []string{"callback_query"}, payload.AllowedUpdates)
+		assert.Equal(t, http.MethodPost, request.Method)
+		assert.Equal(t, "/bottest-token/getUpdates", request.URL.Path)
+		payload := readMultipartPayload(t, request)
+		assert.Equal(t, "1", payload["offset"])
+		assert.Equal(t, "4", payload["timeout"])
+		assert.JSONEq(t, `["callback_query"]`, payload["allowed_updates"])
 		writer.Header().Set("Content-Type", "application/json")
 		_, err := writer.Write([]byte(`{
 			"ok": true,
@@ -43,7 +43,8 @@ func Test_Sender_polls_callback_updates(t *testing.T) {
 						"data": "refresh",
 						"message": {
 							"message_id": 77,
-								"chat": {"id": -100123, "username": "books"}
+							"date": 1,
+							"chat": {"id": -100123, "username": "books"}
 						}
 					}
 				},
@@ -60,13 +61,15 @@ func Test_Sender_polls_callback_updates(t *testing.T) {
 		Timeout: 5 * time.Second,
 	})
 	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 
 	// When
-	callbacks, nextOffset, err := sender.PollCallbacks(context.Background(), 42)
+	callbacks, nextOffset, err := sender.PollCallbacks(ctx, 42)
 
 	// Then
 	require.NoError(t, err)
-	assert.Equal(t, 102, nextOffset)
+	assert.Equal(t, 101, nextOffset)
 	assert.Equal(t, []telegram.Callback{
 		{
 			ID:                  "callback-1",
@@ -76,25 +79,35 @@ func Test_Sender_polls_callback_updates(t *testing.T) {
 			MessageID:           77,
 		},
 	}, callbacks)
+	callbacks, nextOffset, err = sender.PollCallbacks(ctx, nextOffset)
+	require.NoError(t, err)
+	assert.Empty(t, callbacks)
+	assert.Equal(t, 102, nextOffset)
 }
 
 func Test_Sender_uses_short_poll_when_timeout_cannot_exceed_long_poll(t *testing.T) {
 	t.Parallel()
 
 	// Given
+	var requestCount atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		assert.Equal(t, "/bottest-token/getUpdates", request.URL.Path)
-		var payload struct {
-			AllowedUpdates []string `json:"allowed_updates"`
-			Offset         int      `json:"offset"`
-			Timeout        int      `json:"timeout"`
-		}
-		if !assert.NoError(t, json.NewDecoder(request.Body).Decode(&payload)) {
+		if requestCount.Add(1) > 1 {
+			<-request.Context().Done()
+
 			return
 		}
-		assert.Equal(t, 0, payload.Timeout)
+		assert.Equal(t, "/bottest-token/getUpdates", request.URL.Path)
+		payload := readMultipartPayload(t, request)
+		assert.NotContains(t, payload, "timeout")
+		assert.JSONEq(t, `["callback_query"]`, payload["allowed_updates"])
 		writer.Header().Set("Content-Type", "application/json")
-		_, err := writer.Write([]byte(`{"ok": true, "result": []}`))
+		_, err := writer.Write([]byte(`{
+			"ok": true,
+			"result": [{
+				"update_id": 42,
+				"callback_query": {"id":"callback-1","data":"refresh"}
+			}]
+		}`))
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
@@ -105,14 +118,16 @@ func Test_Sender_uses_short_poll_when_timeout_cannot_exceed_long_poll(t *testing
 		Timeout: time.Second,
 	})
 	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 
 	// When
-	callbacks, nextOffset, err := sender.PollCallbacks(context.Background(), 42)
+	callbacks, nextOffset, err := sender.PollCallbacks(ctx, 42)
 
 	// Then
 	require.NoError(t, err)
-	assert.Empty(t, callbacks)
-	assert.Equal(t, 42, nextOffset)
+	assert.Len(t, callbacks, 1)
+	assert.Equal(t, 43, nextOffset)
 }
 
 func Test_Sender_answers_callback_query(t *testing.T) {
@@ -122,15 +137,9 @@ func Test_Sender_answers_callback_query(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		assert.Equal(t, http.MethodPost, request.Method)
 		assert.Equal(t, "/bottest-token/answerCallbackQuery", request.URL.Path)
-		var payload struct {
-			CallbackQueryID string `json:"callback_query_id"`
-			Text            string `json:"text"`
-		}
-		if !assert.NoError(t, json.NewDecoder(request.Body).Decode(&payload)) {
-			return
-		}
-		assert.Equal(t, "callback-1", payload.CallbackQueryID)
-		assert.Equal(t, "Started", payload.Text)
+		payload := readMultipartPayload(t, request)
+		assert.Equal(t, "callback-1", payload["callback_query_id"])
+		assert.Equal(t, "Started", payload["text"])
 		writer.Header().Set("Content-Type", "application/json")
 		_, err := writer.Write([]byte(`{"ok":true,"result":true}`))
 		assert.NoError(t, err)
@@ -153,22 +162,19 @@ func Test_Sender_removes_reply_markup(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		assert.Equal(t, http.MethodPost, request.Method)
 		assert.Equal(t, "/bottest-token/editMessageReplyMarkup", request.URL.Path)
-		var payload struct {
-			ReplyMarkup struct {
-				InlineKeyboard [][]struct{} `json:"inline_keyboard"`
-			} `json:"reply_markup"`
-			ChatID    int64 `json:"chat_id"`
-			MessageID int   `json:"message_id"`
+		payload := readMultipartPayload(t, request)
+		assert.Equal(t, "-100123", payload["chat_id"])
+		assert.Equal(t, "77", payload["message_id"])
+		var replyMarkup struct {
+			InlineKeyboard [][]struct{} `json:"inline_keyboard"`
 		}
-		if !assert.NoError(t, json.NewDecoder(request.Body).Decode(&payload)) {
+		if !assert.NoError(t, json.Unmarshal([]byte(payload["reply_markup"]), &replyMarkup)) {
 			return
 		}
-		assert.Equal(t, int64(-100123), payload.ChatID)
-		assert.Equal(t, 77, payload.MessageID)
-		if !assert.NotNil(t, payload.ReplyMarkup.InlineKeyboard) {
+		if !assert.NotNil(t, replyMarkup.InlineKeyboard) {
 			return
 		}
-		assert.Empty(t, payload.ReplyMarkup.InlineKeyboard)
+		assert.Empty(t, replyMarkup.InlineKeyboard)
 		writer.Header().Set("Content-Type", "application/json")
 		_, err := writer.Write([]byte(`{"ok":true,"result":true}`))
 		assert.NoError(t, err)
@@ -191,7 +197,7 @@ func Test_Sender_returns_rejection_for_callback_API_failure(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		writer.WriteHeader(http.StatusBadRequest)
-		_, err := writer.Write([]byte(`{"ok":false,"description":"query is too old"}`))
+		_, err := writer.Write([]byte(`{"ok":false,"error_code":400,"description":"query is too old"}`))
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
@@ -218,9 +224,11 @@ func Test_Sender_returns_decode_error_for_invalid_callback_response(t *testing.T
 	t.Cleanup(server.Close)
 	sender, err := newTestSender(server.URL)
 	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 
 	// When
-	callbacks, nextOffset, err := sender.PollCallbacks(context.Background(), 42)
+	callbacks, nextOffset, err := sender.PollCallbacks(ctx, 42)
 
 	// Then
 	require.Error(t, err)

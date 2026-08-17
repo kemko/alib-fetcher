@@ -3,6 +3,7 @@ package telegram_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -21,11 +22,10 @@ func Test_Sender_posts_silent_rich_HTML_message(t *testing.T) {
 	// Given
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		assert.Equal(t, "/bottest-token/sendRichMessage", request.URL.Path)
-		var payload map[string]json.RawMessage
-		assert.NoError(t, json.NewDecoder(request.Body).Decode(&payload))
-		assert.JSONEq(t, `"-100123"`, string(payload["chat_id"]))
-		assert.JSONEq(t, `{"html":"<b>digest</b>"}`, string(payload["rich_message"]))
-		assert.JSONEq(t, `true`, string(payload["disable_notification"]))
+		payload := readMultipartPayload(t, request)
+		assert.Equal(t, "-100123", payload["chat_id"])
+		assert.JSONEq(t, `{"html":"<b>digest</b>"}`, payload["rich_message"])
+		assert.Equal(t, "true", payload["disable_notification"])
 		assert.NotContains(t, payload, "reply_markup")
 		assert.NotContains(t, payload, "text")
 		assert.NotContains(t, payload, "parse_mode")
@@ -56,13 +56,8 @@ func Test_Sender_posts_audible_HTML_message_with_notification_enabled(t *testing
 	// Given
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		assert.Equal(t, "/bottest-token/sendRichMessage", request.URL.Path)
-		var payload map[string]json.RawMessage
-		assert.NoError(t, json.NewDecoder(request.Body).Decode(&payload))
-		disableNotification, ok := payload["disable_notification"]
-		if !assert.True(t, ok) {
-			return
-		}
-		assert.JSONEq(t, `false`, string(disableNotification))
+		payload := readMultipartPayload(t, request)
+		assert.NotContains(t, payload, "disable_notification")
 		writer.Header().Set("Content-Type", "application/json")
 		_, err := writer.Write([]byte(`{"ok":true,"result":{}}`))
 		assert.NoError(t, err)
@@ -89,23 +84,22 @@ func Test_Sender_posts_refresh_button_when_requested(t *testing.T) {
 	// Given
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		assert.Equal(t, "/bottest-token/sendRichMessage", request.URL.Path)
-		var payload struct {
-			ReplyMarkup struct {
-				InlineKeyboard [][]struct {
-					Text         string `json:"text"`
-					CallbackData string `json:"callback_data"`
-				} `json:"inline_keyboard"`
-			} `json:"reply_markup"`
+		payload := readMultipartPayload(t, request)
+		var replyMarkup struct {
+			InlineKeyboard [][]struct {
+				Text         string `json:"text"`
+				CallbackData string `json:"callback_data"`
+			} `json:"inline_keyboard"`
 		}
-		assert.NoError(t, json.NewDecoder(request.Body).Decode(&payload))
-		if !assert.Len(t, payload.ReplyMarkup.InlineKeyboard, 1) {
+		assert.NoError(t, json.Unmarshal([]byte(payload["reply_markup"]), &replyMarkup))
+		if !assert.Len(t, replyMarkup.InlineKeyboard, 1) {
 			return
 		}
-		if !assert.Len(t, payload.ReplyMarkup.InlineKeyboard[0], 1) {
+		if !assert.Len(t, replyMarkup.InlineKeyboard[0], 1) {
 			return
 		}
-		assert.Equal(t, "Обновить", payload.ReplyMarkup.InlineKeyboard[0][0].Text)
-		assert.Equal(t, telegram.RefreshCallbackData, payload.ReplyMarkup.InlineKeyboard[0][0].CallbackData)
+		assert.Equal(t, "Обновить", replyMarkup.InlineKeyboard[0][0].Text)
+		assert.Equal(t, telegram.RefreshCallbackData, replyMarkup.InlineKeyboard[0][0].CallbackData)
 		writer.Header().Set("Content-Type", "application/json")
 		_, err := writer.Write([]byte(`{"ok":true,"result":{}}`))
 		assert.NoError(t, err)
@@ -132,7 +126,7 @@ func Test_Sender_returns_API_description_on_rejection(t *testing.T) {
 	// Given
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
-		_, err := writer.Write([]byte(`{"ok":false,"description":"chat not found"}`))
+		_, err := writer.Write([]byte(`{"ok":false,"error_code":400,"description":"chat not found"}`))
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
@@ -152,6 +146,37 @@ func Test_Sender_returns_API_description_on_rejection(t *testing.T) {
 	require.Contains(t, err.Error(), "chat not found")
 }
 
+func Test_Sender_redacts_token_and_API_URL_from_rejection(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, err := writer.Write(fmt.Appendf(
+			nil,
+			`{"ok":false,"error_code":400,"description":"denied test-token at http://%s"}`,
+			request.Host,
+		))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+	sender, err := telegram.NewSender(telegram.Config{
+		APIBase: server.URL,
+		Token:   "test-token",
+		ChatID:  "missing",
+		Timeout: time.Second,
+	})
+	require.NoError(t, err)
+
+	// When
+	err = sender.Send(context.Background(), "digest", false, false)
+
+	// Then
+	require.ErrorIs(t, err, telegram.ErrRejected)
+	assert.NotContains(t, err.Error(), "test-token")
+	assert.NotContains(t, err.Error(), server.URL)
+}
+
 func Test_Sender_exposes_Telegram_retry_delay(t *testing.T) {
 	t.Parallel()
 
@@ -161,6 +186,7 @@ func Test_Sender_exposes_Telegram_retry_delay(t *testing.T) {
 		writer.WriteHeader(http.StatusTooManyRequests)
 		_, err := writer.Write([]byte(`{
 			"ok":false,
+			"error_code":429,
 			"description":"Too Many Requests: retry after 1",
 			"parameters":{"retry_after":1}
 		}`))
@@ -268,7 +294,7 @@ func Test_Sender_uses_HTTP_status_when_rejection_has_no_description(t *testing.T
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		writer.WriteHeader(http.StatusBadGateway)
-		_, err := writer.Write([]byte(`{"ok":false}`))
+		_, err := writer.Write([]byte(`{"ok":false,"error_code":502}`))
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
@@ -285,10 +311,10 @@ func Test_Sender_uses_HTTP_status_when_rejection_has_no_description(t *testing.T
 
 	// Then
 	require.ErrorIs(t, err, telegram.ErrRejected)
-	require.Contains(t, err.Error(), "502 Bad Gateway")
+	require.Contains(t, err.Error(), "502")
 }
 
-func Test_Sender_uses_HTTP_status_for_non_JSON_HTTP_rejection(t *testing.T) {
+func Test_Sender_returns_decode_error_for_non_JSON_HTTP_rejection(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -322,9 +348,9 @@ func Test_Sender_uses_HTTP_status_for_non_JSON_HTTP_rejection(t *testing.T) {
 			err = sender.Send(context.Background(), "digest", false, false)
 
 			// Then
-			require.ErrorIs(t, err, telegram.ErrRejected)
-			assert.Contains(t, err.Error(), "502 Bad Gateway")
-			assert.NotContains(t, err.Error(), "decode Telegram response")
+			require.Error(t, err)
+			assert.NotErrorIs(t, err, telegram.ErrRejected)
+			assert.Contains(t, err.Error(), "decode Telegram response")
 		})
 	}
 }
@@ -447,4 +473,16 @@ func Test_Sender_returns_context_error_when_request_is_canceled(t *testing.T) {
 
 	// Then
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func readMultipartPayload(t *testing.T, request *http.Request) map[string]string {
+	t.Helper()
+	require.NoError(t, request.ParseMultipartForm(1<<20))
+	payload := make(map[string]string, len(request.MultipartForm.Value))
+	for key, values := range request.MultipartForm.Value {
+		require.Len(t, values, 1)
+		payload[key] = values[0]
+	}
+
+	return payload
 }

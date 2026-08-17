@@ -98,22 +98,22 @@
 - Modify: `internal/telegram/updates.go`
 - Modify: `internal/telegram/updates_test.go`
 
-- [ ] Добавить и зафиксировать `github.com/go-telegram/bot v1.23.0`.
-- [ ] Создавать SDK bot с `WithServerURL`, configured HTTP client/timeout, `WithSkipGetMe` и разрешением только
+- [x] Добавить и зафиксировать `github.com/go-telegram/bot v1.23.0`.
+- [x] Создавать SDK bot с `WithServerURL`, configured HTTP client/timeout, `WithSkipGetMe` и разрешением только
   `callback_query` updates.
-- [ ] Реализовать отправку через SDK `SendRichMessage` с `models.InputRichMessage{HTML: text}`.
-- [ ] Передавать `chat_id`, `disable_notification` и inline-кнопку `Обновить` через типы SDK.
-- [ ] Реализовать callback acknowledgement через SDK `AnswerCallbackQuery`.
-- [ ] Реализовать удаление старой клавиатуры через SDK `EditMessageReplyMarkup`.
-- [ ] Удалить собственные Bot API method constants, payload/response DTO, endpoint construction, JSON serialization и response
+- [x] Реализовать отправку через SDK `SendRichMessage` с `models.InputRichMessage{HTML: text}`.
+- [x] Передавать `chat_id`, `disable_notification` и inline-кнопку `Обновить` через типы SDK.
+- [x] Реализовать callback acknowledgement через SDK `AnswerCallbackQuery`.
+- [x] Реализовать удаление старой клавиатуры через SDK `EditMessageReplyMarkup`.
+- [x] Удалить собственные Bot API method constants, payload/response DTO, endpoint construction, JSON serialization и response
   decoding.
-- [ ] Сохранить generic HTTP response-size limit и безопасную нормализацию ошибок без знания Bot API JSON
+- [x] Сохранить generic HTTP response-size limit и безопасную нормализацию ошибок без знания Bot API JSON
   schema.
-- [ ] Преобразовывать SDK rejection и `TooManyRequestsError` в существующие adapter contracts, включая Telegram
+- [x] Преобразовывать SDK rejection и `TooManyRequestsError` в существующие adapter contracts, включая Telegram
   description и положительный `RetryAfter()`.
-- [ ] Добавить/обновить tests для Rich HTML message, silent flag, final refresh button, callback answer, markup removal, 429 retry,
+- [x] Добавить/обновить tests для Rich HTML message, silent flag, final refresh button, callback answer, markup removal, 429 retry,
   cancellation, invalid config и отсутствия token/API URL в ошибках.
-- [ ] Выполнить `make test`; все тесты должны пройти до Task 3.
+- [x] Выполнить `make test`; все тесты должны пройти до Task 3.
 
 ### Task 3: Передать SDK управление callback polling
 

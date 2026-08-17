@@ -93,16 +93,10 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 			telegramServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 				assert.Equal(t, http.MethodPost, request.Method)
 				assert.Equal(t, "/bottest-token/sendRichMessage", request.URL.Path)
-				body, err := io.ReadAll(request.Body)
-				assert.NoError(t, err)
-				assert.NotContains(t, string(body), "test-token")
-
-				var payload telegramMessagePayload
-				assert.NoError(t, json.Unmarshal(body, &payload))
-				telegramPayloads <- payload
+				telegramPayloads <- decodeTelegramMessagePayload(t, request)
 
 				writer.Header().Set("Content-Type", "application/json")
-				_, err = writer.Write([]byte(`{"ok":true,"result":{}}`))
+				_, err := writer.Write([]byte(`{"ok":true,"result":{}}`))
 				assert.NoError(t, err)
 			}))
 			t.Cleanup(telegramServer.Close)
@@ -170,16 +164,10 @@ func Test_run_sends_only_final_wired_message_with_sound(t *testing.T) {
 	telegramServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		assert.Equal(t, http.MethodPost, request.Method)
 		assert.Equal(t, "/bottest-token/sendRichMessage", request.URL.Path)
-		body, err := io.ReadAll(request.Body)
-		assert.NoError(t, err)
-		assert.NotContains(t, string(body), "test-token")
-
-		var payload telegramMessagePayload
-		assert.NoError(t, json.Unmarshal(body, &payload))
-		telegramPayloads <- payload
+		telegramPayloads <- decodeTelegramMessagePayload(t, request)
 
 		writer.Header().Set("Content-Type", "application/json")
-		_, err = writer.Write([]byte(`{"ok":true,"result":{}}`))
+		_, err := writer.Write([]byte(`{"ok":true,"result":{}}`))
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(telegramServer.Close)
@@ -256,6 +244,27 @@ func requireRefreshButton(t *testing.T, payload telegramMessagePayload) {
 	require.Len(t, payload.ReplyMarkup.InlineKeyboard[0], 1)
 	require.Equal(t, "Обновить", payload.ReplyMarkup.InlineKeyboard[0][0].Text)
 	require.Equal(t, telegram.RefreshCallbackData, payload.ReplyMarkup.InlineKeyboard[0][0].CallbackData)
+}
+
+func decodeTelegramMessagePayload(t *testing.T, request *http.Request) telegramMessagePayload {
+	t.Helper()
+	body, err := io.ReadAll(request.Body)
+	require.NoError(t, err)
+	require.NotContains(t, string(body), "test-token")
+	request.Body = io.NopCloser(bytes.NewReader(body))
+	require.NoError(t, request.ParseMultipartForm(1<<20))
+
+	payload := telegramMessagePayload{
+		ChatID:              request.FormValue("chat_id"),
+		DisableNotification: request.FormValue("disable_notification") == "true",
+	}
+	require.NoError(t, json.Unmarshal([]byte(request.FormValue("rich_message")), &payload.RichMessage))
+	if replyMarkup := request.FormValue("reply_markup"); replyMarkup != "" {
+		payload.ReplyMarkup = &telegramReplyMarkup{}
+		require.NoError(t, json.Unmarshal([]byte(replyMarkup), payload.ReplyMarkup))
+	}
+
+	return payload
 }
 
 func setRunEnvironment(t *testing.T, alibURL, telegramAPIBase, statePath string) {

@@ -2,6 +2,9 @@ package telegram
 
 import (
 	"context"
+
+	telegrambot "github.com/go-telegram/bot"
+	"github.com/go-telegram/bot/models"
 )
 
 // Callback contains one Telegram callback query from an inline button.
@@ -13,96 +16,85 @@ type Callback struct {
 	MessageID           int
 }
 
-// PollCallbacks long-polls Telegram callback updates and returns the next offset to persist in memory.
+type sdkCallbackUpdate struct {
+	callback   *Callback
+	nextOffset int
+}
+
+// PollCallbacks exposes SDK-managed callback polling through the transitional process pull contract.
 func (s *Sender) PollCallbacks(ctx context.Context, offset int) ([]Callback, int, error) {
-	payload := getUpdatesRequest{
-		Offset:         offset,
-		Timeout:        s.longPollTimeoutSec,
-		AllowedUpdates: []string{"callback_query"},
-	}
-	var updates []update
-	if err := s.post(ctx, getUpdatesMethod, payload, &updates); err != nil {
-		return nil, offset, err
-	}
+	s.startOnce.Do(func() {
+		go s.bot.Start(ctx)
+	})
 
-	callbacks := make([]Callback, 0, len(updates))
-	nextOffset := offset
-	for _, item := range updates {
-		if item.UpdateID >= nextOffset {
-			nextOffset = item.UpdateID + 1
+	select {
+	case <-ctx.Done():
+		return nil, offset, ctx.Err()
+	case sdkErr := <-s.sdkErrors:
+		return nil, offset, s.normalizeSDKError(ctx, sdkErr)
+	case update := <-s.callbackUpdates:
+		nextOffset := max(offset, update.nextOffset)
+		if update.callback == nil {
+			return []Callback{}, nextOffset, nil
 		}
-		if item.CallbackQuery == nil {
-			continue
-		}
-		callbacks = append(callbacks, Callback{
-			ID:                  item.CallbackQuery.ID,
-			Data:                item.CallbackQuery.Data,
-			MessageChatUsername: item.CallbackQuery.Message.Chat.Username,
-			MessageChatID:       item.CallbackQuery.Message.Chat.ID,
-			MessageID:           item.CallbackQuery.Message.MessageID,
-		})
-	}
 
-	return callbacks, nextOffset, nil
+		return []Callback{*update.callback}, nextOffset, nil
+	}
 }
 
 // AnswerCallback acknowledges a Telegram callback query.
 func (s *Sender) AnswerCallback(ctx context.Context, callbackID string, text string) error {
-	payload := answerCallbackRequest{
+	_, err := s.bot.AnswerCallbackQuery(ctx, &telegrambot.AnswerCallbackQueryParams{
 		CallbackQueryID: callbackID,
 		Text:            text,
-	}
+	})
 
-	return s.post(ctx, answerCallbackQueryMethod, payload, nil)
+	return s.normalizeSDKError(ctx, err)
 }
 
 // RemoveReplyMarkup removes the inline keyboard from a message.
 func (s *Sender) RemoveReplyMarkup(ctx context.Context, chatID int64, messageID int) error {
-	payload := editReplyMarkupRequest{
+	_, err := s.bot.EditMessageReplyMarkup(ctx, &telegrambot.EditMessageReplyMarkupParams{
 		ChatID:    chatID,
 		MessageID: messageID,
-		ReplyMarkup: replyMarkup{
-			InlineKeyboard: [][]inlineKeyboardButton{},
+		ReplyMarkup: models.InlineKeyboardMarkup{
+			InlineKeyboard: [][]models.InlineKeyboardButton{},
 		},
+	})
+
+	return s.normalizeSDKError(ctx, err)
+}
+
+func (s *Sender) handleSDKUpdate(ctx context.Context, _ *telegrambot.Bot, update *models.Update) {
+	nextOffset := 0
+	maxInt := int64(^uint(0) >> 1)
+	if update.ID >= 0 && update.ID < maxInt {
+		nextOffset = int(update.ID + 1)
+	}
+	envelope := sdkCallbackUpdate{nextOffset: nextOffset}
+	if update.CallbackQuery != nil {
+		callback := callbackFromSDK(update.CallbackQuery)
+		envelope.callback = &callback
 	}
 
-	return s.post(ctx, editMessageReplyMarkup, payload, nil)
+	select {
+	case <-ctx.Done():
+	case s.callbackUpdates <- envelope:
+	}
 }
 
-type getUpdatesRequest struct {
-	AllowedUpdates []string `json:"allowed_updates"`
-	Offset         int      `json:"offset"`
-	Timeout        int      `json:"timeout"`
-}
+func callbackFromSDK(query *models.CallbackQuery) Callback {
+	callback := Callback{ID: query.ID, Data: query.Data}
+	switch {
+	case query.Message.Message != nil:
+		callback.MessageChatUsername = query.Message.Message.Chat.Username
+		callback.MessageChatID = query.Message.Message.Chat.ID
+		callback.MessageID = query.Message.Message.ID
+	case query.Message.InaccessibleMessage != nil:
+		callback.MessageChatUsername = query.Message.InaccessibleMessage.Chat.Username
+		callback.MessageChatID = query.Message.InaccessibleMessage.Chat.ID
+		callback.MessageID = query.Message.InaccessibleMessage.MessageID
+	}
 
-type answerCallbackRequest struct {
-	CallbackQueryID string `json:"callback_query_id"`
-	Text            string `json:"text"`
-}
-
-type editReplyMarkupRequest struct {
-	ReplyMarkup replyMarkup `json:"reply_markup"`
-	ChatID      int64       `json:"chat_id"`
-	MessageID   int         `json:"message_id"`
-}
-
-type update struct {
-	CallbackQuery *callbackQuery `json:"callback_query"`
-	UpdateID      int            `json:"update_id"`
-}
-
-type callbackQuery struct {
-	ID      string          `json:"id"`
-	Data    string          `json:"data"`
-	Message callbackMessage `json:"message"`
-}
-
-type callbackMessage struct {
-	Chat      callbackChat `json:"chat"`
-	MessageID int          `json:"message_id"`
-}
-
-type callbackChat struct {
-	Username string `json:"username"`
-	ID       int64  `json:"id"`
+	return callback
 }
