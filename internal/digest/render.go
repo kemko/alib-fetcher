@@ -15,7 +15,7 @@ import (
 const (
 	header           = "<p><b>Новые книги на Alib.ru</b></p>"
 	lineBreak        = "<br/>"
-	paragraphBreak   = lineBreak + lineBreak
+	paragraphBreak   = lineBreak
 	listingSeparator = "<hr/>"
 )
 
@@ -132,7 +132,10 @@ func renderMultilineText(value string) string {
 
 func publicationEmoji(publicationYear int, options Options) string {
 	currentYear := options.LocalTime.Year()
-	if publicationYear <= 0 || publicationYear > currentYear {
+	if publicationYear > currentYear {
+		return "🛸 "
+	}
+	if publicationYear <= 0 {
 		return ""
 	}
 	if publicationYear == currentYear ||

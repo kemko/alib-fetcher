@@ -119,14 +119,14 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 			require.Contains(t, richHTML[firstBookIndex:secondBookIndex], "<hr/>")
 			require.NotContains(t, richHTML[secondBookIndex:], "<hr/>")
 			require.Contains(t, richHTML, fmt.Sprintf(
-				`<p>🔥 <b>Горячая книга.</b> М., %d г.</p><br/><br/>`+
-					`<p>Первая строка содержания.<br/>Вторая строка содержания.</p><br/><br/>`+
+				`<p>🔥 <b>Горячая книга.</b> М., %d г.</p><br/>`+
+					`<p>Первая строка содержания.<br/>Вторая строка содержания.</p><br/>`+
 					`<p>Продавец: <a href="%s/bs.php4?bs=BotSad">BotSad</a>, Москва.`,
 				currentYear,
 				alibServer.URL,
 			))
 			require.Contains(t, richHTML, fmt.Sprintf(
-				`<p>%s<b>Свежая книга.</b> М., %d г.</p><br/><br/><p>Цена: 500 руб.<br/>Фото: нет</p>`,
+				`<p>%s<b>Свежая книга.</b> М., %d г.</p><br/><p>Цена: 500 руб.<br/>Фото: нет</p>`,
 				testCase.freshEmoji,
 				freshYear,
 			))
