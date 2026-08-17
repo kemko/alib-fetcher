@@ -107,7 +107,7 @@ func Test_Sender_hides_transport_error_details(t *testing.T) {
 	t.Parallel()
 
 	// Given
-	transportErr := errors.New("Post https://api.telegram.org/bottest-token/sendMessage failed")
+	transportErr := errors.New("Post https://api.telegram.org/bottest-token/sendRichMessage failed")
 	sender := newTestSenderWithTransport(roundTripperFunc(func(*http.Request) (*http.Response, error) {
 		return nil, transportErr
 	}))

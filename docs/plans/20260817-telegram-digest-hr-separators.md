@@ -64,14 +64,14 @@
 - Modify: `internal/telegram/sender.go`
 - Modify: `internal/telegram/sender_test.go`
 
-- [ ] Update sender tests to expect `/bot<token>/sendRichMessage` instead of `/sendMessage`.
-- [ ] Update sender tests to expect payload shape with `chat_id`, `rich_message.html`, `disable_notification`, and optional `reply_markup`.
-- [ ] Assert sender no longer sends `text`, `parse_mode`, or `link_preview_options` in rich-message payloads.
-- [ ] Implement `sendRichMessage` method constant and request payload using `rich_message: {"html": text}`.
-- [ ] Preserve inline `Обновить` button payload exactly for final chunks.
-- [ ] Preserve existing rejection, retry_after, context, oversized response, and transport error behavior through the existing `post` path.
-- [ ] Update sender comments to describe rich HTML messages instead of `sendMessage` parse-mode HTML.
-- [ ] Run `make test` and fix failures before Task 3.
+- [x] Update sender tests to expect `/bot<token>/sendRichMessage` instead of `/sendMessage`.
+- [x] Update sender tests to expect payload shape with `chat_id`, `rich_message.html`, `disable_notification`, and optional `reply_markup`.
+- [x] Assert sender no longer sends `text`, `parse_mode`, or `link_preview_options` in rich-message payloads.
+- [x] Implement `sendRichMessage` method constant and request payload using `rich_message: {"html": text}`.
+- [x] Preserve inline `Обновить` button payload exactly for final chunks.
+- [x] Preserve existing rejection, retry_after, context, oversized response, and transport error behavior through the existing `post` path.
+- [x] Update sender comments to describe rich HTML messages instead of `sendMessage` parse-mode HTML.
+- [x] Run `make test` and fix failures before Task 3.
 
 ### Task 3: Обновить сквозные тесты и документацию
 

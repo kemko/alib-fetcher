@@ -24,10 +24,12 @@ import (
 type telegramMessagePayload struct {
 	ReplyMarkup         *telegramReplyMarkup `json:"reply_markup"`
 	ChatID              string               `json:"chat_id"`
-	Text                string               `json:"text"`
-	ParseMode           string               `json:"parse_mode"`
-	LinkPreviewOptions  linkPreviewOptions   `json:"link_preview_options"`
+	RichMessage         telegramRichMessage  `json:"rich_message"`
 	DisableNotification bool                 `json:"disable_notification"`
+}
+
+type telegramRichMessage struct {
+	HTML string `json:"html"`
 }
 
 type telegramReplyMarkup struct {
@@ -37,10 +39,6 @@ type telegramReplyMarkup struct {
 type telegramInlineKeyboardButton struct {
 	Text         string `json:"text"`
 	CallbackData string `json:"callback_data"`
-}
-
-type linkPreviewOptions struct {
-	Disabled bool `json:"is_disabled"`
 }
 
 func Test_run_wires_once_mode_from_environment(t *testing.T) {
@@ -94,7 +92,7 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 			telegramPayloads := make(chan telegramMessagePayload, 1)
 			telegramServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 				assert.Equal(t, http.MethodPost, request.Method)
-				assert.Equal(t, "/bottest-token/sendMessage", request.URL.Path)
+				assert.Equal(t, "/bottest-token/sendRichMessage", request.URL.Path)
 				body, err := io.ReadAll(request.Body)
 				assert.NoError(t, err)
 				assert.NotContains(t, string(body), "test-token")
@@ -121,15 +119,20 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 			require.Len(t, telegramPayloads, 1)
 			payload := <-telegramPayloads
 			require.Equal(t, "-100123", payload.ChatID)
-			require.Equal(t, "HTML", payload.ParseMode)
 			require.False(t, payload.DisableNotification)
-			require.True(t, payload.LinkPreviewOptions.Disabled)
-			require.Contains(t, payload.Text, fmt.Sprintf("🔥 <b>Горячая книга.</b> М., %d г.", currentYear))
-			require.Contains(t, payload.Text, "Первая строка содержания.\n\nПродавец: ")
-			require.Contains(t, payload.Text, `<a href="`+alibServer.URL+`/bs.php4?bs=BotSad">BotSad</a>, Москва.`)
-			require.Contains(t, payload.Text, "\nЦена: 3 900 руб.\nСостояние: Отличное.\nФото: есть\n\n")
-			require.Contains(t, payload.Text, testCase.freshEmoji+"<b>Свежая книга.</b>")
-			require.True(t, strings.HasSuffix(payload.Text, `<a href="`+alibServer.URL+`/fresh.html">Купить</a>`))
+			require.Contains(t, payload.RichMessage.HTML, fmt.Sprintf("🔥 <b>Горячая книга.</b> М., %d г.", currentYear))
+			require.Contains(t, payload.RichMessage.HTML, "Первая строка содержания.\n\nПродавец: ")
+			require.Contains(
+				t,
+				payload.RichMessage.HTML,
+				`<a href="`+alibServer.URL+`/bs.php4?bs=BotSad">BotSad</a>, Москва.`,
+			)
+			require.Contains(t, payload.RichMessage.HTML, "\nЦена: 3 900 руб.\nСостояние: Отличное.\nФото: есть\n\n")
+			require.Contains(t, payload.RichMessage.HTML, testCase.freshEmoji+"<b>Свежая книга.</b>")
+			require.True(
+				t,
+				strings.HasSuffix(payload.RichMessage.HTML, `<a href="`+alibServer.URL+`/fresh.html">Купить</a>`),
+			)
 			requireRefreshButton(t, payload)
 			require.Contains(t, logs.String(), "digest.completed")
 			require.NotContains(t, logs.String(), "test-token")
@@ -156,7 +159,7 @@ func Test_run_sends_only_final_wired_message_with_sound(t *testing.T) {
 	telegramPayloads := make(chan telegramMessagePayload, 8)
 	telegramServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		assert.Equal(t, http.MethodPost, request.Method)
-		assert.Equal(t, "/bottest-token/sendMessage", request.URL.Path)
+		assert.Equal(t, "/bottest-token/sendRichMessage", request.URL.Path)
 		body, err := io.ReadAll(request.Body)
 		assert.NoError(t, err)
 		assert.NotContains(t, string(body), "test-token")
@@ -195,17 +198,15 @@ func Test_run_sends_only_final_wired_message_with_sound(t *testing.T) {
 		<-telegramPayloads,
 		<-telegramPayloads,
 	}
-	require.Contains(t, payloads[0].Text, "Первая")
-	require.NotContains(t, payloads[0].Text, "Вторая")
-	require.Contains(t, payloads[1].Text, "Вторая")
-	require.NotContains(t, payloads[1].Text, "Третья")
-	require.Contains(t, payloads[2].Text, "Третья")
+	require.Contains(t, payloads[0].RichMessage.HTML, "Первая")
+	require.NotContains(t, payloads[0].RichMessage.HTML, "Вторая")
+	require.Contains(t, payloads[1].RichMessage.HTML, "Вторая")
+	require.NotContains(t, payloads[1].RichMessage.HTML, "Третья")
+	require.Contains(t, payloads[2].RichMessage.HTML, "Третья")
 
 	for index, payload := range payloads {
 		require.Equal(t, "-100123", payload.ChatID)
-		require.Equal(t, "HTML", payload.ParseMode)
-		require.True(t, payload.LinkPreviewOptions.Disabled)
-		require.Contains(t, payload.Text, "<b>Новые книги на Alib.ru</b>")
+		require.Contains(t, payload.RichMessage.HTML, "<b>Новые книги на Alib.ru</b>")
 		if index < len(payloads)-1 {
 			require.True(t, payload.DisableNotification)
 			require.Nil(t, payload.ReplyMarkup)

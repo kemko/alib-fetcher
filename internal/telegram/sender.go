@@ -30,7 +30,7 @@ const (
 	editMessageReplyMarkup    = "editMessageReplyMarkup"
 	getUpdatesMethod          = "getUpdates"
 	maxAPIResponseBytes       = 1 << 20
-	sendMessageMethod         = "sendMessage"
+	sendRichMessageMethod     = "sendRichMessage"
 )
 
 // Config contains the Telegram Bot API connection settings.
@@ -76,23 +76,17 @@ func NewSender(config Config) (*Sender, error) {
 	}, nil
 }
 
-// Send posts one HTML-formatted digest message, optionally without a notification sound.
+// Send posts one rich HTML digest message, optionally without a notification sound.
 func (s *Sender) Send(ctx context.Context, text string, silent bool, attachRefresh bool) (sendErr error) {
 	payload := struct {
-		ReplyMarkup         *replyMarkup       `json:"reply_markup,omitempty"`
-		ChatID              string             `json:"chat_id"`
-		Text                string             `json:"text"`
-		ParseMode           string             `json:"parse_mode"`
-		LinkPreviewOptions  linkPreviewOptions `json:"link_preview_options"`
-		DisableNotification bool               `json:"disable_notification"`
+		ReplyMarkup         *replyMarkup     `json:"reply_markup,omitempty"`
+		ChatID              string           `json:"chat_id"`
+		RichMessage         inputRichMessage `json:"rich_message"`
+		DisableNotification bool             `json:"disable_notification"`
 	}{
 		ChatID:              s.chatID,
-		Text:                text,
-		ParseMode:           "HTML",
+		RichMessage:         inputRichMessage{HTML: text},
 		DisableNotification: silent,
-		LinkPreviewOptions: linkPreviewOptions{
-			Disabled: true,
-		},
 	}
 	if attachRefresh {
 		payload.ReplyMarkup = &replyMarkup{
@@ -107,7 +101,7 @@ func (s *Sender) Send(ctx context.Context, text string, silent bool, attachRefre
 		}
 	}
 
-	return s.post(ctx, sendMessageMethod, payload, nil)
+	return s.post(ctx, sendRichMessageMethod, payload, nil)
 }
 
 func (s *Sender) post(ctx context.Context, method string, payload any, result any) (postErr error) {
@@ -220,8 +214,8 @@ func longPollTimeout(timeout time.Duration) int {
 	return seconds - 1
 }
 
-type linkPreviewOptions struct {
-	Disabled bool `json:"is_disabled"`
+type inputRichMessage struct {
+	HTML string `json:"html"`
 }
 
 type replyMarkup struct {
