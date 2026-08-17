@@ -94,7 +94,7 @@
 
 - Modify: none expected
 
-- [ ] Run `make verify`.
-- [ ] Run `make coverage`.
-- [ ] Confirm `make coverage` reports total statement coverage at or above 80%.
-- [ ] Confirm tests cover all acceptance criteria: `<hr/>` only between books, no divider before first book, no divider after last book, and Telegram payload uses `sendRichMessage` with `rich_message.html`.
+- [x] Run `make verify`.
+- [x] Run `make coverage`.
+- [x] Confirm `make coverage` reports total statement coverage at or above 80%.
+- [x] Confirm tests cover all acceptance criteria: `<hr/>` only between books, no divider before first book, no divider after last book, and Telegram payload uses `sendRichMessage` with `rich_message.html`.
