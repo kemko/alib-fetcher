@@ -168,15 +168,15 @@
 
 ### Task 5: Verify acceptance criteria
 
-- [ ] Выполнить `make verify`; formatting, lint, race/shuffle/no-cache tests и build должны пройти.
-- [ ] Выполнить `make coverage`; total statement coverage должен быть не ниже 80%.
-- [ ] Подтвердить tests: все переносы представлены `<br/>`; literal `\r` и `\n` в готовом HTML
+- [x] Выполнить `make verify`; formatting, lint, race/shuffle/no-cache tests и build должны пройти.
+- [x] Выполнить `make coverage`; total statement coverage должен быть не ниже 80%.
+- [x] Подтвердить tests: все переносы представлены `<br/>`; literal `\r` и `\n` в готовом HTML
   отсутствуют.
-- [ ] Подтвердить tests: с content присутствуют два требуемых межблочных отступа; без content
+- [x] Подтвердить tests: с content присутствуют два требуемых межблочных отступа; без content
   — один.
-- [ ] Подтвердить tests: send, callback polling, answer и markup edit проходят через SDK.
-- [ ] Подтвердить отсутствие собственных Bot API request/response structs, method strings и offset loop.
-- [ ] Подтвердить сохранение `retry_after`, cancellation, final-button, chat filtering, runner-lock и acknowledgement invariants.
-- [ ] Проверить diff на отсутствие credentials, state DB, generated binaries и посторонних изменений.
-- [ ] Stage только task-related files и создать сфокусированный Conventional Commit после успешной
+- [x] Подтвердить tests: send, callback polling, answer и markup edit проходят через SDK.
+- [x] Подтвердить отсутствие собственных Bot API request/response structs, method strings и offset loop.
+- [x] Подтвердить сохранение `retry_after`, cancellation, final-button, chat filtering, runner-lock и acknowledgement invariants.
+- [x] Проверить diff на отсутствие credentials, state DB, generated binaries и посторонних изменений.
+- [x] Stage только task-related files и создать сфокусированный Conventional Commit после успешной
   проверки.
