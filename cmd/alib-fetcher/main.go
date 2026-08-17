@@ -39,7 +39,7 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	sender, err := telegram.NewSender(telegram.Config{
+	telegramAdapter, err := telegram.NewSender(telegram.Config{
 		APIBase: settings.TelegramAPIBase,
 		Token:   settings.TelegramToken,
 		ChatID:  settings.TelegramChatID,
@@ -54,7 +54,7 @@ func run(logger *slog.Logger) error {
 	}
 	dependencies := app.Dependencies{
 		Fetcher:      fetcher,
-		Sender:       sender,
+		Sender:       telegramAdapter,
 		FreshBooks:   freshBooks,
 		Location:     settings.Location,
 		MessageLimit: settings.MessageLimit,
@@ -69,5 +69,5 @@ func run(logger *slog.Logger) error {
 		RunOnStartup:   settings.RunOnStartup,
 		StatePath:      settings.StatePath,
 		TelegramChatID: settings.TelegramChatID,
-	}, dependencies, sender, *once, logger)
+	}, dependencies, telegramAdapter, *once, logger)
 }

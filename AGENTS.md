@@ -66,20 +66,21 @@ Preserve these semantics:
 - Service mode runs one cycle immediately after startup by default, then follows
   the cron schedule. `RUN_ON_STARTUP=false` skips the startup cycle. Overlapping
   cron jobs are skipped.
-- Service mode polls Telegram `callback_query` updates for the stable
-  `telegram.RefreshCallbackData` value. `-once` sends the refresh button when it
-  sends books, but never starts the callback polling loop.
+- Service mode starts SDK-managed polling for Telegram `callback_query` updates
+  registered for the stable `telegram.RefreshCallbackData` value. `-once` sends
+  the refresh button when it sends books, but never starts the SDK listener.
 - Refresh callbacks run through the same digest path and bbolt state path as
   startup and scheduled jobs. Startup, scheduled, and refresh-triggered digests
   share one process-local runner lock; scheduled and refresh-triggered digests
   skip when another digest is already running.
 - Callback polling must continue while a refresh-triggered digest is running so
-  duplicate button presses can be answered and skipped. Poll errors must not
-  spin in a tight loop.
-- Unknown callback data is ignored after the update offset advances. A refresh
-  callback from a different numeric chat ID or public `@channel` username is
-  answered and ignored. A refresh callback skipped because another digest is
-  running must still be answered.
+  duplicate button presses can be answered and skipped. The SDK owns update
+  offsets and polling retry/backoff; polling errors are reported through the
+  local stable log event without exposing secrets.
+- Unknown callback data is ignored while the SDK advances the update offset. A
+  refresh callback from a different numeric chat ID or public `@channel`
+  username is answered and ignored. A refresh callback skipped because another
+  digest is running must still be answered.
 - For refresh-triggered digests, remove the clicked message's old reply markup
   only after renderable chunks are known and before the first new Telegram
   message is sent. If no chunk will be sent, leave the old button in place. If
@@ -96,7 +97,7 @@ Preserve these semantics:
   `internal/process.Run`.
 - `internal/process`: service process lifecycle orchestration, state DB open
   lifetime, startup and scheduled digest runs, robfig/cron lifecycle, refresh
-  callback polling, and shared digest-runner concurrency.
+  callback policy and listener lifecycle, and shared digest-runner concurrency.
 - `internal/config`: environment loading, defaults, and validation.
 - `internal/alib`: HTTP client plus charset-aware, DOM-first HTML parser. The
   real page may be Windows-1251. Listings are recognized inside `<p>` elements
@@ -115,9 +116,11 @@ Preserve these semantics:
   values are JSON records containing the full semantic `alib.Book`, observed
   timestamp, pending queue order, sent status, and sent timestamp for delivered
   records. `alib.Book` has a narrow decoder for persisted legacy fragment fields.
-- `internal/telegram`: Telegram Bot API client for `sendRichMessage`,
-  `getUpdates`, `answerCallbackQuery`, and `editMessageReplyMarkup`; digest
-  messages use `rich_message.html`.
+- `internal/telegram`: adapter backed by `github.com/go-telegram/bot` v1.23.0
+  for `SendRichMessage`, callback polling, `AnswerCallbackQuery`, and
+  `EditMessageReplyMarkup`; digest messages use `rich_message.html`. The SDK
+  owns Bot API endpoints, request/response models, serialization, allowed
+  updates, offsets, and polling retry/backoff.
 - `Dockerfile`: multi-stage static build; final distroless Debian image runs as
   UID/GID 65532 (`nonroot`) and stores state under `/var/lib/alib-fetcher`.
 - `docker-compose.yml`: read-only, capability-dropped service with a persistent
@@ -154,8 +157,8 @@ Optional defaults:
 
 Invalid configuration, including a malformed or overflowing
 `TELEGRAM_CHAT_ID`, prevents process startup. Errors name the invalid variable.
-Never log or expose the bot token; note that the sender internally puts it in
-the Bot API URL.
+Never log or expose the bot token; note that the SDK internally puts it in the
+Bot API URL.
 
 `FRESH_BOOKS=age:N` accepts a non-negative integer and sets the inclusive lower
 year to `current local year - N`; `age:0` therefore includes only the current
@@ -173,8 +176,13 @@ the listing do not participate.
 The first message starts with `<p><b>Новые книги на Alib.ru</b></p>`; later
 chunks start with a listing. If the header and first listing do not fit together
 but the listing fits alone, the first chunk contains only the header. Rich HTML
-paragraphs use `<p>`, and semantic line breaks inside a paragraph use `<br>`.
-Adjacent listings within one chunk use `<hr/>`, with no divider at chunk edges.
+paragraphs use `<p>`, every line break uses `<br/>`, and one blank line between
+non-empty paragraph blocks uses `<br/><br/>`. Rendered Telegram HTML contains no
+literal CR or LF characters. With content, block order is
+`main → <br/><br/> → content → <br/><br/> → details`; without content, it is
+exactly `main → <br/><br/> → details`. The final `Купить` paragraph has the same
+single inter-block separator. Adjacent listings within one chunk use `<hr/>`,
+with no divider at chunk edges.
 Each listing renders, in order: emoji plus bold title and bibliography; optional
 content as a separate paragraph; seller, price, condition/other details, and
 photo status on separate lines; then a final `Купить` link in its own paragraph.
@@ -187,12 +195,14 @@ in Unicode runes, and chunks may split only between listings. A single listing
 that cannot fit returns `digest.ErrMessageTooLong`.
 
 The Alib client accepts only HTTP(S), sends `User-Agent: alib-fetcher/1.0`, and
-requires HTTP 200. The Telegram sender accepts only HTTP(S), caps response
-decoding at 1 MiB, returns `telegram.ErrRequest` for transport failures and
-`telegram.ErrRejected` for unsuccessful API responses, and includes Telegram's
-description and optional `retry_after` delay in rejection errors. Callback
-polling must request only `callback_query` updates and derive its long-poll
-timeout from the configured HTTP timeout.
+requires HTTP 200. The SDK-backed Telegram adapter accepts only HTTP(S), caps
+response decoding at 1 MiB, returns `telegram.ErrRequest` for transport failures
+and `telegram.ErrRejected` for unsuccessful API responses, and includes
+Telegram's description and optional `retry_after` delay in rejection errors.
+Callback polling requests only `callback_query` updates and derives its
+long-poll timeout from the configured HTTP timeout. The SDK owns Telegram
+operations and polling mechanics; app/process keep chunk acknowledgement,
+flood-control retry, chat filtering, refresh ordering, and runner-lock policy.
 
 Structured logs go to stdout. Stable event names are `scheduler.started`,
 `scheduler.stopped`, `digest.started`, `digest.completed`, `digest.failed`,

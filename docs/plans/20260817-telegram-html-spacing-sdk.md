@@ -152,19 +152,19 @@
 - Modify: `README.md`
 - Modify: `AGENTS.md`
 
-- [ ] Передать один SDK-backed Telegram adapter одновременно как app sender и callback listener.
-- [ ] Обновить once-mode integration tests для нового SDK wire behavior без привязки к удалённым
+- [x] Передать один SDK-backed Telegram adapter одновременно как app sender и callback listener.
+- [x] Обновить once-mode integration tests для нового SDK wire behavior без привязки к удалённым
   собственным DTO.
-- [ ] Закрепить integration tests: все переводы строк представлены `<br/>`, literal CR/LF отсутствуют.
-- [ ] Закрепить integration tests отступов для книги с описанием и без описания.
-- [ ] Подтвердить integration tests: rich message, silent intermediate chunks, final button, custom API base и отсутствие callback
+- [x] Закрепить integration tests: все переводы строк представлены `<br/>`, literal CR/LF отсутствуют.
+- [x] Закрепить integration tests отступов для книги с описанием и без описания.
+- [x] Подтвердить integration tests: rich message, silent intermediate chunks, final button, custom API base и отсутствие callback
   polling в `-once`.
-- [ ] Обновить README: `<br/>` для переносов, `<br/><br/>` для пустых строк и поддерживаемый Telegram
+- [x] Обновить README: `<br/>` для переносов, `<br/><br/>` для пустых строк и поддерживаемый Telegram
   SDK вместо собственного Bot API client.
-- [ ] Обновить README dependency/operational text без изменения configuration contract.
-- [ ] Обновить AGENTS.md: Telegram operations и polling принадлежат SDK; app/process invariants остаются
+- [x] Обновить README dependency/operational text без изменения configuration contract.
+- [x] Обновить AGENTS.md: Telegram operations и polling принадлежат SDK; app/process invariants остаются
   локальными; HTML не содержит literal CR/LF.
-- [ ] Выполнить `make test`; все тесты должны пройти до Task 5.
+- [x] Выполнить `make test`; все тесты должны пройти до Task 5.
 
 ### Task 5: Verify acceptance criteria
 

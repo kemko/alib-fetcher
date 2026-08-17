@@ -15,30 +15,18 @@ import (
 	"testing"
 	"time"
 
+	telegrambot "github.com/go-telegram/bot"
+	"github.com/go-telegram/bot/models"
+
 	"github.com/kemko/alib-fetcher/internal/telegram"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-type telegramMessagePayload struct {
-	ReplyMarkup         *telegramReplyMarkup `json:"reply_markup"`
-	ChatID              string               `json:"chat_id"`
-	RichMessage         telegramRichMessage  `json:"rich_message"`
-	DisableNotification bool                 `json:"disable_notification"`
-}
-
-type telegramRichMessage struct {
-	HTML string `json:"html"`
-}
-
-type telegramReplyMarkup struct {
-	InlineKeyboard [][]telegramInlineKeyboardButton `json:"inline_keyboard"`
-}
-
-type telegramInlineKeyboardButton struct {
-	Text         string `json:"text"`
-	CallbackData string `json:"callback_data"`
+type telegramRequest struct {
+	Message telegrambot.SendRichMessageParams
+	Path    string
 }
 
 func Test_run_wires_once_mode_from_environment(t *testing.T) {
@@ -81,7 +69,7 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 				_, err := fmt.Fprintf(writer, `<p><b>Горячая книга.</b> М., %d г.<br>
 (До заказа внимательно прочтите условия продажи продавца <a href="/bs.php4?bs=BotSad">BS - BotSad</a>, Москва.)
 Цена: 3 900 руб. <a href="/hot.html"><b>Купить</b></a><br>
-Первая строка содержания.<br>Состояние: Отличное.<br>
+Первая строка содержания.<br>Вторая строка содержания.<br>Состояние: Отличное.<br>
 Смотрите: <a href="/foto.php4?id=1">фото</a></p>
 <p><b>Свежая книга.</b> М., %d г.<br>
 Цена: 500 руб. <a href="/fresh.html"><b>Купить</b></a></p>`, currentYear, freshYear)
@@ -89,11 +77,13 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 			}))
 			t.Cleanup(alibServer.Close)
 
-			telegramPayloads := make(chan telegramMessagePayload, 1)
+			telegramRequests := make(chan telegramRequest, 4)
 			telegramServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 				assert.Equal(t, http.MethodPost, request.Method)
-				assert.Equal(t, "/bottest-token/sendRichMessage", request.URL.Path)
-				telegramPayloads <- decodeTelegramMessagePayload(t, request)
+				telegramRequests <- telegramRequest{
+					Message: decodeTelegramMessage(t, request),
+					Path:    request.URL.Path,
+				}
 
 				writer.Header().Set("Content-Type", "application/json")
 				_, err := writer.Write([]byte(`{"ok":true,"result":{}}`))
@@ -110,8 +100,10 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 
 			// Then
 			require.NoError(t, err)
-			require.Len(t, telegramPayloads, 1)
-			payload := <-telegramPayloads
+			require.Len(t, telegramRequests, 1)
+			capturedRequest := <-telegramRequests
+			require.Equal(t, "/bottest-token/sendRichMessage", capturedRequest.Path)
+			payload := capturedRequest.Message
 			require.Equal(t, "-100123", payload.ChatID)
 			require.False(t, payload.DisableNotification)
 			richHTML := payload.RichMessage.HTML
@@ -126,13 +118,21 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 			require.NotContains(t, richHTML[:firstBookIndex], "<hr/>")
 			require.Contains(t, richHTML[firstBookIndex:secondBookIndex], "<hr/>")
 			require.NotContains(t, richHTML[secondBookIndex:], "<hr/>")
-			require.Contains(t, richHTML, "<p>Первая строка содержания.</p><br/><br/><p>Продавец: ")
-			require.Contains(
-				t,
-				richHTML,
-				`<a href="`+alibServer.URL+`/bs.php4?bs=BotSad">BotSad</a>, Москва.`,
-			)
+			require.Contains(t, richHTML, fmt.Sprintf(
+				`<p>🔥 <b>Горячая книга.</b> М., %d г.</p><br/><br/>`+
+					`<p>Первая строка содержания.<br/>Вторая строка содержания.</p><br/><br/>`+
+					`<p>Продавец: <a href="%s/bs.php4?bs=BotSad">BotSad</a>, Москва.`,
+				currentYear,
+				alibServer.URL,
+			))
+			require.Contains(t, richHTML, fmt.Sprintf(
+				`<p>%s<b>Свежая книга.</b> М., %d г.</p><br/><br/><p>Цена: 500 руб.<br/>Фото: нет</p>`,
+				testCase.freshEmoji,
+				freshYear,
+			))
 			require.Contains(t, richHTML, "<br/>Цена: 3 900 руб.<br/>Состояние: Отличное.<br/>Фото: есть</p>")
+			require.NotContains(t, richHTML, "<br>")
+			require.NotRegexp(t, `[\r\n]`, richHTML)
 			require.True(
 				t,
 				strings.HasSuffix(richHTML, `<p><a href="`+alibServer.URL+`/fresh.html">Купить</a></p>`),
@@ -160,11 +160,13 @@ func Test_run_sends_only_final_wired_message_with_sound(t *testing.T) {
 	}))
 	t.Cleanup(alibServer.Close)
 
-	telegramPayloads := make(chan telegramMessagePayload, 8)
+	telegramRequests := make(chan telegramRequest, 8)
 	telegramServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		assert.Equal(t, http.MethodPost, request.Method)
-		assert.Equal(t, "/bottest-token/sendRichMessage", request.URL.Path)
-		telegramPayloads <- decodeTelegramMessagePayload(t, request)
+		telegramRequests <- telegramRequest{
+			Message: decodeTelegramMessage(t, request),
+			Path:    request.URL.Path,
+		}
 
 		writer.Header().Set("Content-Type", "application/json")
 		_, err := writer.Write([]byte(`{"ok":true,"result":{}}`))
@@ -190,11 +192,19 @@ func Test_run_sends_only_final_wired_message_with_sound(t *testing.T) {
 
 	// Then
 	require.NoError(t, err)
-	require.Len(t, telegramPayloads, 3)
-	payloads := []telegramMessagePayload{
-		<-telegramPayloads,
-		<-telegramPayloads,
-		<-telegramPayloads,
+	require.Len(t, telegramRequests, 3)
+	requests := []telegramRequest{
+		<-telegramRequests,
+		<-telegramRequests,
+		<-telegramRequests,
+	}
+	payloads := []telegrambot.SendRichMessageParams{
+		requests[0].Message,
+		requests[1].Message,
+		requests[2].Message,
+	}
+	for _, request := range requests {
+		require.Equal(t, "/bottest-token/sendRichMessage", request.Path)
 	}
 	require.Contains(t, payloads[0].RichMessage.HTML, "Первая")
 	require.NotContains(t, payloads[0].RichMessage.HTML, "Вторая")
@@ -204,6 +214,8 @@ func Test_run_sends_only_final_wired_message_with_sound(t *testing.T) {
 
 	for index, payload := range payloads {
 		require.Equal(t, "-100123", payload.ChatID)
+		require.NotContains(t, payload.RichMessage.HTML, "<br>")
+		require.NotRegexp(t, `[\r\n]`, payload.RichMessage.HTML)
 		if index == 0 {
 			require.Contains(t, payload.RichMessage.HTML, "<b>Новые книги на Alib.ru</b>")
 		} else {
@@ -236,17 +248,18 @@ func useOnceMode(t *testing.T) {
 	os.Args = []string{"alib-fetcher", "-once"}
 }
 
-func requireRefreshButton(t *testing.T, payload telegramMessagePayload) {
+func requireRefreshButton(t *testing.T, payload telegrambot.SendRichMessageParams) {
 	t.Helper()
 
-	require.NotNil(t, payload.ReplyMarkup)
-	require.Len(t, payload.ReplyMarkup.InlineKeyboard, 1)
-	require.Len(t, payload.ReplyMarkup.InlineKeyboard[0], 1)
-	require.Equal(t, "Обновить", payload.ReplyMarkup.InlineKeyboard[0][0].Text)
-	require.Equal(t, telegram.RefreshCallbackData, payload.ReplyMarkup.InlineKeyboard[0][0].CallbackData)
+	replyMarkup, ok := payload.ReplyMarkup.(models.InlineKeyboardMarkup)
+	require.True(t, ok)
+	require.Len(t, replyMarkup.InlineKeyboard, 1)
+	require.Len(t, replyMarkup.InlineKeyboard[0], 1)
+	require.Equal(t, "Обновить", replyMarkup.InlineKeyboard[0][0].Text)
+	require.Equal(t, telegram.RefreshCallbackData, replyMarkup.InlineKeyboard[0][0].CallbackData)
 }
 
-func decodeTelegramMessagePayload(t *testing.T, request *http.Request) telegramMessagePayload {
+func decodeTelegramMessage(t *testing.T, request *http.Request) telegrambot.SendRichMessageParams {
 	t.Helper()
 	body, err := io.ReadAll(request.Body)
 	require.NoError(t, err)
@@ -254,14 +267,15 @@ func decodeTelegramMessagePayload(t *testing.T, request *http.Request) telegramM
 	request.Body = io.NopCloser(bytes.NewReader(body))
 	require.NoError(t, request.ParseMultipartForm(1<<20))
 
-	payload := telegramMessagePayload{
+	payload := telegrambot.SendRichMessageParams{
 		ChatID:              request.FormValue("chat_id"),
 		DisableNotification: request.FormValue("disable_notification") == "true",
 	}
 	require.NoError(t, json.Unmarshal([]byte(request.FormValue("rich_message")), &payload.RichMessage))
 	if replyMarkup := request.FormValue("reply_markup"); replyMarkup != "" {
-		payload.ReplyMarkup = &telegramReplyMarkup{}
-		require.NoError(t, json.Unmarshal([]byte(replyMarkup), payload.ReplyMarkup))
+		var inlineKeyboard models.InlineKeyboardMarkup
+		require.NoError(t, json.Unmarshal([]byte(replyMarkup), &inlineKeyboard))
+		payload.ReplyMarkup = inlineKeyboard
 	}
 
 	return payload
