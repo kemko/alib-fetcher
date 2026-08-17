@@ -140,24 +140,18 @@ func Test_Sender_listens_for_registered_refresh_callbacks(t *testing.T) {
 	assert.Equal(t, int32(3), callbackCount.Load())
 }
 
-func Test_Sender_listener_uses_safe_poll_timeout_for_short_HTTP_timeout(t *testing.T) {
+func Test_Sender_listener_applies_short_HTTP_timeout_to_polling(t *testing.T) {
 	t.Parallel()
 
 	// Given
 	var requestCount atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if requestCount.Add(1) > 1 {
-			writer.Header().Set("Content-Type", "application/json")
-			_, err := writer.Write([]byte(`{"ok":true,"result":[]}`))
-			assert.NoError(t, err)
-
-			return
-		}
+		requestCount.Add(1)
 		assert.Equal(t, "/bottest-token/getUpdates", request.URL.Path)
 		payload := readMultipartPayload(t, request)
 		assert.Equal(t, "1", payload["timeout"])
 		assert.JSONEq(t, `["callback_query"]`, payload["allowed_updates"])
-		time.Sleep(25 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 		writer.Header().Set("Content-Type", "application/json")
 		_, err := writer.Write([]byte(`{
 			"ok": true,
@@ -173,12 +167,13 @@ func Test_Sender_listener_uses_safe_poll_timeout_for_short_HTTP_timeout(t *testi
 		APIBase: server.URL,
 		Token:   "test-token",
 		ChatID:  "-100123",
-		Timeout: time.Millisecond,
+		Timeout: 10 * time.Millisecond,
 	})
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	callbacks := make(chan telegram.Callback, 1)
+	errors := make(chan error, 1)
 	done := make(chan struct{})
 
 	// When
@@ -186,13 +181,19 @@ func Test_Sender_listener_uses_safe_poll_timeout_for_short_HTTP_timeout(t *testi
 		defer close(done)
 		sender.ListenCallbacks(ctx, func(_ context.Context, callback telegram.Callback) {
 			callbacks <- callback
+		}, func(_ context.Context, err error) {
+			errors <- err
 			cancel()
-		}, func(context.Context, error) {})
+		})
 	}()
 	waitForListener(t, done)
 
 	// Then
-	assert.Equal(t, telegram.Callback{ID: "callback-1", Data: telegram.RefreshCallbackData}, <-callbacks)
+	pollErr := <-errors
+	require.ErrorIs(t, pollErr, telegram.ErrRequest)
+	assert.ErrorIs(t, pollErr, context.DeadlineExceeded)
+	assert.Empty(t, callbacks)
+	assert.Equal(t, int32(1), requestCount.Load())
 }
 
 func Test_Sender_answers_callback_query(t *testing.T) {

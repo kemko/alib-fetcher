@@ -70,7 +70,7 @@ func newSender(config Config, client *http.Client) (*Sender, error) {
 		Transport:     client.Transport,
 		CheckRedirect: client.CheckRedirect,
 		Jar:           client.Jar,
-		Timeout:       sdkPollTimeout(config.Timeout),
+		Timeout:       config.Timeout,
 	}
 	sender := &Sender{
 		chatID:    config.ChatID,
