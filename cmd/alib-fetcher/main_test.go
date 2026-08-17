@@ -32,6 +32,7 @@ type telegramRequest struct {
 func Test_run_wires_once_mode_from_environment(t *testing.T) {
 	currentYear := time.Now().In(time.UTC).Year()
 	freshYear := currentYear - 5
+	futureYear := currentYear + 1
 	testCases := map[string]struct {
 		freshBooks string
 		freshEmoji string
@@ -72,7 +73,9 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 Первая строка содержания.<br>Вторая строка содержания.<br>Состояние: Отличное.<br>
 Смотрите: <a href="/foto.php4?id=1">фото</a></p>
 <p><b>Свежая книга.</b> М., %d г.<br>
-Цена: 500 руб. <a href="/fresh.html"><b>Купить</b></a></p>`, currentYear, freshYear)
+Цена: 500 руб. <a href="/fresh.html"><b>Купить</b></a></p>
+<p><b>Будущая книга.</b> М., %d г.<br>
+Цена: 700 руб. <a href="/future.html"><b>Купить</b></a></p>`, currentYear, freshYear, futureYear)
 				assert.NoError(t, err)
 			}))
 			t.Cleanup(alibServer.Close)
@@ -109,15 +112,20 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 			richHTML := payload.RichMessage.HTML
 			firstBook := fmt.Sprintf("🔥 <b>Горячая книга.</b> М., %d г.", currentYear)
 			secondBook := testCase.freshEmoji + "<b>Свежая книга.</b>"
+			thirdBook := fmt.Sprintf("🛸 <b>Будущая книга.</b> М., %d г.", futureYear)
 			firstBookIndex := strings.Index(richHTML, firstBook)
 			secondBookIndex := strings.Index(richHTML, secondBook)
+			thirdBookIndex := strings.Index(richHTML, thirdBook)
 			require.NotEqual(t, -1, firstBookIndex)
 			require.NotEqual(t, -1, secondBookIndex)
+			require.NotEqual(t, -1, thirdBookIndex)
 			require.Less(t, firstBookIndex, secondBookIndex)
-			require.Equal(t, 1, strings.Count(richHTML, "<hr/>"))
+			require.Less(t, secondBookIndex, thirdBookIndex)
+			require.Equal(t, 2, strings.Count(richHTML, "<hr/>"))
 			require.NotContains(t, richHTML[:firstBookIndex], "<hr/>")
 			require.Contains(t, richHTML[firstBookIndex:secondBookIndex], "<hr/>")
-			require.NotContains(t, richHTML[secondBookIndex:], "<hr/>")
+			require.Contains(t, richHTML[secondBookIndex:thirdBookIndex], "<hr/>")
+			require.NotContains(t, richHTML[thirdBookIndex:], "<hr/>")
 			require.Contains(t, richHTML, fmt.Sprintf(
 				`<p>🔥 <b>Горячая книга.</b> М., %d г.</p><br/>`+
 					`<p>Первая строка содержания.<br/>Вторая строка содержания.</p><br/>`+
@@ -130,12 +138,17 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 				testCase.freshEmoji,
 				freshYear,
 			))
+			require.Contains(t, richHTML, fmt.Sprintf(
+				`<p>🛸 <b>Будущая книга.</b> М., %d г.</p><br/><p>Цена: 700 руб.<br/>Фото: нет</p>`,
+				futureYear,
+			))
 			require.Contains(t, richHTML, "<br/>Цена: 3 900 руб.<br/>Состояние: Отличное.<br/>Фото: есть</p>")
+			require.NotContains(t, richHTML, "<br/><br/>")
 			require.NotContains(t, richHTML, "<br>")
 			require.NotRegexp(t, `[\r\n]`, richHTML)
 			require.True(
 				t,
-				strings.HasSuffix(richHTML, `<p><a href="`+alibServer.URL+`/fresh.html">Купить</a></p>`),
+				strings.HasSuffix(richHTML, `<p><a href="`+alibServer.URL+`/future.html">Купить</a></p>`),
 			)
 			requireRefreshButton(t, payload)
 			require.Contains(t, logs.String(), "digest.completed")

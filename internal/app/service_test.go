@@ -117,6 +117,13 @@ func Test_Service_renders_freshness_using_cycle_time_in_configured_timezone(t *t
 			policyYear: 2026,
 			emoji:      "🔥 ",
 		},
+		"future year uses configured timezone": {
+			cycleTime:  time.Date(2026, time.December, 31, 21, 30, 0, 0, time.UTC),
+			location:   moscow,
+			bookYear:   2028,
+			policyYear: 2027,
+			emoji:      "🛸 ",
+		},
 	}
 
 	for name, testCase := range testCases {
