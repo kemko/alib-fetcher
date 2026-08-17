@@ -76,16 +76,16 @@
 
 ### Task 3: Verify acceptance criteria
 
-- [ ] Выполнить `make fmt`.
-- [ ] Выполнить полный `make verify`: format check, strict lint, race/shuffle/no-cache tests и build должны пройти.
-- [ ] Выполнить `make coverage`; total statement coverage должен быть не ниже 80%.
-- [ ] Подтвердить тестами: `2027` при локальном `2026` получает `🛸`, любой больший положительный год ведёт себя так же.
-- [ ] Подтвердить тестами: `🔥`, январское исключение и `✨` не изменились; отсутствующий год остаётся без emoji.
-- [ ] Подтвердить точными HTML-тестами один `<br/>` между `main`, optional `content`, `details` и `Купить`.
-- [ ] Проверить, что `<br/>` внутри полей, `<hr/>`, escaping, rune limits и chunking сохранены.
-- [ ] Проверить README.md и AGENTS.md на отсутствие старых утверждений про будущие годы и `<br/><br/>`.
-- [ ] Проверить diff на отсутствие credentials, state DB, generated binaries и посторонних изменений.
-- [ ] Stage только task-related files и создать сфокусированный Conventional Commit после успешной проверки.
+- [x] Выполнить `make fmt`.
+- [x] Выполнить полный `make verify`: format check, strict lint, race/shuffle/no-cache tests и build должны пройти.
+- [x] Выполнить `make coverage`; total statement coverage должен быть не ниже 80%.
+- [x] Подтвердить тестами: `2027` при локальном `2026` получает `🛸`, любой больший положительный год ведёт себя так же.
+- [x] Подтвердить тестами: `🔥`, январское исключение и `✨` не изменились; отсутствующий год остаётся без emoji.
+- [x] Подтвердить точными HTML-тестами один `<br/>` между `main`, optional `content`, `details` и `Купить`.
+- [x] Проверить, что `<br/>` внутри полей, `<hr/>`, escaping, rune limits и chunking сохранены.
+- [x] Проверить README.md и AGENTS.md на отсутствие старых утверждений про будущие годы и `<br/><br/>`.
+- [x] Проверить diff на отсутствие credentials, state DB, generated binaries и посторонних изменений.
+- [x] Stage только task-related files и создать сфокусированный Conventional Commit после успешной проверки.
 
 ### Task 4: Update documentation
 
