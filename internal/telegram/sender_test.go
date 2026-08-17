@@ -146,6 +146,38 @@ func Test_Sender_returns_API_description_on_rejection(t *testing.T) {
 	require.Contains(t, err.Error(), "chat not found")
 }
 
+func Test_Sender_classifies_chat_migration_as_rejection(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusBadRequest)
+		_, err := writer.Write([]byte(`{
+			"ok":false,
+			"error_code":400,
+			"description":"group chat was upgraded",
+			"parameters":{"migrate_to_chat_id":-100456}
+		}`))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+	sender, err := telegram.NewSender(telegram.Config{
+		APIBase: server.URL,
+		Token:   "test-token",
+		ChatID:  "-100123",
+		Timeout: time.Second,
+	})
+	require.NoError(t, err)
+
+	// When
+	err = sender.Send(context.Background(), "digest", false, false)
+
+	// Then
+	require.ErrorIs(t, err, telegram.ErrRejected)
+	require.Contains(t, err.Error(), "migrate_to_chat_id -100456")
+}
+
 func Test_Sender_redacts_token_and_API_URL_from_rejection(t *testing.T) {
 	t.Parallel()
 
@@ -312,6 +344,33 @@ func Test_Sender_uses_HTTP_status_when_rejection_has_no_description(t *testing.T
 	// Then
 	require.ErrorIs(t, err, telegram.ErrRejected)
 	require.Contains(t, err.Error(), "502")
+}
+
+func Test_Sender_rejects_success_body_with_unsuccessful_HTTP_status(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusBadGateway)
+		_, err := writer.Write([]byte(`{"ok":true,"result":{}}`))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+	sender, err := telegram.NewSender(telegram.Config{
+		APIBase: server.URL,
+		Token:   "test-token",
+		ChatID:  "-100123",
+		Timeout: time.Second,
+	})
+	require.NoError(t, err)
+
+	// When
+	err = sender.Send(context.Background(), "digest", false, false)
+
+	// Then
+	require.ErrorIs(t, err, telegram.ErrRejected)
+	require.Contains(t, err.Error(), "Bad Gateway")
 }
 
 func Test_Sender_returns_decode_error_for_non_JSON_HTTP_rejection(t *testing.T) {

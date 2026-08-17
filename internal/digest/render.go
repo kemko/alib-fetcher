@@ -91,7 +91,7 @@ func render(books []alib.Book, options Options, skipOversized bool) ([]Chunk, []
 
 func renderBook(book alib.Book, options Options) string {
 	mainLine := publicationEmoji(book.PublicationYear, options) +
-		"<b>" + html.EscapeString(strings.TrimSpace(book.Title)) + "</b>"
+		"<b>" + renderMultilineText(strings.TrimSpace(book.Title)) + "</b>"
 	if bibliography := strings.TrimSpace(book.Bibliography); bibliography != "" {
 		mainLine += " " + renderMultilineText(bibliography)
 	}
@@ -106,7 +106,7 @@ func renderBook(book alib.Book, options Options) string {
 		details = append(details, renderSeller(seller, book.SellerURL, book.Location))
 	}
 	if price := strings.TrimSpace(book.Price); price != "" {
-		details = append(details, "Цена: "+html.EscapeString(price))
+		details = append(details, "Цена: "+renderMultilineText(price))
 	}
 	if condition := strings.TrimSpace(book.Condition); condition != "" {
 		details = append(details, renderMultilineText(condition))
@@ -149,7 +149,7 @@ func publicationEmoji(publicationYear int, options Options) string {
 func renderSeller(seller, sellerURL, location string) string {
 	rendered := "Продавец: " + renderLink(sellerURL, seller)
 	if location = strings.TrimSpace(location); location != "" {
-		rendered += ", " + html.EscapeString(location)
+		rendered += ", " + renderMultilineText(location)
 	}
 	if !strings.HasSuffix(rendered, ".") {
 		rendered += "."
@@ -160,8 +160,15 @@ func renderSeller(seller, sellerURL, location string) string {
 
 func renderLink(target, label string) string {
 	if target == "" {
-		return html.EscapeString(label)
+		return renderMultilineText(label)
 	}
 
-	return `<a href="` + html.EscapeString(target) + `">` + html.EscapeString(label) + `</a>`
+	return `<a href="` + escapeLinkTarget(target) + `">` + renderMultilineText(label) + `</a>`
+}
+
+func escapeLinkTarget(target string) string {
+	target = strings.ReplaceAll(target, "\r", "%0D")
+	target = strings.ReplaceAll(target, "\n", "%0A")
+
+	return html.EscapeString(target)
 }

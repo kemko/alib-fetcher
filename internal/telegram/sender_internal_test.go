@@ -39,7 +39,7 @@ func Test_Sender_classifies_response_body_read_failure(t *testing.T) {
 	assert.NotContains(t, err.Error(), "api.telegram.org")
 }
 
-func Test_Sender_ignores_close_failure_after_successful_response(t *testing.T) {
+func Test_Sender_does_not_report_close_failure_as_poll_error(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -54,6 +54,7 @@ func Test_Sender_ignores_close_failure_after_successful_response(t *testing.T) {
 
 	// Then
 	require.NoError(t, err)
+	assert.Empty(t, sender.sdkErrors)
 }
 
 func Test_Sender_limits_API_response_read(t *testing.T) {

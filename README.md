@@ -68,7 +68,8 @@ Each Telegram Rich Message is sent through its `SendRichMessage` method with
 rendered HTML. The SDK also supplies request models, inline keyboards, callback
 answers, reply-markup edits, and polling machinery; digest ordering,
 acknowledgement, flood-control retry, chat filtering, and runner locking remain
-service policy.
+service policy. Custom `TELEGRAM_API_BASE` endpoints and test doubles must accept
+the SDK's `multipart/form-data` requests.
 Each listing inside that HTML is structured as:
 
 1. freshness marker, bold title, and bibliography;

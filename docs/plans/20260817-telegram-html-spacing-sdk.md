@@ -1,5 +1,7 @@
 # Восстановление отступов Rich HTML и переход на Telegram SDK
 
+Status: Completed
+
 ## Overview
 
 Восстановить пустые строки между смысловыми блоками книги. Все переносы Telegram HTML

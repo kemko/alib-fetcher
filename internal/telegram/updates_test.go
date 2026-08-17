@@ -20,9 +20,18 @@ func Test_Sender_listens_for_registered_refresh_callbacks(t *testing.T) {
 
 	// Given
 	var requestCount atomic.Int32
+	secondPoll := make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if requestCount.Add(1) > 1 {
-			<-request.Context().Done()
+			payload := readMultipartPayload(t, request)
+			assert.Equal(t, "104", payload["offset"])
+			select {
+			case secondPoll <- struct{}{}:
+			default:
+			}
+			writer.Header().Set("Content-Type", "application/json")
+			_, err := writer.Write([]byte(`{"ok":true,"result":[]}`))
+			assert.NoError(t, err)
 
 			return
 		}
@@ -85,6 +94,7 @@ func Test_Sender_listens_for_registered_refresh_callbacks(t *testing.T) {
 	callbacks := make(chan telegram.Callback, 3)
 	errors := make(chan error, 1)
 	done := make(chan struct{})
+	callbacksHandled := make(chan struct{})
 	var callbackCount atomic.Int32
 
 	// When
@@ -93,12 +103,15 @@ func Test_Sender_listens_for_registered_refresh_callbacks(t *testing.T) {
 		sender.ListenCallbacks(ctx, func(_ context.Context, callback telegram.Callback) {
 			callbacks <- callback
 			if callbackCount.Add(1) == 3 {
-				cancel()
+				close(callbacksHandled)
 			}
 		}, func(_ context.Context, err error) {
 			errors <- err
 		})
 	}()
+	waitForSignal(t, callbacksHandled, "refresh callbacks were not handled")
+	waitForSignal(t, secondPoll, "second callback poll did not start")
+	cancel()
 	waitForListener(t, done)
 
 	// Then
@@ -134,7 +147,9 @@ func Test_Sender_listener_uses_short_poll_when_timeout_cannot_exceed_long_poll(t
 	var requestCount atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if requestCount.Add(1) > 1 {
-			<-request.Context().Done()
+			writer.Header().Set("Content-Type", "application/json")
+			_, err := writer.Write([]byte(`{"ok":true,"result":[]}`))
+			assert.NoError(t, err)
 
 			return
 		}
@@ -261,13 +276,39 @@ func Test_Sender_returns_rejection_for_callback_API_failure(t *testing.T) {
 	require.Contains(t, err.Error(), "query is too old")
 }
 
-func Test_Sender_listener_reports_sanitized_poll_error(t *testing.T) {
+func Test_Sender_listener_reports_poll_error_and_recovers(t *testing.T) {
 	t.Parallel()
 
 	// Given
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	var requestCount atomic.Int32
+	errorReported := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
-		_, err := writer.Write([]byte(`{"ok":false,"description":"test-token rejected"}`))
+		switch requestCount.Add(1) {
+		case 1:
+			_, err := writer.Write([]byte(`{
+				"ok":false,
+				"error_code":400,
+				"description":"test-token rejected"
+			}`))
+			assert.NoError(t, err)
+
+			return
+		case 2:
+			<-errorReported
+		default:
+			_, err := writer.Write([]byte(`{"ok":true,"result":[]}`))
+			assert.NoError(t, err)
+
+			return
+		}
+		_, err := writer.Write([]byte(`{
+			"ok":true,
+			"result":[{
+				"update_id":42,
+				"callback_query":{"id":"callback-1","data":"refresh"}
+			}]
+		}`))
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
@@ -281,14 +322,18 @@ func Test_Sender_listener_reports_sanitized_poll_error(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	errors := make(chan error, 1)
+	callbacks := make(chan telegram.Callback, 1)
 	done := make(chan struct{})
 
 	// When
 	go func() {
 		defer close(done)
-		sender.ListenCallbacks(ctx, func(context.Context, telegram.Callback) {}, func(_ context.Context, err error) {
-			errors <- err
+		sender.ListenCallbacks(ctx, func(_ context.Context, callback telegram.Callback) {
+			callbacks <- callback
 			cancel()
+		}, func(_ context.Context, err error) {
+			errors <- err
+			close(errorReported)
 		})
 	}()
 	waitForListener(t, done)
@@ -298,6 +343,8 @@ func Test_Sender_listener_reports_sanitized_poll_error(t *testing.T) {
 	require.ErrorIs(t, pollErr, telegram.ErrRejected)
 	assert.NotContains(t, pollErr.Error(), "test-token")
 	assert.NotContains(t, pollErr.Error(), server.URL)
+	assert.Equal(t, telegram.Callback{ID: "callback-1", Data: telegram.RefreshCallbackData}, <-callbacks)
+	assert.GreaterOrEqual(t, requestCount.Load(), int32(2))
 }
 
 func Test_Sender_listener_stops_when_context_is_canceled(t *testing.T) {
@@ -340,6 +387,16 @@ func waitForListener(t *testing.T, done <-chan struct{}) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("callback listener did not stop")
+	}
+}
+
+func waitForSignal(t *testing.T, signal <-chan struct{}, failureMessage string) {
+	t.Helper()
+
+	select {
+	case <-signal:
+	case <-time.After(time.Second):
+		t.Fatal(failureMessage)
 	}
 }
 

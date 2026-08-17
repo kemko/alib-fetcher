@@ -55,6 +55,37 @@ func Test_Render_formats_structured_listing_and_escapes_HTML(t *testing.T) {
 	require.NotContains(t, chunks[0].Text, "\n")
 }
 
+func Test_Render_normalizes_line_breaks_in_all_dynamic_fields(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	book := alib.Book{
+		Title:     "Первая\r\nВторая",
+		Seller:    "Bot\nSad",
+		SellerURL: "https://example.com/sell\r\ner",
+		Location:  "Моск\rва",
+		Price:     "500\nруб.",
+		BuyURL:    "https://example.com/bo\nok",
+	}
+
+	// When
+	chunks, err := digest.Render([]alib.Book{book}, digest.Options{Limit: 4096})
+
+	// Then
+	require.NoError(t, err)
+	require.Len(t, chunks, 1)
+	require.Equal(
+		t,
+		`<p><b>Новые книги на Alib.ru</b></p>`+
+			`<p><b>Первая<br/>Вторая</b></p><br/><br/>`+
+			`<p>Продавец: <a href="https://example.com/sell%0D%0Aer">Bot<br/>Sad</a>, Моск<br/>ва.`+
+			`<br/>Цена: 500<br/>руб.<br/>Фото: нет</p><br/><br/>`+
+			`<p><a href="https://example.com/bo%0Aok">Купить</a></p>`,
+		chunks[0].Text,
+	)
+	require.NotRegexp(t, `[\r\n]`, chunks[0].Text)
+}
+
 func Test_Render_highlights_publication_year(t *testing.T) {
 	t.Parallel()
 

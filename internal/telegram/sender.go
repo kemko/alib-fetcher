@@ -127,7 +127,20 @@ func (s *Sender) Send(ctx context.Context, text string, silent bool, attachRefre
 		}
 	}
 
-	_, err := s.bot.SendRichMessage(ctx, params)
+	sdkCtx, call := beginSDKCall(ctx)
+	_, err := s.bot.SendRichMessage(sdkCtx, params)
+
+	return s.normalizeSDKCallError(ctx, call, err)
+}
+
+func (s *Sender) normalizeSDKCallError(ctx context.Context, call *sdkCall, err error) error {
+	unsuccessfulStatus := call.statusCode != 0 &&
+		(call.statusCode < http.StatusOK || call.statusCode >= http.StatusMultipleChoices)
+	if err == nil && unsuccessfulStatus {
+		description := strings.TrimSpace(fmt.Sprintf("%d %s", call.statusCode, http.StatusText(call.statusCode)))
+
+		return &rejectedError{description: description}
+	}
 
 	return s.normalizeSDKError(ctx, err)
 }
@@ -166,9 +179,8 @@ func (s *Sender) normalizeSDKError(ctx context.Context, err error) error {
 		return &safeCauseError{message: "decode Telegram response", cause: err}
 	}
 
-	var transportErr *sdkTransportError
-	var readErr *responseReadError
-	if errors.As(err, &transportErr) || errors.As(err, &readErr) {
+	var requestErr *sdkRequestError
+	if errors.As(err, &requestErr) {
 		return requestError(ctx, "call Telegram SDK", err)
 	}
 
@@ -176,6 +188,11 @@ func (s *Sender) normalizeSDKError(ctx context.Context, err error) error {
 }
 
 func isSDKRejection(err error) bool {
+	var migrateErr *telegrambot.MigrateError
+	if errors.As(err, &migrateErr) {
+		return true
+	}
+
 	known := []error{
 		telegrambot.ErrorForbidden,
 		telegrambot.ErrorBadRequest,
@@ -193,6 +210,10 @@ func isSDKRejection(err error) bool {
 }
 
 func (s *Sender) handleSDKError(err error) {
+	if !strings.HasPrefix(err.Error(), "error get updates,") {
+		return
+	}
+
 	select {
 	case s.sdkErrors <- err:
 	default:
@@ -237,17 +258,19 @@ type responseLimitBody struct {
 	remaining int64
 }
 
-type responseReadError struct {
-	cause error
-}
-
 type sdkHTTPClient struct {
 	client *http.Client
 }
 
-type sdkTransportError struct {
+type sdkRequestError struct {
 	cause error
 }
+
+type sdkCall struct {
+	statusCode int
+}
+
+type sdkCallContextKey struct{}
 
 func (e *rejectedError) Error() string {
 	return fmt.Sprintf("%s: %s", ErrRejected, e.description)
@@ -310,14 +333,14 @@ func wrapResponseReadError(err error) error {
 		return err
 	}
 
-	return &responseReadError{cause: err}
+	return &sdkRequestError{cause: err}
 }
 
-func (e *responseReadError) Error() string {
-	return "read Telegram response"
+func (e *sdkRequestError) Error() string {
+	return "Telegram request failed"
 }
 
-func (e *responseReadError) Is(target error) bool {
+func (e *sdkRequestError) Is(target error) bool {
 	return errors.Is(e.cause, target)
 }
 
@@ -325,16 +348,17 @@ func (client *sdkHTTPClient) Do(request *http.Request) (*http.Response, error) {
 	//nolint:gosec // Operator-configured API base intentionally supports HTTP(S) test and proxy servers.
 	response, err := client.client.Do(request)
 	if err != nil {
-		return response, &sdkTransportError{cause: err}
+		return response, &sdkRequestError{cause: err}
+	}
+	if call, ok := request.Context().Value(sdkCallContextKey{}).(*sdkCall); ok {
+		call.statusCode = response.StatusCode
 	}
 
 	return response, nil
 }
 
-func (e *sdkTransportError) Error() string {
-	return "Telegram transport failed"
-}
+func beginSDKCall(ctx context.Context) (context.Context, *sdkCall) {
+	call := &sdkCall{}
 
-func (e *sdkTransportError) Is(target error) bool {
-	return errors.Is(e.cause, target)
+	return context.WithValue(ctx, sdkCallContextKey{}, call), call
 }
