@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	header           = "<b>Новые книги на Alib.ru</b>\n\n"
-	listingSeparator = "\n\n<hr/>\n\n"
+	header           = "<p><b>Новые книги на Alib.ru</b></p>"
+	lineBreak        = "<br>"
+	listingSeparator = "<hr/>"
 )
 
 // ErrMessageTooLong indicates that one listing cannot fit into a message.
@@ -74,9 +75,9 @@ func renderBook(book alib.Book, options Options) string {
 		mainLine += " " + html.EscapeString(bibliography)
 	}
 
-	paragraphs := []string{mainLine}
+	paragraphs := []string{"<p>" + mainLine + "</p>"}
 	if content := strings.TrimSpace(book.Content); content != "" {
-		paragraphs = append(paragraphs, html.EscapeString(content))
+		paragraphs = append(paragraphs, "<p>"+renderMultilineText(content)+"</p>")
 	}
 
 	details := make([]string, 0, 4)
@@ -87,17 +88,25 @@ func renderBook(book alib.Book, options Options) string {
 		details = append(details, "Цена: "+html.EscapeString(price))
 	}
 	if condition := strings.TrimSpace(book.Condition); condition != "" {
-		details = append(details, html.EscapeString(condition))
+		details = append(details, renderMultilineText(condition))
 	}
 	if book.HasPhotos {
 		details = append(details, "Фото: есть")
 	} else {
 		details = append(details, "Фото: нет")
 	}
-	paragraphs = append(paragraphs, strings.Join(details, "\n"))
-	paragraphs = append(paragraphs, renderLink(book.BuyURL, "Купить"))
+	paragraphs = append(paragraphs, "<p>"+strings.Join(details, lineBreak)+"</p>")
+	paragraphs = append(paragraphs, "<p>"+renderLink(book.BuyURL, "Купить")+"</p>")
 
-	return strings.Join(paragraphs, "\n\n")
+	return strings.Join(paragraphs, "")
+}
+
+func renderMultilineText(value string) string {
+	escaped := html.EscapeString(value)
+	escaped = strings.ReplaceAll(escaped, "\r\n", "\n")
+	escaped = strings.ReplaceAll(escaped, "\r", "\n")
+
+	return strings.ReplaceAll(escaped, "\n", lineBreak)
 }
 
 func publicationEmoji(publicationYear int, options Options) string {

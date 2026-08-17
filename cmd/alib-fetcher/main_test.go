@@ -132,16 +132,16 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 			require.NotContains(t, richHTML[:firstBookIndex], "<hr/>")
 			require.Contains(t, richHTML[firstBookIndex:secondBookIndex], "<hr/>")
 			require.NotContains(t, richHTML[secondBookIndex:], "<hr/>")
-			require.Contains(t, richHTML, "Первая строка содержания.\n\nПродавец: ")
+			require.Contains(t, richHTML, "<p>Первая строка содержания.</p><p>Продавец: ")
 			require.Contains(
 				t,
 				richHTML,
 				`<a href="`+alibServer.URL+`/bs.php4?bs=BotSad">BotSad</a>, Москва.`,
 			)
-			require.Contains(t, richHTML, "\nЦена: 3 900 руб.\nСостояние: Отличное.\nФото: есть\n\n")
+			require.Contains(t, richHTML, "<br>Цена: 3 900 руб.<br>Состояние: Отличное.<br>Фото: есть</p>")
 			require.True(
 				t,
-				strings.HasSuffix(richHTML, `<a href="`+alibServer.URL+`/fresh.html">Купить</a>`),
+				strings.HasSuffix(richHTML, `<p><a href="`+alibServer.URL+`/fresh.html">Купить</a></p>`),
 			)
 			requireRefreshButton(t, payload)
 			require.Contains(t, logs.String(), "digest.completed")
@@ -193,7 +193,7 @@ func Test_run_sends_only_final_wired_message_with_sound(t *testing.T) {
 	t.Setenv("ALIB_URL", alibServer.URL+"/tramka.phtml?tnew=7")
 	t.Setenv("TELEGRAM_API_BASE", telegramServer.URL)
 	t.Setenv("HTTP_TIMEOUT", "2s")
-	t.Setenv("MESSAGE_LIMIT", "150")
+	t.Setenv("MESSAGE_LIMIT", "220")
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
 

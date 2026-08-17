@@ -109,15 +109,15 @@ Preserve these semantics:
 - `internal/app`: use-case orchestration through small `Fetcher`, `State`, and
   `Sender` interfaces. Keep policy here and transport/storage details in their
   adapter packages.
-- `internal/digest`: full-listing Telegram HTML rendering and chunking only
-  between complete listings.
+- `internal/digest`: full-listing Telegram Rich HTML block rendering and
+  chunking only between complete listings.
 - `internal/store`: bbolt storage in bucket `sent_books`; keys are buy URLs and
   values are JSON records containing the full semantic `alib.Book`, observed
   timestamp, pending queue order, sent status, and sent timestamp for delivered
   records. `alib.Book` has a narrow decoder for persisted legacy fragment fields.
-- `internal/telegram`: Telegram Bot API client for `sendMessage`,
+- `internal/telegram`: Telegram Bot API client for `sendRichMessage`,
   `getUpdates`, `answerCallbackQuery`, and `editMessageReplyMarkup`; digest
-  messages use HTML parse mode with link previews disabled.
+  messages use `rich_message.html`.
 - `Dockerfile`: multi-stage static build; final distroless Debian image runs as
   UID/GID 65532 (`nonroot`) and stores state under `/var/lib/alib-fetcher`.
 - `docker-compose.yml`: read-only, capability-dropped service with a persistent
@@ -170,10 +170,11 @@ the listing do not participate.
 
 ## Digest and transport details
 
-Messages start with `<b>Новые книги на Alib.ru</b>`. Each listing renders, in
-order: emoji plus bold title and bibliography; optional content as a separate
-paragraph; seller, price, condition/other details, and photo status on separate
-lines; then a final `Купить` link in its own paragraph. The seller format is
+Messages start with `<p><b>Новые книги на Alib.ru</b></p>`. Rich HTML paragraphs
+use `<p>`, and semantic line breaks inside a paragraph use `<br>`. Each listing
+renders, in order: emoji plus bold title and bibliography; optional content as
+a separate paragraph; seller, price, condition/other details, and photo status
+on separate lines; then a final `Купить` link in its own paragraph. The seller format is
 `Продавец: <a href="...">Name</a>, Location.`; without seller URL, the name is
 plain text. Missing optional fields must not create extra empty paragraphs. The
 source `Смотрите` section is omitted and replaced with `Фото: есть` or

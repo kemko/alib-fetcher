@@ -18,7 +18,7 @@ an embedded bbolt database, which also stores the pending send queue.
 | `FRESH_BOOKS` | no | empty | Optional `✨` threshold: `age:N` or `since:YYYY` |
 | `STATE_PATH` | no | `/var/lib/alib-fetcher/state.db` | bbolt state database |
 | `ALIB_URL` | no | source URL above | Listing page, also useful for testing |
-| `TELEGRAM_API_BASE` | no | `https://api.telegram.org` | Bot API base URL |
+| `TELEGRAM_API_BASE` | no | `https://api.telegram.org` | Bot API base URL; custom/local servers require Bot API 10.1+ |
 | `HTTP_TIMEOUT` | no | `30s` | Timeout for each external request |
 | `MESSAGE_LIMIT` | no | `4000` | Safe Telegram message size, max `4096` |
 
@@ -74,7 +74,8 @@ Each listing inside that HTML is structured as:
 The source photo-link section is replaced with `Фото: есть` or `Фото: нет`.
 When seller URL is absent, seller name is rendered as plain text. Missing
 optional fields do not create empty paragraphs. Dynamic text and URLs are
-HTML-escaped. Adjacent listings in one Rich Message are separated by `<hr/>`;
+HTML-escaped. Paragraphs use `<p>`, and semantic line breaks inside a paragraph
+use `<br>`. Adjacent listings in one Rich Message are separated by `<hr/>`;
 no divider appears before the first listing or after the last. When a digest is
 split into multiple messages, only the final message uses the normal
 notification sound; earlier messages are silent.
