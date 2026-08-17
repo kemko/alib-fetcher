@@ -31,8 +31,9 @@ type telegramRequest struct {
 
 func Test_run_wires_once_mode_from_environment(t *testing.T) {
 	currentYear := time.Now().In(time.UTC).Year()
-	freshYear := currentYear - 5
-	futureYear := currentYear + 1
+	// Keep fixtures valid if UTC year changes before run captures the cycle time.
+	freshYear := currentYear - 4
+	futureYear := currentYear + 2
 	testCases := map[string]struct {
 		freshBooks string
 		freshEmoji string
