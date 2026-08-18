@@ -81,6 +81,14 @@ Preserve these semantics:
   refresh callback from a different numeric chat ID or public `@channel`
   username is answered and ignored. A refresh callback skipped because another
   digest is running must still be answered.
+- A refresh callback remains unanswered, and therefore in Telegram's loading
+  state, until its digest finishes. A successful digest with `Result.New == 0`
+  answers `Новых книг нет`; one with `Result.New > 0` answers with empty text;
+  an error answers `Ошибка обновления`, while details remain in the service
+  log. Refresh digests are canceled after 10 seconds so the final answer reaches
+  Telegram before the callback query expires; a timeout is an error. Toast
+  display duration is controlled by the Telegram client; the Bot API cannot
+  guarantee an exact duration.
 - For refresh-triggered digests, remove the clicked message's old reply markup
   only after renderable chunks are known and before the first new Telegram
   message is sent. If no chunk will be sent, leave the old button in place. If

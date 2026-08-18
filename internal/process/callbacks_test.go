@@ -61,6 +61,7 @@ func Test_startCallbackListening_runs_digest_and_removes_old_button_before_new_s
 	now := time.Date(2026, time.August, 8, 0, 0, 0, 0, time.UTC)
 	book := alib.Book{Title: "Новая книга", BuyURL: "https://example.com/book"}
 	events := &recordedEvents{}
+	sent := make(chan struct{})
 	client := &recordingCallbackClient{
 		callbacks: []telegram.Callback{
 			{
@@ -73,7 +74,7 @@ func Test_startCallbackListening_runs_digest_and_removes_old_button_before_new_s
 		},
 		events: events,
 	}
-	sender := &recordingSender{events: events, afterSend: cancel}
+	sender := &recordingSender{events: events, afterSend: func() { close(sent) }}
 	runner := &digestRunner{dependencies: app.Dependencies{
 		Fetcher:      bookFetcher{books: []alib.Book{book}},
 		Sender:       sender,
@@ -83,8 +84,10 @@ func Test_startCallbackListening_runs_digest_and_removes_old_button_before_new_s
 
 	// When
 	done := startCallbackListening(ctx, client, runner, "@books", slog.New(slog.DiscardHandler))
-	waitForCallbackLoop(t, done)
+	waitForSignal(t, sent)
 	runner.wait()
+	cancel()
+	waitForCallbackLoop(t, done)
 	state, err := store.Open(statePath, now)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, state.Close()) })
@@ -94,9 +97,9 @@ func Test_startCallbackListening_runs_digest_and_removes_old_button_before_new_s
 	require.NoError(t, err)
 	require.Empty(t, pending)
 	require.Len(t, sender.messages, 1)
-	require.Equal(t, []callbackAnswer{{id: "callback-1", text: refreshStartedText}}, client.answersSnapshot())
+	require.Equal(t, []callbackAnswer{{id: "callback-1", text: ""}}, client.answersSnapshot())
 	require.Equal(t, []removedReplyMarkup{{chatID: -100123, messageID: 77}}, client.removalsSnapshot())
-	require.Equal(t, []string{"answer", "remove", "send"}, events.snapshot())
+	require.Equal(t, []string{"remove", "send", "answer"}, events.snapshot())
 }
 
 func Test_handleRefreshCallback_leaves_old_button_when_digest_sends_no_books(t *testing.T) {
@@ -124,7 +127,7 @@ func Test_handleRefreshCallback_leaves_old_button_when_digest_sends_no_books(t *
 	runner.wait()
 
 	// Then
-	require.Equal(t, []callbackAnswer{{id: "callback-1", text: refreshStartedText}}, client.answersSnapshot())
+	require.Equal(t, []callbackAnswer{{id: "callback-1", text: refreshNoBooksText}}, client.answersSnapshot())
 	require.Empty(t, client.removalsSnapshot())
 	require.Empty(t, sender.messages)
 }
@@ -183,6 +186,7 @@ func Test_handleRefreshCallback_answers_duplicate_refresh_while_background_diges
 		MessageID:     77,
 	}, slog.New(slog.DiscardHandler))
 	waitForSignal(t, digestStarted)
+	require.Empty(t, client.answersSnapshot())
 	handleRefreshCallback(ctx, client, runner, telegram.Callback{
 		ID:            "callback-2",
 		Data:          telegram.RefreshCallbackData,
@@ -194,9 +198,120 @@ func Test_handleRefreshCallback_answers_duplicate_refresh_while_background_diges
 
 	// Then
 	require.Equal(t, []callbackAnswer{
-		{id: "callback-1", text: refreshStartedText},
 		{id: "callback-2", text: refreshAlreadyRunningText},
+		{id: "callback-1", text: refreshNoBooksText},
 	}, client.answersSnapshot())
+}
+
+func Test_handleRefreshCallback_hides_digest_error_details_after_digest_finishes(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	digestErr := errors.New(`fetch https://user:secret@example.com/listings: failed`)
+	client := &recordingCallbackClient{}
+	runner := &digestRunner{dependencies: app.Dependencies{
+		Fetcher:      errorFetcher{err: digestErr},
+		Sender:       noopSender{},
+		MessageLimit: 4096,
+		Now:          time.Now,
+	}, statePath: filepath.Join(t.TempDir(), "state.db"), logger: slog.New(slog.DiscardHandler)}
+
+	// When
+	handleRefreshCallback(context.Background(), client, runner, telegram.Callback{
+		ID:            "callback-1",
+		Data:          telegram.RefreshCallbackData,
+		MessageChatID: -100123,
+		MessageID:     77,
+	}, slog.New(slog.DiscardHandler))
+	runner.wait()
+
+	// Then
+	require.Equal(t, []callbackAnswer{{id: "callback-1", text: refreshFailedText}}, client.answersSnapshot())
+	require.Empty(t, client.removalsSnapshot())
+}
+
+func Test_handleRefreshCallback_times_out_before_callback_expires(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	digestStarted := make(chan struct{})
+	client := &recordingCallbackClient{}
+	runner := &digestRunner{dependencies: app.Dependencies{
+		Fetcher:      &blockingFetcher{started: digestStarted},
+		Sender:       noopSender{},
+		MessageLimit: 4096,
+		Now:          time.Now,
+	}, statePath: filepath.Join(t.TempDir(), "state.db"), logger: slog.New(slog.DiscardHandler)}
+
+	// When
+	handleRefreshCallbackWithin(context.Background(), client, runner, telegram.Callback{
+		ID:            "callback-1",
+		Data:          telegram.RefreshCallbackData,
+		MessageChatID: -100123,
+		MessageID:     77,
+	}, slog.New(slog.DiscardHandler), 250*time.Millisecond)
+	waitForSignal(t, digestStarted)
+	runner.wait()
+
+	// Then
+	require.Equal(t, []callbackAnswer{{id: "callback-1", text: refreshFailedText}}, client.answersSnapshot())
+	require.Empty(t, client.removalsSnapshot())
+}
+
+func Test_handleRefreshCallback_prefers_error_status_after_discovering_new_book(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	book := alib.Book{Title: "Книга", BuyURL: "https://example.com/book"}
+	client := &recordingCallbackClient{}
+	sender := &recordingSender{err: errors.New("send failed")}
+	runner := &digestRunner{dependencies: app.Dependencies{
+		Fetcher:      bookFetcher{books: []alib.Book{book}},
+		Sender:       sender,
+		MessageLimit: 4096,
+		Now:          time.Now,
+	}, statePath: filepath.Join(t.TempDir(), "state.db"), logger: slog.New(slog.DiscardHandler)}
+
+	// When
+	handleRefreshCallback(context.Background(), client, runner, telegram.Callback{
+		ID:            "callback-1",
+		Data:          telegram.RefreshCallbackData,
+		MessageChatID: -100123,
+		MessageID:     77,
+	}, slog.New(slog.DiscardHandler))
+	runner.wait()
+
+	// Then
+	require.Equal(t, []callbackAnswer{{id: "callback-1", text: refreshFailedText}}, client.answersSnapshot())
+	require.Len(t, sender.messages, 1)
+}
+
+func Test_handleRefreshCallback_logs_final_answer_failure(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	answerErr := errors.New("callback answer failed")
+	var logs bytes.Buffer
+	client := &recordingCallbackClient{answerErr: answerErr}
+	runner := &digestRunner{dependencies: app.Dependencies{
+		Fetcher:      emptyFetcher{},
+		Sender:       noopSender{},
+		MessageLimit: 4096,
+		Now:          time.Now,
+	}, statePath: filepath.Join(t.TempDir(), "state.db"), logger: slog.New(slog.DiscardHandler)}
+
+	// When
+	handleRefreshCallback(context.Background(), client, runner, telegram.Callback{
+		ID:            "callback-1",
+		Data:          telegram.RefreshCallbackData,
+		MessageChatID: -100123,
+		MessageID:     77,
+	}, slog.New(slog.NewTextHandler(&logs, nil)))
+	runner.wait()
+
+	// Then
+	require.Contains(t, logs.String(), "msg=callback.answer_failed")
+	require.Contains(t, logs.String(), "callback answer failed")
 }
 
 func Test_startCallbackListening_answers_and_ignores_refresh_from_unexpected_chat(t *testing.T) {
@@ -270,6 +385,7 @@ func Test_startCallbackListening_logs_listener_error_without_process_retry(t *te
 type recordingSender struct {
 	events        *recordedEvents
 	afterSend     func()
+	err           error
 	messages      []string
 	silent        []bool
 	attachRefresh []bool
@@ -286,13 +402,14 @@ func (s *recordingSender) Send(_ context.Context, text string, silent bool, atta
 		s.afterSend()
 	}
 
-	return nil
+	return s.err
 }
 
 type recordingCallbackClient struct {
 	events    *recordedEvents
 	cancel    context.CancelFunc
 	listenErr error
+	answerErr error
 	callbacks []telegram.Callback
 	answers   []callbackAnswer
 	removals  []removedReplyMarkup
@@ -318,7 +435,10 @@ func (c *recordingCallbackClient) ListenCallbacks(
 	<-ctx.Done()
 }
 
-func (c *recordingCallbackClient) AnswerCallback(_ context.Context, callbackID string, text string) error {
+func (c *recordingCallbackClient) AnswerCallback(ctx context.Context, callbackID string, text string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	c.mu.Lock()
 	c.answers = append(c.answers, callbackAnswer{id: callbackID, text: text})
 	c.mu.Unlock()
@@ -326,7 +446,7 @@ func (c *recordingCallbackClient) AnswerCallback(_ context.Context, callbackID s
 		c.events.append("answer")
 	}
 
-	return nil
+	return c.answerErr
 }
 
 func (c *recordingCallbackClient) RemoveReplyMarkup(_ context.Context, chatID int64, messageID int) error {

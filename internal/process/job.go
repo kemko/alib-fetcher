@@ -3,6 +3,7 @@ package process
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"time"
 
@@ -16,11 +17,7 @@ func ForgetLatest(ctx context.Context, statePath string, limit int, logger *slog
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if closeErr := state.Close(); closeErr != nil {
-			operationErr = errors.Join(operationErr, closeErr)
-		}
-	}()
+	defer joinCloseError(&operationErr, state)
 
 	deleted, err := state.DeleteLatest(ctx, limit)
 	if err != nil {
@@ -39,23 +36,19 @@ func executeJob(
 	dependencies app.Dependencies,
 	statePath string,
 	logger *slog.Logger,
-) (jobErr error) {
+) (result app.Result, jobErr error) {
 	logger.InfoContext(ctx, "digest.started")
 	state, err := store.Open(statePath, dependencies.Now())
 	if err != nil {
-		return err
+		return result, err
 	}
-	defer func() {
-		if closeErr := state.Close(); closeErr != nil {
-			jobErr = errors.Join(jobErr, closeErr)
-		}
-	}()
+	defer joinCloseError(&jobErr, state)
 
 	dependencies.State = state
 	service := app.NewService(dependencies)
-	result, err := service.Run(ctx)
-	if err != nil {
-		return err
+	result, jobErr = service.Run(ctx)
+	if jobErr != nil {
+		return result, jobErr
 	}
 	logger.InfoContext(ctx, "digest.completed",
 		slog.Int(logKeyFetched, result.Fetched),
@@ -64,5 +57,11 @@ func executeJob(
 		slog.Int(logKeySent, result.Sent),
 	)
 
-	return nil
+	return result, nil
+}
+
+func joinCloseError(operationErr *error, closer io.Closer) {
+	if closeErr := closer.Close(); closeErr != nil {
+		*operationErr = errors.Join(*operationErr, closeErr)
+	}
 }
