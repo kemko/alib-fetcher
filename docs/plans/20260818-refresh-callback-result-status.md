@@ -84,7 +84,7 @@
 
 ### Task 3: Verify acceptance criteria
 
-- [ ] Выполнить `make verify`.
-- [ ] Выполнить `make coverage` и подтвердить общее statement coverage не ниже 80%.
-- [ ] Проверить итоговый diff на отсутствие изменений Telegram transport/API payload, утечек bot token и посторонних файлов.
+- [x] Выполнить `make verify` (успешно; lint: 0 issues, race-enabled tests and build passed).
+- [x] Выполнить `make coverage` и подтвердить общее statement coverage не ниже 80% (90.7%).
+- [x] Проверить итоговый diff на отсутствие изменений Telegram transport/API payload, утечек bot token и посторонних файлов (нарушений не обнаружено).
 ---
