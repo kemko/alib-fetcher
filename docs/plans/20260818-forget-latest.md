@@ -72,13 +72,13 @@
 - Modify: `cmd/alib-fetcher/main.go`
 - Modify: `cmd/alib-fetcher/main_test.go`
 
-- [ ] Сначала добавить тесты чтения `STATE_PATH` отдельно от полной Telegram/digest-конфигурации: значение из environment и существующий default.
-- [ ] Добавить числовой флаг `-forget-latest` с отключённым значением по умолчанию.
-- [ ] Добавить тесты ошибок для отрицательного значения и комбинации `-forget-latest N` с `-once`.
-- [ ] Вынести минимальное получение `STATE_PATH`, чтобы maintenance-режим не требовал `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` и остальные digest-настройки.
-- [ ] При положительном значении создать signal-aware context, вызвать maintenance-операцию до создания Alib/Telegram adapters и сразу вернуть её результат.
-- [ ] Сохранить существующее поведение обычного и `-once` режимов без изменения сигнатуры digest lifecycle.
-- [ ] Запустить `make test`; все тесты должны пройти до Task 4.
+- [x] Сначала добавить тесты чтения `STATE_PATH` отдельно от полной Telegram/digest-конфигурации: значение из environment и существующий default.
+- [x] Добавить числовой флаг `-forget-latest` с отключённым значением по умолчанию.
+- [x] Добавить тесты ошибок для отрицательного значения и комбинации `-forget-latest N` с `-once`.
+- [x] Вынести минимальное получение `STATE_PATH`, чтобы maintenance-режим не требовал `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` и остальные digest-настройки.
+- [x] При положительном значении создать signal-aware context, вызвать maintenance-операцию до создания Alib/Telegram adapters и сразу вернуть её результат.
+- [x] Сохранить существующее поведение обычного и `-once` режимов без изменения сигнатуры digest lifecycle.
+- [x] Запустить `make test`; все тесты должны пройти до Task 4.
 
 ### Task 4: Документировать и закрепить пользовательский сценарий
 

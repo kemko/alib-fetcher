@@ -3,10 +3,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -29,7 +32,22 @@ func main() {
 
 func run(logger *slog.Logger) error {
 	once := flag.Bool("once", false, "fetch and send one digest, then exit")
+	var forgetLatest forgetLatestOption
+	flag.Var(&forgetLatest, "forget-latest", "delete the latest state records, then exit")
 	flag.Parse()
+	if forgetLatest.set {
+		if forgetLatest.value <= 0 {
+			return errors.New("-forget-latest must be positive")
+		}
+		if *once {
+			return errors.New("-forget-latest is incompatible with -once")
+		}
+
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+
+		return process.ForgetLatest(ctx, config.LoadStatePath(), forgetLatest.value, logger)
+	}
 
 	settings, err := config.Load()
 	if err != nil {
@@ -70,4 +88,24 @@ func run(logger *slog.Logger) error {
 		StatePath:      settings.StatePath,
 		TelegramChatID: settings.TelegramChatID,
 	}, dependencies, telegramAdapter, *once, logger)
+}
+
+type forgetLatestOption struct {
+	value int
+	set   bool
+}
+
+func (option *forgetLatestOption) String() string {
+	return strconv.Itoa(option.value)
+}
+
+func (option *forgetLatestOption) Set(value string) error {
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fmt.Errorf("-forget-latest must be an integer: %w", err)
+	}
+	option.value = parsed
+	option.set = true
+
+	return nil
 }

@@ -10,10 +10,12 @@ import (
 )
 
 const (
+	logKeyDeleted    = "deleted"
 	logKeyError      = "error"
 	logKeyFetched    = "fetched"
 	logKeyNew        = "new"
 	logKeyPruned     = "pruned"
+	logKeyRequested  = "requested"
 	logKeySchedule   = "cron_schedule"
 	logKeySent       = "sent"
 	logKeyTimezone   = "timezone"

@@ -291,7 +291,7 @@ func (s *Store) DeleteLatest(ctx context.Context, limit int) (int, error) {
 		return 0, fmt.Errorf("delete latest books: %w", err)
 	}
 	if limit <= 0 {
-		return 0, fmt.Errorf("delete latest books: limit must be positive")
+		return 0, errors.New("delete latest books: limit must be positive")
 	}
 
 	deleted := 0
@@ -301,53 +301,77 @@ func (s *Store) DeleteLatest(ctx context.Context, limit int) (int, error) {
 		}
 
 		bucket := tx.Bucket(sentBucket)
-		records := make([]latestRecord, 0)
-		cursor := bucket.Cursor()
-		for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-
-			record, decodeErr := decodeRecord(key, value)
-			if decodeErr != nil {
-				return decodeErr
-			}
-			records = append(records, latestRecord{
-				key:        append([]byte(nil), key...),
-				observedAt: record.ObservedAt,
-				queueOrder: record.QueueOrder,
-			})
+		records, err := latestRecords(ctx, bucket)
+		if err != nil {
+			return err
 		}
 
 		sort.SliceStable(records, func(leftIndex, rightIndex int) bool {
-			left := records[leftIndex]
-			right := records[rightIndex]
-			if left.queueOrder > 0 && right.queueOrder > 0 && left.queueOrder != right.queueOrder {
-				return left.queueOrder > right.queueOrder
-			}
-			if left.observedAt != right.observedAt {
-				return left.observedAt > right.observedAt
-			}
-
-			return bytes.Compare(left.key, right.key) > 0
+			return latestRecordIsNewer(records[leftIndex], records[rightIndex])
 		})
 
-		if limit > len(records) {
-			limit = len(records)
-		}
-		for _, record := range records[:limit] {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			if err := bucket.Delete(record.key); err != nil {
-				return err
-			}
-			deleted++
-		}
-		return nil
+		deleted, err = deleteLatestRecords(ctx, bucket, records, limit)
+
+		return err
 	})
 	if err != nil {
 		return 0, fmt.Errorf("delete latest books: %w", err)
+	}
+
+	return deleted, nil
+}
+
+func latestRecords(ctx context.Context, bucket *bolt.Bucket) ([]latestRecord, error) {
+	records := make([]latestRecord, 0)
+	cursor := bucket.Cursor()
+	for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		record, err := decodeRecord(key, value)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, latestRecord{
+			key:        append([]byte(nil), key...),
+			observedAt: record.ObservedAt,
+			queueOrder: record.QueueOrder,
+		})
+	}
+
+	return records, nil
+}
+
+func latestRecordIsNewer(left, right latestRecord) bool {
+	if left.queueOrder > 0 && right.queueOrder > 0 && left.queueOrder != right.queueOrder {
+		return left.queueOrder > right.queueOrder
+	}
+	if left.observedAt != right.observedAt {
+		return left.observedAt > right.observedAt
+	}
+
+	return bytes.Compare(left.key, right.key) > 0
+}
+
+func deleteLatestRecords(
+	ctx context.Context,
+	bucket *bolt.Bucket,
+	records []latestRecord,
+	limit int,
+) (int, error) {
+	if limit > len(records) {
+		limit = len(records)
+	}
+	deleted := 0
+	for _, record := range records[:limit] {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		if err := bucket.Delete(record.key); err != nil {
+			return 0, err
+		}
+		deleted++
 	}
 
 	return deleted, nil

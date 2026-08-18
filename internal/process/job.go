@@ -27,8 +27,8 @@ func ForgetLatest(ctx context.Context, statePath string, limit int, logger *slog
 		return err
 	}
 	logger.InfoContext(ctx, "state.forget_latest.completed",
-		slog.Int("requested", limit),
-		slog.Int("deleted", deleted),
+		slog.Int(logKeyRequested, limit),
+		slog.Int(logKeyDeleted, deleted),
 	)
 
 	return nil

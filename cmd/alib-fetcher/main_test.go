@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -18,6 +19,8 @@ import (
 	telegrambot "github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 
+	"github.com/kemko/alib-fetcher/internal/alib"
+	"github.com/kemko/alib-fetcher/internal/store"
 	"github.com/kemko/alib-fetcher/internal/telegram"
 
 	"github.com/stretchr/testify/assert"
@@ -158,6 +161,58 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 	}
 }
 
+func Test_run_rejects_non_positive_forget_latest(t *testing.T) {
+	for _, value := range []string{"0", "-1"} {
+		t.Run(value, func(t *testing.T) {
+			// Given
+			useCommandLine(t, "-forget-latest", value)
+
+			// When
+			err := run(slog.New(slog.DiscardHandler))
+
+			// Then
+			require.ErrorContains(t, err, "-forget-latest must be positive")
+		})
+	}
+}
+
+func Test_run_rejects_forget_latest_with_once(t *testing.T) {
+	// Given
+	useCommandLine(t, "-once", "-forget-latest", "1")
+
+	// When
+	err := run(slog.New(slog.DiscardHandler))
+
+	// Then
+	require.ErrorContains(t, err, "-forget-latest is incompatible with -once")
+}
+
+func Test_run_forget_latest_only_requires_state_path(t *testing.T) {
+	// Given
+	useCommandLine(t, "-forget-latest", "1")
+	statePath := filepath.Join(t.TempDir(), "state.db")
+	setEnvironmentAbsentDigestConfiguration(t)
+	t.Setenv("STATE_PATH", statePath)
+	state, err := store.Open(statePath, time.Now())
+	require.NoError(t, err)
+	book := alib.Book{BuyURL: "https://example.com/book"}
+	_, err = state.RecordDiscovered(context.Background(), []alib.Book{book}, time.Now())
+	require.NoError(t, err)
+	require.NoError(t, state.Close())
+
+	// When
+	err = run(slog.New(slog.DiscardHandler))
+
+	// Then
+	require.NoError(t, err)
+	reopened, err := store.Open(statePath, time.Now())
+	require.NoError(t, err)
+	pending, err := reopened.Pending(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, reopened.Close())
+	require.Empty(t, pending)
+}
+
 func Test_run_sends_only_final_wired_message_with_sound(t *testing.T) {
 	// Given
 	useOnceMode(t)
@@ -250,6 +305,11 @@ func Test_run_sends_only_final_wired_message_with_sound(t *testing.T) {
 
 func useOnceMode(t *testing.T) {
 	t.Helper()
+	useCommandLine(t, "-once")
+}
+
+func useCommandLine(t *testing.T, arguments ...string) {
+	t.Helper()
 
 	originalCommandLine := flag.CommandLine
 	originalArgs := os.Args
@@ -259,7 +319,25 @@ func useOnceMode(t *testing.T) {
 	})
 	flag.CommandLine = flag.NewFlagSet("alib-fetcher", flag.ContinueOnError)
 	flag.CommandLine.SetOutput(io.Discard)
-	os.Args = []string{"alib-fetcher", "-once"}
+	os.Args = append([]string{"alib-fetcher"}, arguments...)
+}
+
+func setEnvironmentAbsentDigestConfiguration(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{
+		"TELEGRAM_BOT_TOKEN",
+		"TELEGRAM_CHAT_ID",
+		"CRON_SCHEDULE",
+		"TIMEZONE",
+		"ALIB_URL",
+		"TELEGRAM_API_BASE",
+		"HTTP_TIMEOUT",
+		"MESSAGE_LIMIT",
+		"RUN_ON_STARTUP",
+		"FRESH_BOOKS",
+	} {
+		unsetEnvironment(t, key)
+	}
 }
 
 func requireRefreshButton(t *testing.T, payload telegrambot.SendRichMessageParams) {
