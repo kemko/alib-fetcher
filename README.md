@@ -120,6 +120,22 @@ STATE_PATH=./data/state.db \
 go run ./cmd/alib-fetcher -once
 ```
 
+Forget the latest records from the local state database:
+
+```bash
+STATE_PATH=./data/state.db \
+go run ./cmd/alib-fetcher -forget-latest 6
+```
+
+This maintenance command deletes up to six records with the greatest discovery
+order and exits immediately. It opens only `STATE_PATH`, so it does not require
+Telegram credentials, contact Alib or Telegram, or start the scheduler or
+callback polling. The deletion is irreversible and applies to both sent and
+pending records; the next digest can discover any still-available deleted books
+on Alib again. If the database contains fewer records than requested, all
+available records are deleted. The value must be positive, and
+`-forget-latest` cannot be combined with `-once`.
+
 Run the scheduler:
 
 ```bash

@@ -213,6 +213,40 @@ func Test_run_forget_latest_only_requires_state_path(t *testing.T) {
 	require.Empty(t, pending)
 }
 
+func Test_run_forget_latest_documented_cli_scenario_deletes_latest_records_without_http(t *testing.T) {
+	// Given
+	statePath := filepath.Join(t.TempDir(), "state.db")
+	setEnvironmentAbsentDigestConfiguration(t)
+	t.Setenv("STATE_PATH", statePath)
+	// These endpoints are intentionally unreachable: maintenance mode must not
+	// construct the Alib or Telegram adapters that would use them.
+	t.Setenv("ALIB_URL", "http://127.0.0.1:1")
+	t.Setenv("TELEGRAM_API_BASE", "http://127.0.0.1:1")
+
+	books := make([]alib.Book, 8)
+	for index := range books {
+		books[index] = alib.Book{BuyURL: fmt.Sprintf("https://example.com/book-%d", index)}
+	}
+	state, err := store.Open(statePath, time.Now())
+	require.NoError(t, err)
+	_, err = state.RecordDiscovered(context.Background(), books, time.Now())
+	require.NoError(t, err)
+	require.NoError(t, state.Close())
+	useCommandLine(t, "-forget-latest", "6")
+
+	// When
+	err = run(slog.New(slog.DiscardHandler))
+
+	// Then
+	require.NoError(t, err)
+	reopened, err := store.Open(statePath, time.Now())
+	require.NoError(t, err)
+	pending, err := reopened.Pending(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, reopened.Close())
+	require.Equal(t, []alib.Book{books[0], books[1]}, pending)
+}
+
 func Test_run_sends_only_final_wired_message_with_sound(t *testing.T) {
 	// Given
 	useOnceMode(t)
