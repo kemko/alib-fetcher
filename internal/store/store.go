@@ -344,7 +344,12 @@ func latestRecords(ctx context.Context, bucket *bolt.Bucket) ([]latestRecord, er
 }
 
 func latestRecordIsNewer(left, right latestRecord) bool {
-	if left.queueOrder > 0 && right.queueOrder > 0 && left.queueOrder != right.queueOrder {
+	leftHasQueueOrder := left.queueOrder > 0
+	rightHasQueueOrder := right.queueOrder > 0
+	if leftHasQueueOrder != rightHasQueueOrder {
+		return leftHasQueueOrder
+	}
+	if left.queueOrder != right.queueOrder {
 		return left.queueOrder > right.queueOrder
 	}
 	if left.observedAt != right.observedAt {

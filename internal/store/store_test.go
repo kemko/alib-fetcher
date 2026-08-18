@@ -328,6 +328,30 @@ func Test_Store_delete_latest_deletes_all_records_when_limit_exceeds_database_si
 	}
 }
 
+func Test_Store_delete_latest_rejects_non_positive_limit_without_deleting(t *testing.T) {
+	t.Parallel()
+
+	for _, limit := range []int{0, -1} {
+		t.Run(fmt.Sprintf("limit_%d", limit), func(t *testing.T) {
+			// Given
+			path := filepath.Join(t.TempDir(), "state.db")
+			db, err := store.Open(path, time.Now())
+			require.NoError(t, err)
+			book := alib.Book{BuyURL: "https://example.com/book"}
+			recordDiscovered(t, db, []alib.Book{book}, time.Now())
+
+			// When
+			deleted, err := db.DeleteLatest(context.Background(), limit)
+			require.NoError(t, db.Close())
+
+			// Then
+			require.ErrorContains(t, err, "limit must be positive")
+			require.Zero(t, deleted)
+			require.True(t, recordExists(t, path, book.BuyURL))
+		})
+	}
+}
+
 func Test_Store_delete_latest_rolls_back_when_context_is_canceled(t *testing.T) {
 	t.Parallel()
 
@@ -351,19 +375,19 @@ func Test_Store_delete_latest_rolls_back_when_context_is_canceled(t *testing.T) 
 	}
 }
 
-func Test_Store_delete_latest_uses_observed_at_and_key_for_missing_or_equal_queue_order(t *testing.T) {
+func Test_Store_delete_latest_uses_observed_at_and_key_for_equal_queue_order(t *testing.T) {
 	t.Parallel()
 
 	// Given
 	path := filepath.Join(t.TempDir(), "state.db")
-	zeroQueueURL := "https://example.com/a-zero-queue"
-	equalQueueURL := "https://example.com/a-equal-queue"
-	equalQueueTieURL := "https://example.com/z-equal-queue"
+	olderURL := "https://example.com/older"
+	newerURL := "https://example.com/a-newer"
+	newerTieURL := "https://example.com/z-newer"
 	olderObservedAt := time.Date(2026, time.August, 5, 12, 0, 0, 0, time.UTC).UnixNano()
 	records := []storedRecord{
-		{Book: alib.Book{BuyURL: zeroQueueURL}, ObservedAt: olderObservedAt + 1},
-		{Book: alib.Book{BuyURL: equalQueueURL}, ObservedAt: olderObservedAt, QueueOrder: 7},
-		{Book: alib.Book{BuyURL: equalQueueTieURL}, ObservedAt: olderObservedAt, QueueOrder: 7},
+		{Book: alib.Book{BuyURL: olderURL}, ObservedAt: olderObservedAt, QueueOrder: 7},
+		{Book: alib.Book{BuyURL: newerURL}, ObservedAt: olderObservedAt + 1, QueueOrder: 7},
+		{Book: alib.Book{BuyURL: newerTieURL}, ObservedAt: olderObservedAt + 1, QueueOrder: 7},
 	}
 	require.NoError(t, writeStoredRecords(path, records))
 	db, err := store.Open(path, time.Now())
@@ -376,32 +400,72 @@ func Test_Store_delete_latest_uses_observed_at_and_key_for_missing_or_equal_queu
 	// Then
 	require.NoError(t, err)
 	require.Equal(t, 2, deleted)
-	require.False(t, recordExists(t, path, zeroQueueURL))
-	require.True(t, recordExists(t, path, equalQueueURL))
-	require.False(t, recordExists(t, path, equalQueueTieURL))
+	require.True(t, recordExists(t, path, olderURL))
+	require.False(t, recordExists(t, path, newerURL))
+	require.False(t, recordExists(t, path, newerTieURL))
 }
 
-func Test_Store_delete_latest_keeps_sequence_advancing_after_deletion(t *testing.T) {
+func Test_Store_delete_latest_orders_queue_ordered_records_before_missing_records(t *testing.T) {
+	t.Parallel()
+
+	for _, urls := range [][]string{
+		{"https://example.com/a", "https://example.com/m", "https://example.com/z"},
+		{"https://example.com/m", "https://example.com/z", "https://example.com/a"},
+		{"https://example.com/z", "https://example.com/a", "https://example.com/m"},
+	} {
+		// Given
+		path := filepath.Join(t.TempDir(), "state.db")
+		observedAt := time.Date(2026, time.August, 5, 12, 0, 0, 0, time.UTC).UnixNano()
+		records := []storedRecord{
+			{Book: alib.Book{BuyURL: urls[0]}, ObservedAt: observedAt + 2, QueueOrder: 1},
+			{Book: alib.Book{BuyURL: urls[1]}, ObservedAt: observedAt + 1},
+			{Book: alib.Book{BuyURL: urls[2]}, ObservedAt: observedAt, QueueOrder: 2},
+		}
+		require.NoError(t, writeStoredRecords(path, records))
+		db, err := store.Open(path, time.Now())
+		require.NoError(t, err)
+
+		// When
+		deleted, err := db.DeleteLatest(context.Background(), 2)
+		require.NoError(t, db.Close())
+
+		// Then
+		require.NoError(t, err)
+		require.Equal(t, 2, deleted)
+		require.False(t, recordExists(t, path, urls[0]))
+		require.True(t, recordExists(t, path, urls[1]))
+		require.False(t, recordExists(t, path, urls[2]))
+	}
+}
+
+func Test_Store_delete_latest_rediscovery_requeues_book_with_next_sequence(t *testing.T) {
 	t.Parallel()
 
 	// Given
 	path := filepath.Join(t.TempDir(), "state.db")
 	db, err := store.Open(path, time.Now())
 	require.NoError(t, err)
-	deletedBook := alib.Book{BuyURL: "https://example.com/deleted"}
 	remainingBook := alib.Book{BuyURL: "https://example.com/remaining"}
-	newBook := alib.Book{BuyURL: "https://example.com/new"}
-	recordDiscovered(t, db, []alib.Book{deletedBook, remainingBook}, time.Now())
-	require.NoError(t, db.MarkSent(context.Background(), []alib.Book{deletedBook}, time.Now()))
+	forgottenBook := alib.Book{BuyURL: "https://example.com/forgotten"}
+	observedAt := time.Date(2026, time.August, 5, 12, 0, 0, 0, time.UTC)
+	recordDiscovered(t, db, []alib.Book{remainingBook, forgottenBook}, observedAt)
+	require.NoError(t, db.MarkSent(context.Background(), []alib.Book{forgottenBook}, observedAt))
 	require.Equal(t, 1, mustDeleteLatest(t, db, 1))
 
 	// When
-	recordDiscovered(t, db, []alib.Book{newBook}, time.Now())
+	created, err := db.RecordDiscovered(context.Background(), []alib.Book{forgottenBook}, observedAt.Add(time.Hour))
+	pending, pendingErr := db.Pending(context.Background())
 	require.NoError(t, db.Close())
 
 	// Then
-	newBookRecord := readStoredRecord(t, path, newBook.BuyURL)
-	require.Equal(t, uint64(3), newBookRecord.QueueOrder)
+	require.NoError(t, err)
+	require.NoError(t, pendingErr)
+	require.Equal(t, 1, created)
+	require.Equal(t, []alib.Book{remainingBook, forgottenBook}, pending)
+	forgottenRecord := readStoredRecord(t, path, forgottenBook.BuyURL)
+	require.Equal(t, uint64(3), forgottenRecord.QueueOrder)
+	require.False(t, forgottenRecord.Sent)
+	require.Zero(t, forgottenRecord.SentAt)
 }
 
 func Test_Open_leaves_valid_json_records_unchanged(t *testing.T) {

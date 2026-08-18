@@ -176,6 +176,46 @@ func Test_run_rejects_non_positive_forget_latest(t *testing.T) {
 	}
 }
 
+func Test_forgetLatestOption_rejects_malformed_values(t *testing.T) {
+	t.Parallel()
+
+	testCases := map[string]struct {
+		wantError string
+		arguments []string
+	}{
+		"non-numeric": {
+			arguments: []string{"-forget-latest", "six"},
+			wantError: "-forget-latest must be an integer",
+		},
+		"overflowing": {
+			arguments: []string{"-forget-latest", strings.Repeat("9", 100)},
+			wantError: "-forget-latest must be an integer",
+		},
+		"missing": {
+			arguments: []string{"-forget-latest"},
+			wantError: "flag needs an argument",
+		},
+	}
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			// Given
+			flags := flag.NewFlagSet("alib-fetcher", flag.ContinueOnError)
+			flags.SetOutput(io.Discard)
+			var option forgetLatestOption
+			flags.Var(&option, "forget-latest", "delete the latest state records, then exit")
+
+			// When
+			err := flags.Parse(testCase.arguments)
+
+			// Then
+			require.ErrorContains(t, err, testCase.wantError)
+			require.False(t, option.set)
+		})
+	}
+}
+
 func Test_run_rejects_forget_latest_with_once(t *testing.T) {
 	// Given
 	useCommandLine(t, "-once", "-forget-latest", "1")

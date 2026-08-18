@@ -113,6 +113,40 @@ func Test_ForgetLatest_logs_actual_count_when_limit_exceeds_database_size(t *tes
 	require.Empty(t, pending)
 }
 
+func Test_ForgetLatest_closes_unchanged_state_without_completion_log_after_cancellation(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	statePath := filepath.Join(t.TempDir(), "state.db")
+	now := time.Date(2026, time.August, 18, 0, 0, 0, 0, time.UTC)
+	state, err := store.Open(statePath, now)
+	require.NoError(t, err)
+	books := []alib.Book{
+		{BuyURL: "https://example.com/first"},
+		{BuyURL: "https://example.com/second"},
+	}
+	_, err = state.RecordDiscovered(context.Background(), books, now)
+	require.NoError(t, err)
+	require.NoError(t, state.Close())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+
+	// When
+	err = ForgetLatest(ctx, statePath, 1, logger)
+
+	// Then
+	require.ErrorIs(t, err, context.Canceled)
+	require.NotContains(t, logs.String(), "state.forget_latest.completed")
+	reopened, err := store.Open(statePath, now)
+	require.NoError(t, err)
+	pending, err := reopened.Pending(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, reopened.Close())
+	require.Equal(t, books, pending)
+}
+
 func Test_Run_does_not_listen_for_callbacks_in_once_mode(t *testing.T) {
 	t.Parallel()
 

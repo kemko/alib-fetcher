@@ -85,19 +85,21 @@ Preserve these semantics:
   only after renderable chunks are known and before the first new Telegram
   message is sent. If no chunk will be sent, leave the old button in place. If
   old-button removal fails, do not send chunks or mark books delivered.
-- The bbolt database is open only while a digest cycle is running, allowing a
-  separate `-once` process to use it between scheduled cycles.
+- The bbolt database is open only while a digest cycle or `-forget-latest`
+  maintenance operation is running, allowing another process to use it between
+  scheduled cycles.
 - `SIGINT` and `SIGTERM` stop scheduling gracefully and wait for cron shutdown.
 - External requests use the configured timeout and request context.
 
 ## Repository map
 
 - `cmd/alib-fetcher/main.go`: thin bootstrap wiring for JSON logging, `-once`,
-  configuration loading, adapter construction, signal context, and
-  `internal/process.Run`.
+  `-forget-latest`, configuration loading, adapter construction, signal
+  context, `internal/process.Run`, and `internal/process.ForgetLatest`.
 - `internal/process`: service process lifecycle orchestration, state DB open
   lifetime, startup and scheduled digest runs, robfig/cron lifecycle, refresh
-  callback policy and listener lifecycle, and shared digest-runner concurrency.
+  callback policy and listener lifecycle, shared digest-runner concurrency, and
+  the state-only forget-latest maintenance operation.
 - `internal/config`: environment loading, defaults, and validation.
 - `internal/alib`: HTTP client plus charset-aware, DOM-first HTML parser. The
   real page may be Windows-1251. Listings are recognized inside `<p>` elements
@@ -135,7 +137,8 @@ Preserve these semantics:
 
 ## Configuration contract
 
-Required:
+Required for digest and service modes; `-forget-latest` reads only `STATE_PATH`
+and ignores the remaining service configuration:
 
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID` (signed decimal `int64` chat ID or non-empty `@channel`
@@ -207,9 +210,11 @@ flood-control retry, chat filtering, refresh ordering, and runner-lock policy.
 
 Structured logs go to stdout. Stable event names are `scheduler.started`,
 `scheduler.stopped`, `digest.started`, `digest.completed`, `digest.failed`,
-`callback.poll_failed`, `callback.answer_failed`, and `service.failed`;
-completion fields are `fetched`, `new`, `pruned`, and `sent`. Keep slog
-attributes typed, snake_case, and free of secrets.
+`callback.poll_failed`, `callback.answer_failed`,
+`state.forget_latest.completed`, and `service.failed`; digest completion fields
+are `fetched`, `new`, `pruned`, and `sent`, while forget-latest completion fields
+are `requested` and `deleted`. Keep slog attributes typed, snake_case, and free
+of secrets.
 
 ## Development and verification
 
