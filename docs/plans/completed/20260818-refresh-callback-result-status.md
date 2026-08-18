@@ -1,4 +1,3 @@
----
 # Итоговый статус обновления
 
 ## Overview
@@ -7,7 +6,7 @@
 
 - при успешной проверке с `Result.New == 0` показывать toast `Новых книг нет`;
 - при найденных книгах завершать `Loading...` без текста;
-- при ошибке показывать текст этой ошибки в toast.
+- при ошибке показывать безопасный toast `Ошибка обновления`, оставляя подробности в логах.
 
 Длительность toast определяет клиент Telegram; Bot API не позволяет гарантировать ровно 10 секунд.
 
@@ -29,7 +28,7 @@
   - `answerRefreshCallback` централизует ответы callback и логирование `callback.answer_failed`.
   - Refresh-digest выполняется асинхронно под общим runner lock.
   - Старую кнопку удаляет `BeforeDelivery` только при наличии отправляемых chunks.
-  - Telegram-адаптер очищает ошибки от bot token.
+  - Подробности ошибок остаются в `digest.failed`; callback не раскрывает внутренние URL и пути.
 - Dependencies: новые зависимости не нужны.
 
 ## Development Approach
@@ -37,8 +36,8 @@
 - **Testing approach**: Regular — сначала минимальное изменение кода, затем регрессионные тесты.
 - Complete each task fully before moving to the next.
 - Сохранить текущие правила lock, callback polling, удаления старой кнопки и acknowledgement книг.
-- Ошибка имеет приоритет над значением `Result.New`: при частично выполненном digest показывается ошибка.
-- Не раскрывать bot token в callback-тексте.
+- Ошибка имеет приоритет над значением `Result.New`: при частично выполненном digest показывается безопасный статус.
+- Не раскрывать bot token, внутренние URL или пути в callback-тексте.
 - **CRITICAL: every task that changes code MUST include new/updated tests.**
 - **CRITICAL: all tests must pass before starting the next task.**
 
@@ -74,17 +73,16 @@
 - [x] Убрать ранний toast `Проверяю новые книги`, чтобы Telegram сохранял `Loading...` во время проверки.
 - [x] После успешного refresh с `Result.New == 0` вызвать `AnswerCallback` с текстом `Новых книг нет`.
 - [x] После успешного refresh с `Result.New > 0` вызвать `AnswerCallback` с пустым текстом.
-- [x] При ошибке вызвать `AnswerCallback` с `err.Error()`, сохранив очистку Telegram-ошибок от bot token.
+- [x] При ошибке вызвать `AnswerCallback` с безопасным текстом `Ошибка обновления`; подробности оставить в логах.
 - [x] Сохранить `digest.failed` для ошибок digest и `callback.answer_failed` для ошибок отправки итогового callback.
 - [x] Сохранить немедленные ответы `Проверка уже выполняется` и `Кнопка недоступна`; неизвестные callback data по-прежнему игнорировать.
-- [x] Расширить callback-тесты: до завершения блокирующего fetch ответа нет; пустой успешный результат даёт `Новых книг нет`; найденная книга даёт пустой ответ; ошибка даёт её текст.
+- [x] Расширить callback-тесты: до завершения блокирующего fetch ответа нет; пустой успешный результат даёт `Новых книг нет`; найденная книга даёт пустой ответ; ошибка даёт безопасный статус.
 - [x] Проверить тестами, что удаление кнопки и отправка сохраняют прежние условия и порядок, а итоговый callback отправляется после digest.
-- [x] Обновить README и runtime invariants в AGENTS.md: описать три итоговых статуса и указать, что время показа toast контролирует Telegram.
+- [x] Обновить README и runtime invariants в AGENTS.md: описать три итоговых статуса, скрытие деталей ошибок и управление временем toast клиентом Telegram.
 - [x] Выполнить `make test`; все тесты должны пройти до Task 3.
 
 ### Task 3: Verify acceptance criteria
 
 - [x] Выполнить `make verify` (успешно; lint: 0 issues, race-enabled tests and build passed).
-- [x] Выполнить `make coverage` и подтвердить общее statement coverage не ниже 80% (90.7%).
+- [x] Выполнить `make coverage` и подтвердить общее statement coverage не ниже 80% (90.8%).
 - [x] Проверить итоговый diff на отсутствие изменений Telegram transport/API payload, утечек bot token и посторонних файлов (нарушений не обнаружено).
----

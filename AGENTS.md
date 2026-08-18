@@ -84,9 +84,9 @@ Preserve these semantics:
 - A refresh callback remains unanswered, and therefore in Telegram's loading
   state, until its digest finishes. A successful digest with `Result.New == 0`
   answers `Новых книг нет`; one with `Result.New > 0` answers with empty text;
-  an error answers with its sanitized error text, truncated to Telegram's
-  200-character callback limit. Toast display duration is controlled by the
-  Telegram client; the Bot API cannot guarantee an exact duration.
+  an error answers `Ошибка обновления`, while details remain in the service
+  log. Toast display duration is controlled by the Telegram client; the Bot API
+  cannot guarantee an exact duration.
 - For refresh-triggered digests, remove the clicked message's old reply markup
   only after renderable chunks are known and before the first new Telegram
   message is sent. If no chunk will be sent, leave the old button in place. If

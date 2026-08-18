@@ -28,7 +28,8 @@ func (r *digestRunner) runStartup(ctx context.Context) {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
-	r.runLocked(ctx, triggerStartup, nil, nil)
+	_, err := r.runLocked(ctx, nil)
+	r.logFailure(ctx, triggerStartup, err)
 }
 
 func (r *digestRunner) runScheduled(ctx context.Context) {
@@ -37,7 +38,8 @@ func (r *digestRunner) runScheduled(ctx context.Context) {
 	}
 	defer r.lock.Unlock()
 
-	r.runLocked(ctx, triggerScheduled, nil, nil)
+	_, err := r.runLocked(ctx, nil)
+	r.logFailure(ctx, triggerScheduled, err)
 }
 
 func (r *digestRunner) tryStartRefresh(
@@ -52,9 +54,13 @@ func (r *digestRunner) tryStartRefresh(
 	r.refreshRuns.Add(1)
 	go func() {
 		defer r.refreshRuns.Done()
-		defer r.lock.Unlock()
 
-		r.runLocked(ctx, triggerRefresh, beforeDelivery, onComplete)
+		result, err := r.runLocked(ctx, beforeDelivery)
+		r.logFailure(ctx, triggerRefresh, err)
+		r.lock.Unlock()
+		if onComplete != nil {
+			onComplete(result, err)
+		}
 	}()
 
 	return true
@@ -66,17 +72,16 @@ func (r *digestRunner) wait() {
 
 func (r *digestRunner) runLocked(
 	ctx context.Context,
-	trigger string,
 	beforeDelivery func(context.Context) error,
-	onComplete func(app.Result, error),
-) {
+) (app.Result, error) {
 	dependencies := r.dependencies
 	dependencies.BeforeDelivery = beforeDelivery
-	result, err := executeJob(ctx, dependencies, r.statePath, r.logger)
+
+	return executeJob(ctx, dependencies, r.statePath, r.logger)
+}
+
+func (r *digestRunner) logFailure(ctx context.Context, trigger string, err error) {
 	if err != nil {
 		r.logger.ErrorContext(ctx, "digest.failed", slog.Any(logKeyError, err), slog.String(logKeyTrigger, trigger))
-	}
-	if onComplete != nil {
-		onComplete(result, err)
 	}
 }

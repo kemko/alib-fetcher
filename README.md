@@ -106,9 +106,9 @@ sendable books, the old button stays in place.
 The callback stays in Telegram's loading state until the refresh digest
 finishes. A successful refresh with no newly discovered records shows the
 `Новых книг нет` toast; a successful refresh with new records ends loading
-with no text; a failed refresh shows the sanitized error text, truncated to
-Telegram's 200-character callback limit. Toast display duration is controlled
-by the Telegram client; the Bot API cannot guarantee an exact duration.
+with no text; a failed refresh shows `Ошибка обновления`, while details remain
+in the service log. Toast display duration is controlled by the Telegram
+client; the Bot API cannot guarantee an exact duration.
 
 When Telegram returns a flood-control `retry_after`, the service waits for the
 specified duration and retries the same message before continuing with later

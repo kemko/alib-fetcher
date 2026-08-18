@@ -6,7 +6,6 @@ import (
 	"errors"
 	"log/slog"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -204,11 +203,11 @@ func Test_handleRefreshCallback_answers_duplicate_refresh_while_background_diges
 	}, client.answersSnapshot())
 }
 
-func Test_handleRefreshCallback_answers_with_digest_error_after_digest_finishes(t *testing.T) {
+func Test_handleRefreshCallback_hides_digest_error_details_after_digest_finishes(t *testing.T) {
 	t.Parallel()
 
 	// Given
-	digestErr := errors.New("fetch failed")
+	digestErr := errors.New(`fetch https://user:secret@example.com/listings: failed`)
 	client := &recordingCallbackClient{}
 	runner := &digestRunner{dependencies: app.Dependencies{
 		Fetcher:      errorFetcher{err: digestErr},
@@ -227,8 +226,36 @@ func Test_handleRefreshCallback_answers_with_digest_error_after_digest_finishes(
 	runner.wait()
 
 	// Then
-	require.Equal(t, []callbackAnswer{{id: "callback-1", text: "fetch listings: fetch failed"}}, client.answersSnapshot())
+	require.Equal(t, []callbackAnswer{{id: "callback-1", text: refreshFailedText}}, client.answersSnapshot())
 	require.Empty(t, client.removalsSnapshot())
+}
+
+func Test_handleRefreshCallback_prefers_error_status_after_discovering_new_book(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	book := alib.Book{Title: "Книга", BuyURL: "https://example.com/book"}
+	client := &recordingCallbackClient{}
+	sender := &recordingSender{err: errors.New("send failed")}
+	runner := &digestRunner{dependencies: app.Dependencies{
+		Fetcher:      bookFetcher{books: []alib.Book{book}},
+		Sender:       sender,
+		MessageLimit: 4096,
+		Now:          time.Now,
+	}, statePath: filepath.Join(t.TempDir(), "state.db"), logger: slog.New(slog.DiscardHandler)}
+
+	// When
+	handleRefreshCallback(context.Background(), client, runner, telegram.Callback{
+		ID:            "callback-1",
+		Data:          telegram.RefreshCallbackData,
+		MessageChatID: -100123,
+		MessageID:     77,
+	}, slog.New(slog.DiscardHandler))
+	runner.wait()
+
+	// Then
+	require.Equal(t, []callbackAnswer{{id: "callback-1", text: refreshFailedText}}, client.answersSnapshot())
+	require.Len(t, sender.messages, 1)
 }
 
 func Test_handleRefreshCallback_logs_final_answer_failure(t *testing.T) {
@@ -257,48 +284,6 @@ func Test_handleRefreshCallback_logs_final_answer_failure(t *testing.T) {
 	// Then
 	require.Contains(t, logs.String(), "msg=callback.answer_failed")
 	require.Contains(t, logs.String(), "callback answer failed")
-}
-
-func Test_answerRefreshCallback_limits_text_to_telegram_maximum(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		text     string
-		expected string
-	}{
-		{
-			name:     "keeps 200 Unicode characters",
-			text:     strings.Repeat("я", maxCallbackTextRunes),
-			expected: strings.Repeat("я", maxCallbackTextRunes),
-		},
-		{
-			name:     "truncates 201 Unicode characters",
-			text:     strings.Repeat("я", maxCallbackTextRunes+1),
-			expected: strings.Repeat("я", maxCallbackTextRunes-1) + "…",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			// Given
-			client := &recordingCallbackClient{}
-
-			// When
-			answerRefreshCallback(
-				context.Background(),
-				client,
-				"callback-1",
-				tt.text,
-				slog.New(slog.DiscardHandler),
-			)
-
-			// Then
-			require.Equal(t, []callbackAnswer{{id: "callback-1", text: tt.expected}}, client.answersSnapshot())
-		})
-	}
 }
 
 func Test_startCallbackListening_answers_and_ignores_refresh_from_unexpected_chat(t *testing.T) {
@@ -372,6 +357,7 @@ func Test_startCallbackListening_logs_listener_error_without_process_retry(t *te
 type recordingSender struct {
 	events        *recordedEvents
 	afterSend     func()
+	err           error
 	messages      []string
 	silent        []bool
 	attachRefresh []bool
@@ -388,7 +374,7 @@ func (s *recordingSender) Send(_ context.Context, text string, silent bool, atta
 		s.afterSend()
 	}
 
-	return nil
+	return s.err
 }
 
 type recordingCallbackClient struct {

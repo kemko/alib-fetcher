@@ -73,20 +73,36 @@ func Test_executeJob_returns_partial_result_when_service_fails(t *testing.T) {
 	require.Equal(t, app.Result{Pruned: 1}, result)
 }
 
-func Test_joinCloseError_preserves_operation_and_close_errors(t *testing.T) {
+func Test_joinCloseError_returns_close_error(t *testing.T) {
 	t.Parallel()
 
-	// Given
 	digestErr := errors.New("digest failed")
-	operationErr := digestErr
 	closeErr := errors.New("close state failed")
+	tests := []struct {
+		operationErr error
+		name         string
+	}{
+		{name: "without operation error"},
+		{name: "with operation error", operationErr: digestErr},
+	}
 
-	// When
-	joinCloseError(&operationErr, errorCloser{err: closeErr})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	// Then
-	require.ErrorIs(t, operationErr, digestErr)
-	require.ErrorIs(t, operationErr, closeErr)
+			// Given
+			operationErr := tt.operationErr
+
+			// When
+			joinCloseError(&operationErr, errorCloser{err: closeErr})
+
+			// Then
+			require.ErrorIs(t, operationErr, closeErr)
+			if tt.operationErr != nil {
+				require.ErrorIs(t, operationErr, tt.operationErr)
+			}
+		})
+	}
 }
 
 type errorCloser struct {

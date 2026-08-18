@@ -162,6 +162,42 @@ func Test_digestRunner_passes_refresh_result_and_error_to_completion_hook(t *tes
 	require.NoError(t, runErr)
 }
 
+func Test_digestRunner_releases_lock_before_refresh_completion_hook(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	var fetches atomic.Int32
+	completionStarted := make(chan struct{})
+	releaseCompletion := make(chan struct{})
+	runner := newDigestRunner(app.Dependencies{
+		Fetcher:      countingFetcher{calls: &fetches},
+		Sender:       noopSender{},
+		MessageLimit: 4096,
+		Now:          time.Now,
+	}, filepath.Join(t.TempDir(), "state.db"), slog.New(slog.DiscardHandler))
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() { close(releaseCompletion) })
+	}
+	t.Cleanup(func() {
+		release()
+		runner.wait()
+	})
+
+	// When
+	require.True(t, runner.tryStartRefresh(context.Background(), nil, func(app.Result, error) {
+		close(completionStarted)
+		<-releaseCompletion
+	}))
+	waitForSignal(t, completionStarted)
+	runner.runScheduled(context.Background())
+
+	// Then
+	require.Equal(t, int32(2), fetches.Load())
+	release()
+	runner.wait()
+}
+
 func Test_digestRunner_passes_partial_result_and_error_to_completion_hook(t *testing.T) {
 	t.Parallel()
 

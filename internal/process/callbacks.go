@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	maxCallbackTextRunes      = 200
 	refreshAlreadyRunningText = "Проверка уже выполняется"
+	refreshFailedText         = "Ошибка обновления"
 	refreshNoBooksText        = "Новых книг нет"
 	refreshUnavailableText    = "Кнопка недоступна"
 )
@@ -98,7 +98,7 @@ func handleRefreshCallback(
 	started := runner.tryStartRefresh(ctx, beforeDelivery, func(result app.Result, err error) {
 		text := ""
 		if err != nil {
-			text = err.Error()
+			text = refreshFailedText
 		} else if result.New == 0 {
 			text = refreshNoBooksText
 		}
@@ -118,16 +118,7 @@ func answerRefreshCallback(
 	text string,
 	logger *slog.Logger,
 ) {
-	if err := callbacks.AnswerCallback(ctx, callbackID, limitCallbackText(text)); err != nil {
+	if err := callbacks.AnswerCallback(ctx, callbackID, text); err != nil {
 		logger.ErrorContext(ctx, "callback.answer_failed", slog.Any(logKeyError, err))
 	}
-}
-
-func limitCallbackText(text string) string {
-	runes := []rune(text)
-	if len(runes) <= maxCallbackTextRunes {
-		return text
-	}
-
-	return string(runes[:maxCallbackTextRunes-1]) + "…"
 }
