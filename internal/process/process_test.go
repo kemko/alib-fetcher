@@ -1,6 +1,7 @@
 package process
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
 	"path/filepath"
@@ -38,6 +39,78 @@ func Test_executeJob_closes_state_database_after_cycle(t *testing.T) {
 	reopened, err := store.Open(statePath, now)
 	require.NoError(t, err)
 	require.NoError(t, reopened.Close())
+}
+
+func Test_ForgetLatest_deletes_records_logs_count_and_closes_state_database(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	statePath := filepath.Join(t.TempDir(), "state.db")
+	now := time.Date(2026, time.August, 18, 0, 0, 0, 0, time.UTC)
+	state, err := store.Open(statePath, now)
+	require.NoError(t, err)
+	books := []alib.Book{
+		{BuyURL: "https://example.com/first"},
+		{BuyURL: "https://example.com/second"},
+		{BuyURL: "https://example.com/third"},
+	}
+	_, err = state.RecordDiscovered(context.Background(), books, now)
+	require.NoError(t, err)
+	require.NoError(t, state.MarkSent(context.Background(), []alib.Book{books[2]}, now))
+	require.NoError(t, state.Close())
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+
+	// When
+	err = ForgetLatest(context.Background(), statePath, 2, logger)
+
+	// Then
+	require.NoError(t, err)
+	require.Contains(t, logs.String(), `"msg":"state.forget_latest.completed"`)
+	require.Contains(t, logs.String(), `"requested":2`)
+	require.Contains(t, logs.String(), `"deleted":2`)
+
+	reopened, err := store.Open(statePath, now)
+	require.NoError(t, err)
+	pending, err := reopened.Pending(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, reopened.Close())
+	require.Equal(t, []alib.Book{books[0]}, pending)
+}
+
+func Test_ForgetLatest_logs_actual_count_when_limit_exceeds_database_size(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	statePath := filepath.Join(t.TempDir(), "state.db")
+	now := time.Date(2026, time.August, 18, 0, 0, 0, 0, time.UTC)
+	state, err := store.Open(statePath, now)
+	require.NoError(t, err)
+	books := []alib.Book{
+		{BuyURL: "https://example.com/first"},
+		{BuyURL: "https://example.com/second"},
+	}
+	_, err = state.RecordDiscovered(context.Background(), books, now)
+	require.NoError(t, err)
+	require.NoError(t, state.Close())
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+
+	// When
+	err = ForgetLatest(context.Background(), statePath, 5, logger)
+
+	// Then
+	require.NoError(t, err)
+	require.Contains(t, logs.String(), `"requested":5`)
+	require.Contains(t, logs.String(), `"deleted":2`)
+	reopened, err := store.Open(statePath, now)
+	require.NoError(t, err)
+	pending, err := reopened.Pending(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, reopened.Close())
+	require.Empty(t, pending)
 }
 
 func Test_Run_does_not_listen_for_callbacks_in_once_mode(t *testing.T) {
