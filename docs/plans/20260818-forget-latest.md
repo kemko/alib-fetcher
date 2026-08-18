@@ -95,11 +95,11 @@
 
 ### Task 5: Verify acceptance criteria
 
-- [ ] Запустить `make verify`: formatting check, полный strict lint, race-enabled shuffled tests и reproducible build должны пройти.
-- [ ] Запустить `make coverage`; итоговое statement coverage должно быть не ниже 80%.
-- [ ] Проверить регрессиями, что `-forget-latest 6` удаляет ровно шесть последних записей по `queue_order`, независимо от sent/pending.
-- [ ] Проверить, что maintenance-режим не обращается к Alib/Telegram и не запускает scheduler/callback polling.
-- [ ] Проверить итоговый diff на отсутствие посторонних изменений и рассинхронизации README.
+- [x] Запустить `make verify`: formatting check, полный strict lint, race-enabled shuffled tests и reproducible build должны пройти.
+- [x] Запустить `make coverage`; итоговое statement coverage должно быть не ниже 80%.
+- [x] Проверить регрессиями, что `-forget-latest 6` удаляет ровно шесть последних записей по `queue_order`, независимо от sent/pending.
+- [x] Проверить, что maintenance-режим не обращается к Alib/Telegram и не запускает scheduler/callback polling.
+- [x] Проверить итоговый diff на отсутствие посторонних изменений и рассинхронизации README.
 
 ### Task 6: Update documentation
 
