@@ -107,8 +107,10 @@ The callback stays in Telegram's loading state until the refresh digest
 finishes. A successful refresh with no newly discovered records shows the
 `Новых книг нет` toast; a successful refresh with new records ends loading
 with no text; a failed refresh shows `Ошибка обновления`, while details remain
-in the service log. Toast display duration is controlled by the Telegram
-client; the Bot API cannot guarantee an exact duration.
+in the service log. Refresh digests are canceled after 10 seconds so Telegram
+can receive the final callback answer before the query expires; a timeout is a
+failed refresh. Toast display duration is controlled by the Telegram client;
+the Bot API cannot guarantee an exact duration.
 
 When Telegram returns a flood-control `retry_after`, the service waits for the
 specified duration and retries the same message before continuing with later

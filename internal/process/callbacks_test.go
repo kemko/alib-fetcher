@@ -230,6 +230,34 @@ func Test_handleRefreshCallback_hides_digest_error_details_after_digest_finishes
 	require.Empty(t, client.removalsSnapshot())
 }
 
+func Test_handleRefreshCallback_times_out_before_callback_expires(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	digestStarted := make(chan struct{})
+	client := &recordingCallbackClient{}
+	runner := &digestRunner{dependencies: app.Dependencies{
+		Fetcher:      &blockingFetcher{started: digestStarted},
+		Sender:       noopSender{},
+		MessageLimit: 4096,
+		Now:          time.Now,
+	}, statePath: filepath.Join(t.TempDir(), "state.db"), logger: slog.New(slog.DiscardHandler)}
+
+	// When
+	handleRefreshCallbackWithin(context.Background(), client, runner, telegram.Callback{
+		ID:            "callback-1",
+		Data:          telegram.RefreshCallbackData,
+		MessageChatID: -100123,
+		MessageID:     77,
+	}, slog.New(slog.DiscardHandler), 250*time.Millisecond)
+	waitForSignal(t, digestStarted)
+	runner.wait()
+
+	// Then
+	require.Equal(t, []callbackAnswer{{id: "callback-1", text: refreshFailedText}}, client.answersSnapshot())
+	require.Empty(t, client.removalsSnapshot())
+}
+
 func Test_handleRefreshCallback_prefers_error_status_after_discovering_new_book(t *testing.T) {
 	t.Parallel()
 
