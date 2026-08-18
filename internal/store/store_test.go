@@ -279,6 +279,195 @@ func Test_Store_prune_keeps_unsent_entries_older_than_cutoff(t *testing.T) {
 	require.True(t, recordExists(t, path, pendingBook.BuyURL))
 }
 
+func Test_Store_delete_latest_removes_sent_and_pending_records_by_queue_order(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	path := filepath.Join(t.TempDir(), "state.db")
+	db, err := store.Open(path, time.Now())
+	require.NoError(t, err)
+	books := []alib.Book{
+		{BuyURL: "https://example.com/z-first"},
+		{BuyURL: "https://example.com/a-second"},
+		{BuyURL: "https://example.com/m-third"},
+	}
+	recordDiscovered(t, db, books, time.Date(2026, time.August, 5, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, db.MarkSent(context.Background(), []alib.Book{books[2]}, time.Now()))
+
+	// When
+	deleted, err := db.DeleteLatest(context.Background(), 2)
+	require.NoError(t, db.Close())
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, 2, deleted)
+	require.True(t, recordExists(t, path, books[0].BuyURL))
+	require.False(t, recordExists(t, path, books[1].BuyURL))
+	require.False(t, recordExists(t, path, books[2].BuyURL))
+}
+
+func Test_Store_delete_latest_deletes_all_records_when_limit_exceeds_database_size(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	path := filepath.Join(t.TempDir(), "state.db")
+	db, err := store.Open(path, time.Now())
+	require.NoError(t, err)
+	books := []alib.Book{{BuyURL: "https://example.com/first"}, {BuyURL: "https://example.com/second"}}
+	recordDiscovered(t, db, books, time.Now())
+
+	// When
+	deleted, err := db.DeleteLatest(context.Background(), 3)
+	require.NoError(t, db.Close())
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, 2, deleted)
+	for _, book := range books {
+		require.False(t, recordExists(t, path, book.BuyURL))
+	}
+}
+
+func Test_Store_delete_latest_rejects_non_positive_limit_without_deleting(t *testing.T) {
+	t.Parallel()
+
+	for _, limit := range []int{0, -1} {
+		t.Run(fmt.Sprintf("limit_%d", limit), func(t *testing.T) {
+			// Given
+			path := filepath.Join(t.TempDir(), "state.db")
+			db, err := store.Open(path, time.Now())
+			require.NoError(t, err)
+			book := alib.Book{BuyURL: "https://example.com/book"}
+			recordDiscovered(t, db, []alib.Book{book}, time.Now())
+
+			// When
+			deleted, err := db.DeleteLatest(context.Background(), limit)
+			require.NoError(t, db.Close())
+
+			// Then
+			require.ErrorContains(t, err, "limit must be positive")
+			require.Zero(t, deleted)
+			require.True(t, recordExists(t, path, book.BuyURL))
+		})
+	}
+}
+
+func Test_Store_delete_latest_rolls_back_when_context_is_canceled(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	path := filepath.Join(t.TempDir(), "state.db")
+	db, err := store.Open(path, time.Now())
+	require.NoError(t, err)
+	books := []alib.Book{{BuyURL: "https://example.com/first"}, {BuyURL: "https://example.com/second"}}
+	recordDiscovered(t, db, books, time.Now())
+	ctx := &cancelAfterErrContext{Context: context.Background(), cancelAt: 6}
+
+	// When
+	deleted, err := db.DeleteLatest(ctx, 2)
+	require.NoError(t, db.Close())
+
+	// Then
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, deleted)
+	for _, book := range books {
+		require.True(t, recordExists(t, path, book.BuyURL))
+	}
+}
+
+func Test_Store_delete_latest_uses_observed_at_and_key_for_equal_queue_order(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	path := filepath.Join(t.TempDir(), "state.db")
+	olderURL := "https://example.com/older"
+	newerURL := "https://example.com/a-newer"
+	newerTieURL := "https://example.com/z-newer"
+	olderObservedAt := time.Date(2026, time.August, 5, 12, 0, 0, 0, time.UTC).UnixNano()
+	records := []storedRecord{
+		{Book: alib.Book{BuyURL: olderURL}, ObservedAt: olderObservedAt, QueueOrder: 7},
+		{Book: alib.Book{BuyURL: newerURL}, ObservedAt: olderObservedAt + 1, QueueOrder: 7},
+		{Book: alib.Book{BuyURL: newerTieURL}, ObservedAt: olderObservedAt + 1, QueueOrder: 7},
+	}
+	require.NoError(t, writeStoredRecords(path, records))
+	db, err := store.Open(path, time.Now())
+	require.NoError(t, err)
+
+	// When
+	deleted, err := db.DeleteLatest(context.Background(), 2)
+	require.NoError(t, db.Close())
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, 2, deleted)
+	require.True(t, recordExists(t, path, olderURL))
+	require.False(t, recordExists(t, path, newerURL))
+	require.False(t, recordExists(t, path, newerTieURL))
+}
+
+func Test_Store_delete_latest_orders_queue_ordered_records_before_missing_records(t *testing.T) {
+	t.Parallel()
+
+	for _, urls := range [][]string{
+		{"https://example.com/a", "https://example.com/m", "https://example.com/z"},
+		{"https://example.com/m", "https://example.com/z", "https://example.com/a"},
+		{"https://example.com/z", "https://example.com/a", "https://example.com/m"},
+	} {
+		// Given
+		path := filepath.Join(t.TempDir(), "state.db")
+		observedAt := time.Date(2026, time.August, 5, 12, 0, 0, 0, time.UTC).UnixNano()
+		records := []storedRecord{
+			{Book: alib.Book{BuyURL: urls[0]}, ObservedAt: observedAt + 2, QueueOrder: 1},
+			{Book: alib.Book{BuyURL: urls[1]}, ObservedAt: observedAt + 1},
+			{Book: alib.Book{BuyURL: urls[2]}, ObservedAt: observedAt, QueueOrder: 2},
+		}
+		require.NoError(t, writeStoredRecords(path, records))
+		db, err := store.Open(path, time.Now())
+		require.NoError(t, err)
+
+		// When
+		deleted, err := db.DeleteLatest(context.Background(), 2)
+		require.NoError(t, db.Close())
+
+		// Then
+		require.NoError(t, err)
+		require.Equal(t, 2, deleted)
+		require.False(t, recordExists(t, path, urls[0]))
+		require.True(t, recordExists(t, path, urls[1]))
+		require.False(t, recordExists(t, path, urls[2]))
+	}
+}
+
+func Test_Store_delete_latest_rediscovery_requeues_book_with_next_sequence(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	path := filepath.Join(t.TempDir(), "state.db")
+	db, err := store.Open(path, time.Now())
+	require.NoError(t, err)
+	remainingBook := alib.Book{BuyURL: "https://example.com/remaining"}
+	forgottenBook := alib.Book{BuyURL: "https://example.com/forgotten"}
+	observedAt := time.Date(2026, time.August, 5, 12, 0, 0, 0, time.UTC)
+	recordDiscovered(t, db, []alib.Book{remainingBook, forgottenBook}, observedAt)
+	require.NoError(t, db.MarkSent(context.Background(), []alib.Book{forgottenBook}, observedAt))
+	require.Equal(t, 1, mustDeleteLatest(t, db, 1))
+
+	// When
+	created, err := db.RecordDiscovered(context.Background(), []alib.Book{forgottenBook}, observedAt.Add(time.Hour))
+	pending, pendingErr := db.Pending(context.Background())
+	require.NoError(t, db.Close())
+
+	// Then
+	require.NoError(t, err)
+	require.NoError(t, pendingErr)
+	require.Equal(t, 1, created)
+	require.Equal(t, []alib.Book{remainingBook, forgottenBook}, pending)
+	forgottenRecord := readStoredRecord(t, path, forgottenBook.BuyURL)
+	require.Equal(t, uint64(3), forgottenRecord.QueueOrder)
+	require.False(t, forgottenRecord.Sent)
+	require.Zero(t, forgottenRecord.SentAt)
+}
+
 func Test_Open_leaves_valid_json_records_unchanged(t *testing.T) {
 	t.Parallel()
 
@@ -623,6 +812,55 @@ func recordExists(t *testing.T, path, buyURL string) bool {
 	require.NoError(t, err)
 
 	return exists
+}
+
+func mustDeleteLatest(t *testing.T, db *store.Store, limit int) int {
+	t.Helper()
+
+	deleted, err := db.DeleteLatest(context.Background(), limit)
+	require.NoError(t, err)
+
+	return deleted
+}
+
+type cancelAfterErrContext struct {
+	context.Context
+	cancelAt int
+	errCalls int
+}
+
+func (c *cancelAfterErrContext) Err() error {
+	c.errCalls++
+	if c.errCalls >= c.cancelAt {
+		return context.Canceled
+	}
+
+	return c.Context.Err()
+}
+
+func writeStoredRecords(path string, records []storedRecord) error {
+	db, err := bolt.Open(path, 0o600, nil)
+	if err != nil {
+		return err
+	}
+	writeErr := db.Update(func(tx *bolt.Tx) error {
+		bucket, bucketErr := tx.CreateBucketIfNotExists([]byte("sent_books"))
+		if bucketErr != nil {
+			return bucketErr
+		}
+		for _, record := range records {
+			value, marshalErr := json.Marshal(record)
+			if marshalErr != nil {
+				return marshalErr
+			}
+			if putErr := bucket.Put([]byte(record.Book.BuyURL), value); putErr != nil {
+				return putErr
+			}
+		}
+		return nil
+	})
+
+	return errors.Join(writeErr, db.Close())
 }
 
 func writeLegacyMarker(path, buyURL string, value []byte) error {

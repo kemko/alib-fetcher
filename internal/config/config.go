@@ -115,7 +115,7 @@ func Load() (Config, error) {
 		TelegramChatID:  chatID,
 		TelegramAPIBase: valueOrDefault("TELEGRAM_API_BASE", defaultTelegramAPIBase),
 		AlibURL:         valueOrDefault("ALIB_URL", defaultAlibURL),
-		StatePath:       valueOrDefault("STATE_PATH", defaultStatePath),
+		StatePath:       LoadStatePath(),
 		Location:        location,
 		FreshBooks:      freshBooks,
 		HTTPTimeout:     timeout,
@@ -123,6 +123,12 @@ func Load() (Config, error) {
 		RunOnStartup:    runOnStartup,
 		cronSpec:        cronSpec,
 	}, nil
+}
+
+// LoadStatePath reads the state database path without validating the rest of the
+// service configuration.
+func LoadStatePath() string {
+	return valueOrDefault("STATE_PATH", defaultStatePath)
 }
 
 func parseFreshBooks(value string) (FreshBooksPolicy, error) {

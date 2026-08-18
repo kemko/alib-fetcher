@@ -45,6 +45,41 @@ func Test_Load_applies_service_defaults(t *testing.T) {
 	require.Nil(t, loaded.FreshBooks)
 }
 
+func Test_LoadStatePath_reads_environment_without_full_configuration(t *testing.T) {
+	// Given
+	const statePath = "/tmp/alib-fetcher-maintenance.db"
+	setEnvironment(t, map[string]string{
+		"STATE_PATH":         statePath,
+		"TELEGRAM_BOT_TOKEN": "",
+		"TELEGRAM_CHAT_ID":   "",
+		"CRON_SCHEDULE":      "not a cron expression",
+		"TIMEZONE":           "not a timezone",
+		"HTTP_TIMEOUT":       "not a duration",
+		"MESSAGE_LIMIT":      "not a number",
+		"RUN_ON_STARTUP":     "not a boolean",
+		"ALIB_URL":           "",
+		"TELEGRAM_API_BASE":  "",
+		"FRESH_BOOKS":        "",
+	})
+
+	// When
+	loaded := config.LoadStatePath()
+
+	// Then
+	require.Equal(t, statePath, loaded)
+}
+
+func Test_LoadStatePath_uses_default(t *testing.T) {
+	// Given
+	unsetEnvironment(t, "STATE_PATH")
+
+	// When
+	loaded := config.LoadStatePath()
+
+	// Then
+	require.Equal(t, "/var/lib/alib-fetcher/state.db", loaded)
+}
+
 func Test_Load_disables_fresh_books_threshold_when_unset_or_empty(t *testing.T) {
 	testCases := map[string]bool{
 		"unset": false,

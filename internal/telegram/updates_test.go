@@ -145,29 +145,25 @@ func Test_Sender_listener_applies_short_HTTP_timeout_to_polling(t *testing.T) {
 
 	// Given
 	var requestCount atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	requestStarted := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
 		requestCount.Add(1)
+		select {
+		case requestStarted <- struct{}{}:
+		default:
+		}
 		assert.Equal(t, "/bottest-token/getUpdates", request.URL.Path)
 		payload := readMultipartPayload(t, request)
 		assert.Equal(t, "1", payload["timeout"])
 		assert.JSONEq(t, `["callback_query"]`, payload["allowed_updates"])
-		time.Sleep(50 * time.Millisecond)
-		writer.Header().Set("Content-Type", "application/json")
-		_, err := writer.Write([]byte(`{
-			"ok": true,
-			"result": [{
-				"update_id": 42,
-				"callback_query": {"id":"callback-1","data":"refresh"}
-			}]
-		}`))
-		assert.NoError(t, err)
+		time.Sleep(750 * time.Millisecond)
 	}))
 	t.Cleanup(server.Close)
 	sender, err := telegram.NewSender(telegram.Config{
 		APIBase: server.URL,
 		Token:   "test-token",
 		ChatID:  "-100123",
-		Timeout: 10 * time.Millisecond,
+		Timeout: 500 * time.Millisecond,
 	})
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -190,6 +186,7 @@ func Test_Sender_listener_applies_short_HTTP_timeout_to_polling(t *testing.T) {
 
 	// Then
 	pollErr := <-errors
+	waitForSignal(t, requestStarted, "polling request did not reach the server")
 	require.ErrorIs(t, pollErr, telegram.ErrRequest)
 	assert.ErrorIs(t, pollErr, context.DeadlineExceeded)
 	assert.Empty(t, callbacks)
