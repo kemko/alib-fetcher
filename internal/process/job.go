@@ -10,6 +10,13 @@ import (
 	"github.com/kemko/alib-fetcher/internal/store"
 )
 
+type closableState interface {
+	app.State
+	Close() error
+}
+
+type stateOpener func(string, time.Time) (closableState, error)
+
 // ForgetLatest removes the newest state records without starting a digest.
 func ForgetLatest(ctx context.Context, statePath string, limit int, logger *slog.Logger) (operationErr error) {
 	state, err := store.Open(statePath, time.Now())
@@ -39,11 +46,25 @@ func executeJob(
 	dependencies app.Dependencies,
 	statePath string,
 	logger *slog.Logger,
-) (jobErr error) {
+) (app.Result, error) {
+	return executeJobWithStateOpener(ctx, dependencies, statePath, logger, openState)
+}
+
+func openState(path string, migratedAt time.Time) (closableState, error) {
+	return store.Open(path, migratedAt)
+}
+
+func executeJobWithStateOpener(
+	ctx context.Context,
+	dependencies app.Dependencies,
+	statePath string,
+	logger *slog.Logger,
+	open stateOpener,
+) (result app.Result, jobErr error) {
 	logger.InfoContext(ctx, "digest.started")
-	state, err := store.Open(statePath, dependencies.Now())
+	state, err := open(statePath, dependencies.Now())
 	if err != nil {
-		return err
+		return result, err
 	}
 	defer func() {
 		if closeErr := state.Close(); closeErr != nil {
@@ -53,9 +74,9 @@ func executeJob(
 
 	dependencies.State = state
 	service := app.NewService(dependencies)
-	result, err := service.Run(ctx)
-	if err != nil {
-		return err
+	result, jobErr = service.Run(ctx)
+	if jobErr != nil {
+		return result, jobErr
 	}
 	logger.InfoContext(ctx, "digest.completed",
 		slog.Int(logKeyFetched, result.Fetched),
@@ -64,5 +85,5 @@ func executeJob(
 		slog.Int(logKeySent, result.Sent),
 	)
 
-	return nil
+	return result, nil
 }

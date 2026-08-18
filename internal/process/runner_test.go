@@ -13,6 +13,7 @@ import (
 
 	"github.com/kemko/alib-fetcher/internal/alib"
 	"github.com/kemko/alib-fetcher/internal/app"
+	"github.com/kemko/alib-fetcher/internal/store"
 
 	"github.com/stretchr/testify/require"
 )
@@ -66,7 +67,7 @@ func Test_digestRunner_shares_lock_across_startup_scheduled_and_refresh_digests(
 	}()
 	waitForSignal(t, digestStarted)
 	runner.runScheduled(ctx)
-	refreshStarted := runner.tryStartRefresh(ctx, nil, nil)
+	refreshStarted := runner.tryStartRefresh(ctx, nil, nil, nil)
 	close(releaseDigest)
 	waitForSignal(t, startupDone)
 	runner.wait()
@@ -104,7 +105,7 @@ func Test_digestRunner_logs_trigger_when_digest_fails(t *testing.T) {
 			run: func(t *testing.T, ctx context.Context, runner *digestRunner) {
 				t.Helper()
 
-				require.True(t, runner.tryStartRefresh(ctx, nil, nil))
+				require.True(t, runner.tryStartRefresh(ctx, nil, nil, nil))
 				runner.wait()
 			},
 		},
@@ -132,6 +133,69 @@ func Test_digestRunner_logs_trigger_when_digest_fails(t *testing.T) {
 			require.Contains(t, logs.String(), "trigger="+tt.trigger)
 		})
 	}
+}
+
+func Test_digestRunner_passes_refresh_result_and_error_to_completion_hook(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	ctx := context.Background()
+	book := alib.Book{Title: "Книга", BuyURL: "https://example.com/book"}
+	resultCh := make(chan app.Result, 1)
+	errCh := make(chan error, 1)
+	runner := newDigestRunner(app.Dependencies{
+		Fetcher:      bookFetcher{books: []alib.Book{book}},
+		Sender:       noopSender{},
+		MessageLimit: 4096,
+		Now:          time.Now,
+	}, filepath.Join(t.TempDir(), "state.db"), slog.New(slog.DiscardHandler))
+
+	// When
+	require.True(t, runner.tryStartRefresh(ctx, nil, nil, func(result app.Result, err error) {
+		resultCh <- result
+		errCh <- err
+	}))
+	runner.wait()
+
+	// Then
+	require.Equal(t, app.Result{Fetched: 1, New: 1, Sent: 1}, <-resultCh)
+	require.NoError(t, <-errCh)
+}
+
+func Test_digestRunner_passes_partial_result_and_error_to_completion_hook(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	ctx := context.Background()
+	now := time.Date(2026, time.August, 18, 0, 0, 0, 0, time.UTC)
+	statePath := filepath.Join(t.TempDir(), "state.db")
+	book := alib.Book{BuyURL: "https://example.com/old"}
+	state, err := store.Open(statePath, now)
+	require.NoError(t, err)
+	_, err = state.RecordDiscovered(ctx, []alib.Book{book}, now)
+	require.NoError(t, err)
+	require.NoError(t, state.MarkSent(ctx, []alib.Book{book}, now.Add(-15*24*time.Hour)))
+	require.NoError(t, state.Close())
+	fetchErr := errors.New("fetch failed")
+	resultCh := make(chan app.Result, 1)
+	errCh := make(chan error, 1)
+	runner := newDigestRunner(app.Dependencies{
+		Fetcher:      errorFetcher{err: fetchErr},
+		Sender:       noopSender{},
+		MessageLimit: 4096,
+		Now:          func() time.Time { return now },
+	}, statePath, slog.New(slog.DiscardHandler))
+
+	// When
+	require.True(t, runner.tryStartRefresh(ctx, nil, nil, func(result app.Result, err error) {
+		resultCh <- result
+		errCh <- err
+	}))
+	runner.wait()
+
+	// Then
+	require.Equal(t, app.Result{Pruned: 1}, <-resultCh)
+	require.ErrorIs(t, <-errCh, fetchErr)
 }
 
 type countingFetcher struct {

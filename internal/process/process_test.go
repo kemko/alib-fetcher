@@ -3,6 +3,7 @@ package process
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"path/filepath"
 	"sync/atomic"
@@ -17,14 +18,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func Test_executeJob_closes_state_database_after_cycle(t *testing.T) {
+func Test_executeJob_returns_result_and_closes_state_database_after_cycle(t *testing.T) {
 	t.Parallel()
 
 	// Given
 	statePath := filepath.Join(t.TempDir(), "state.db")
 	now := time.Date(2026, time.August, 6, 0, 0, 0, 0, time.UTC)
+	book := alib.Book{Title: "Книга", BuyURL: "https://example.com/book"}
 	dependencies := app.Dependencies{
-		Fetcher:      emptyFetcher{},
+		Fetcher:      bookFetcher{books: []alib.Book{book}},
 		Sender:       noopSender{},
 		MessageLimit: 4096,
 		Now:          func() time.Time { return now },
@@ -32,13 +34,84 @@ func Test_executeJob_closes_state_database_after_cycle(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
 
 	// When
-	err := executeJob(context.Background(), dependencies, statePath, logger)
+	result, err := executeJob(context.Background(), dependencies, statePath, logger)
 
 	// Then
 	require.NoError(t, err)
+	require.Equal(t, app.Result{Fetched: 1, New: 1, Sent: 1}, result)
 	reopened, err := store.Open(statePath, now)
 	require.NoError(t, err)
 	require.NoError(t, reopened.Close())
+}
+
+func Test_executeJob_returns_partial_result_when_service_fails(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	statePath := filepath.Join(t.TempDir(), "state.db")
+	now := time.Date(2026, time.August, 18, 0, 0, 0, 0, time.UTC)
+	book := alib.Book{BuyURL: "https://example.com/old"}
+	state, err := store.Open(statePath, now)
+	require.NoError(t, err)
+	_, err = state.RecordDiscovered(context.Background(), []alib.Book{book}, now)
+	require.NoError(t, err)
+	require.NoError(t, state.MarkSent(context.Background(), []alib.Book{book}, now.Add(-15*24*time.Hour)))
+	require.NoError(t, state.Close())
+	fetchErr := errors.New("fetch failed")
+	dependencies := app.Dependencies{
+		Fetcher:      errorFetcher{err: fetchErr},
+		Sender:       noopSender{},
+		MessageLimit: 4096,
+		Now:          func() time.Time { return now },
+	}
+
+	// When
+	result, err := executeJob(context.Background(), dependencies, statePath, slog.New(slog.DiscardHandler))
+
+	// Then
+	require.ErrorIs(t, err, fetchErr)
+	require.Equal(t, app.Result{Pruned: 1}, result)
+}
+
+func Test_executeJob_returns_state_close_error(t *testing.T) {
+	// Given
+	statePath := filepath.Join(t.TempDir(), "state.db")
+	now := time.Date(2026, time.August, 18, 0, 0, 0, 0, time.UTC)
+	closeErr := errors.New("close state failed")
+	open := func(path string, migratedAt time.Time) (closableState, error) {
+		state, err := store.Open(path, migratedAt)
+		if err != nil {
+			return nil, err
+		}
+
+		return closeErrorState{
+			State:    state,
+			close:    state.Close,
+			closeErr: closeErr,
+		}, nil
+	}
+
+	// When
+	result, err := executeJobWithStateOpener(context.Background(), app.Dependencies{
+		Fetcher:      emptyFetcher{},
+		Sender:       noopSender{},
+		MessageLimit: 4096,
+		Now:          func() time.Time { return now },
+	}, statePath, slog.New(slog.DiscardHandler), open)
+
+	// Then
+	require.ErrorIs(t, err, closeErr)
+	require.Equal(t, app.Result{}, result)
+}
+
+type closeErrorState struct {
+	app.State
+	close    func() error
+	closeErr error
+}
+
+func (s closeErrorState) Close() error {
+	return errors.Join(s.close(), s.closeErr)
 }
 
 func Test_ForgetLatest_deletes_records_logs_count_and_closes_state_database(t *testing.T) {

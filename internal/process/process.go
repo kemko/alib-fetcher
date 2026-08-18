@@ -44,7 +44,9 @@ func Run(
 	logger *slog.Logger,
 ) error {
 	if once {
-		return executeJob(ctx, dependencies, settings.StatePath, logger)
+		_, err := executeJob(ctx, dependencies, settings.StatePath, logger)
+
+		return err
 	}
 
 	runner := newDigestRunner(dependencies, settings.StatePath, logger)

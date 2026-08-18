@@ -95,7 +95,7 @@ func handleRefreshCallback(
 	}
 	started := runner.tryStartRefresh(ctx, beforeDelivery, func(runCtx context.Context) error {
 		return callbacks.AnswerCallback(runCtx, callback.ID, refreshStartedText)
-	})
+	}, nil)
 	if started {
 		return
 	}
