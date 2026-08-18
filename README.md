@@ -103,6 +103,12 @@ out-of-schedule digest. If that refresh sends new notifications, the clicked
 message's old button is removed before the first new message is sent, and the
 last new message receives a fresh `Обновить` button. If the refresh finds no
 sendable books, the old button stays in place.
+The callback stays in Telegram's loading state until the refresh digest
+finishes. A successful refresh with no newly discovered records shows the
+`Новых книг нет` toast; a successful refresh with new records ends loading
+with no text; a failed refresh shows the sanitized error text. Toast display
+duration is controlled by the Telegram client; the Bot API cannot guarantee
+an exact duration.
 
 When Telegram returns a flood-control `retry_after`, the service waits for the
 specified duration and retries the same message before continuing with later

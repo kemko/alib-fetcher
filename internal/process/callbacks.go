@@ -7,13 +7,14 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kemko/alib-fetcher/internal/app"
 	"github.com/kemko/alib-fetcher/internal/telegram"
 )
 
 const (
 	refreshAlreadyRunningText = "Проверка уже выполняется"
+	refreshNoBooksText        = "Новых книг нет"
 	refreshUnavailableText    = "Кнопка недоступна"
-	refreshStartedText        = "Проверяю новые книги"
 )
 
 // CallbackClient contains Telegram callback operations used by the process.
@@ -93,9 +94,15 @@ func handleRefreshCallback(
 
 		return nil
 	}
-	started := runner.tryStartRefresh(ctx, beforeDelivery, func(runCtx context.Context) error {
-		return callbacks.AnswerCallback(runCtx, callback.ID, refreshStartedText)
-	}, nil)
+	started := runner.tryStartRefresh(ctx, beforeDelivery, func(result app.Result, err error) {
+		text := ""
+		if err != nil {
+			text = err.Error()
+		} else if result.New == 0 {
+			text = refreshNoBooksText
+		}
+		answerRefreshCallback(ctx, callbacks, callback.ID, text, logger)
+	})
 	if started {
 		return
 	}

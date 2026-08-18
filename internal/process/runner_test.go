@@ -67,7 +67,7 @@ func Test_digestRunner_shares_lock_across_startup_scheduled_and_refresh_digests(
 	}()
 	waitForSignal(t, digestStarted)
 	runner.runScheduled(ctx)
-	refreshStarted := runner.tryStartRefresh(ctx, nil, nil, nil)
+	refreshStarted := runner.tryStartRefresh(ctx, nil, nil)
 	close(releaseDigest)
 	waitForSignal(t, startupDone)
 	runner.wait()
@@ -105,7 +105,7 @@ func Test_digestRunner_logs_trigger_when_digest_fails(t *testing.T) {
 			run: func(t *testing.T, ctx context.Context, runner *digestRunner) {
 				t.Helper()
 
-				require.True(t, runner.tryStartRefresh(ctx, nil, nil, nil))
+				require.True(t, runner.tryStartRefresh(ctx, nil, nil))
 				runner.wait()
 			},
 		},
@@ -151,7 +151,7 @@ func Test_digestRunner_passes_refresh_result_and_error_to_completion_hook(t *tes
 	}, filepath.Join(t.TempDir(), "state.db"), slog.New(slog.DiscardHandler))
 
 	// When
-	require.True(t, runner.tryStartRefresh(ctx, nil, nil, func(result app.Result, err error) {
+	require.True(t, runner.tryStartRefresh(ctx, nil, func(result app.Result, err error) {
 		resultCh <- result
 		errCh <- err
 	}))
@@ -187,7 +187,7 @@ func Test_digestRunner_passes_partial_result_and_error_to_completion_hook(t *tes
 	}, statePath, slog.New(slog.DiscardHandler))
 
 	// When
-	require.True(t, runner.tryStartRefresh(ctx, nil, nil, func(result app.Result, err error) {
+	require.True(t, runner.tryStartRefresh(ctx, nil, func(result app.Result, err error) {
 		resultCh <- result
 		errCh <- err
 	}))
