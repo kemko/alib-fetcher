@@ -141,8 +141,8 @@ func Test_digestRunner_passes_refresh_result_and_error_to_completion_hook(t *tes
 	// Given
 	ctx := context.Background()
 	book := alib.Book{Title: "Книга", BuyURL: "https://example.com/book"}
-	resultCh := make(chan app.Result, 1)
-	errCh := make(chan error, 1)
+	var result app.Result
+	var runErr error
 	runner := newDigestRunner(app.Dependencies{
 		Fetcher:      bookFetcher{books: []alib.Book{book}},
 		Sender:       noopSender{},
@@ -151,15 +151,15 @@ func Test_digestRunner_passes_refresh_result_and_error_to_completion_hook(t *tes
 	}, filepath.Join(t.TempDir(), "state.db"), slog.New(slog.DiscardHandler))
 
 	// When
-	require.True(t, runner.tryStartRefresh(ctx, nil, func(result app.Result, err error) {
-		resultCh <- result
-		errCh <- err
+	require.True(t, runner.tryStartRefresh(ctx, nil, func(completed app.Result, err error) {
+		result = completed
+		runErr = err
 	}))
 	runner.wait()
 
 	// Then
-	require.Equal(t, app.Result{Fetched: 1, New: 1, Sent: 1}, <-resultCh)
-	require.NoError(t, <-errCh)
+	require.Equal(t, app.Result{Fetched: 1, New: 1, Sent: 1}, result)
+	require.NoError(t, runErr)
 }
 
 func Test_digestRunner_passes_partial_result_and_error_to_completion_hook(t *testing.T) {
@@ -177,8 +177,8 @@ func Test_digestRunner_passes_partial_result_and_error_to_completion_hook(t *tes
 	require.NoError(t, state.MarkSent(ctx, []alib.Book{book}, now.Add(-15*24*time.Hour)))
 	require.NoError(t, state.Close())
 	fetchErr := errors.New("fetch failed")
-	resultCh := make(chan app.Result, 1)
-	errCh := make(chan error, 1)
+	var result app.Result
+	var runErr error
 	runner := newDigestRunner(app.Dependencies{
 		Fetcher:      errorFetcher{err: fetchErr},
 		Sender:       noopSender{},
@@ -187,15 +187,15 @@ func Test_digestRunner_passes_partial_result_and_error_to_completion_hook(t *tes
 	}, statePath, slog.New(slog.DiscardHandler))
 
 	// When
-	require.True(t, runner.tryStartRefresh(ctx, nil, func(result app.Result, err error) {
-		resultCh <- result
-		errCh <- err
+	require.True(t, runner.tryStartRefresh(ctx, nil, func(completed app.Result, err error) {
+		result = completed
+		runErr = err
 	}))
 	runner.wait()
 
 	// Then
-	require.Equal(t, app.Result{Pruned: 1}, <-resultCh)
-	require.ErrorIs(t, <-errCh, fetchErr)
+	require.Equal(t, app.Result{Pruned: 1}, result)
+	require.ErrorIs(t, runErr, fetchErr)
 }
 
 type countingFetcher struct {

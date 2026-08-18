@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -61,6 +62,7 @@ func Test_startCallbackListening_runs_digest_and_removes_old_button_before_new_s
 	now := time.Date(2026, time.August, 8, 0, 0, 0, 0, time.UTC)
 	book := alib.Book{Title: "Новая книга", BuyURL: "https://example.com/book"}
 	events := &recordedEvents{}
+	sent := make(chan struct{})
 	client := &recordingCallbackClient{
 		callbacks: []telegram.Callback{
 			{
@@ -73,7 +75,7 @@ func Test_startCallbackListening_runs_digest_and_removes_old_button_before_new_s
 		},
 		events: events,
 	}
-	sender := &recordingSender{events: events, afterSend: cancel}
+	sender := &recordingSender{events: events, afterSend: func() { close(sent) }}
 	runner := &digestRunner{dependencies: app.Dependencies{
 		Fetcher:      bookFetcher{books: []alib.Book{book}},
 		Sender:       sender,
@@ -83,8 +85,10 @@ func Test_startCallbackListening_runs_digest_and_removes_old_button_before_new_s
 
 	// When
 	done := startCallbackListening(ctx, client, runner, "@books", slog.New(slog.DiscardHandler))
-	waitForCallbackLoop(t, done)
+	waitForSignal(t, sent)
 	runner.wait()
+	cancel()
+	waitForCallbackLoop(t, done)
 	state, err := store.Open(statePath, now)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, state.Close()) })
@@ -233,7 +237,7 @@ func Test_handleRefreshCallback_logs_final_answer_failure(t *testing.T) {
 	// Given
 	answerErr := errors.New("callback answer failed")
 	var logs bytes.Buffer
-	client := &failingCallbackClient{recordingCallbackClient: &recordingCallbackClient{}, err: answerErr}
+	client := &recordingCallbackClient{answerErr: answerErr}
 	runner := &digestRunner{dependencies: app.Dependencies{
 		Fetcher:      emptyFetcher{},
 		Sender:       noopSender{},
@@ -253,6 +257,48 @@ func Test_handleRefreshCallback_logs_final_answer_failure(t *testing.T) {
 	// Then
 	require.Contains(t, logs.String(), "msg=callback.answer_failed")
 	require.Contains(t, logs.String(), "callback answer failed")
+}
+
+func Test_answerRefreshCallback_limits_text_to_telegram_maximum(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		text     string
+		expected string
+	}{
+		{
+			name:     "keeps 200 Unicode characters",
+			text:     strings.Repeat("я", maxCallbackTextRunes),
+			expected: strings.Repeat("я", maxCallbackTextRunes),
+		},
+		{
+			name:     "truncates 201 Unicode characters",
+			text:     strings.Repeat("я", maxCallbackTextRunes+1),
+			expected: strings.Repeat("я", maxCallbackTextRunes-1) + "…",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Given
+			client := &recordingCallbackClient{}
+
+			// When
+			answerRefreshCallback(
+				context.Background(),
+				client,
+				"callback-1",
+				tt.text,
+				slog.New(slog.DiscardHandler),
+			)
+
+			// Then
+			require.Equal(t, []callbackAnswer{{id: "callback-1", text: tt.expected}}, client.answersSnapshot())
+		})
+	}
 }
 
 func Test_startCallbackListening_answers_and_ignores_refresh_from_unexpected_chat(t *testing.T) {
@@ -349,6 +395,7 @@ type recordingCallbackClient struct {
 	events    *recordedEvents
 	cancel    context.CancelFunc
 	listenErr error
+	answerErr error
 	callbacks []telegram.Callback
 	answers   []callbackAnswer
 	removals  []removedReplyMarkup
@@ -374,30 +421,18 @@ func (c *recordingCallbackClient) ListenCallbacks(
 	<-ctx.Done()
 }
 
-func (c *recordingCallbackClient) AnswerCallback(_ context.Context, callbackID string, text string) error {
-	c.recordAnswer(callbackID, text)
-
-	return nil
-}
-
-func (c *recordingCallbackClient) recordAnswer(callbackID string, text string) {
+func (c *recordingCallbackClient) AnswerCallback(ctx context.Context, callbackID string, text string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	c.mu.Lock()
 	c.answers = append(c.answers, callbackAnswer{id: callbackID, text: text})
 	c.mu.Unlock()
 	if c.events != nil {
 		c.events.append("answer")
 	}
-}
 
-type failingCallbackClient struct {
-	*recordingCallbackClient
-	err error
-}
-
-func (c *failingCallbackClient) AnswerCallback(ctx context.Context, callbackID string, text string) error {
-	c.recordAnswer(callbackID, text)
-
-	return c.err
+	return c.answerErr
 }
 
 func (c *recordingCallbackClient) RemoveReplyMarkup(_ context.Context, chatID int64, messageID int) error {

@@ -73,45 +73,28 @@ func Test_executeJob_returns_partial_result_when_service_fails(t *testing.T) {
 	require.Equal(t, app.Result{Pruned: 1}, result)
 }
 
-func Test_executeJob_returns_state_close_error(t *testing.T) {
-	// Given
-	statePath := filepath.Join(t.TempDir(), "state.db")
-	now := time.Date(2026, time.August, 18, 0, 0, 0, 0, time.UTC)
-	closeErr := errors.New("close state failed")
-	open := func(path string, migratedAt time.Time) (closableState, error) {
-		state, err := store.Open(path, migratedAt)
-		if err != nil {
-			return nil, err
-		}
+func Test_joinCloseError_preserves_operation_and_close_errors(t *testing.T) {
+	t.Parallel()
 
-		return closeErrorState{
-			State:    state,
-			close:    state.Close,
-			closeErr: closeErr,
-		}, nil
-	}
+	// Given
+	digestErr := errors.New("digest failed")
+	operationErr := digestErr
+	closeErr := errors.New("close state failed")
 
 	// When
-	result, err := executeJobWithStateOpener(context.Background(), app.Dependencies{
-		Fetcher:      emptyFetcher{},
-		Sender:       noopSender{},
-		MessageLimit: 4096,
-		Now:          func() time.Time { return now },
-	}, statePath, slog.New(slog.DiscardHandler), open)
+	joinCloseError(&operationErr, errorCloser{err: closeErr})
 
 	// Then
-	require.ErrorIs(t, err, closeErr)
-	require.Equal(t, app.Result{}, result)
+	require.ErrorIs(t, operationErr, digestErr)
+	require.ErrorIs(t, operationErr, closeErr)
 }
 
-type closeErrorState struct {
-	app.State
-	close    func() error
-	closeErr error
+type errorCloser struct {
+	err error
 }
 
-func (s closeErrorState) Close() error {
-	return errors.Join(s.close(), s.closeErr)
+func (c errorCloser) Close() error {
+	return c.err
 }
 
 func Test_ForgetLatest_deletes_records_logs_count_and_closes_state_database(t *testing.T) {
