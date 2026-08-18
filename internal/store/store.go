@@ -33,6 +33,12 @@ type pendingRecord struct {
 	queueOrder uint64
 }
 
+type latestRecord struct {
+	key        []byte
+	observedAt int64
+	queueOrder uint64
+}
+
 type legacyMigration struct {
 	key    []byte
 	record bookRecord
@@ -277,6 +283,74 @@ func (s *Store) Prune(ctx context.Context, before time.Time) (int, error) {
 	}
 
 	return pruned, nil
+}
+
+// DeleteLatest removes up to limit records in reverse discovery order.
+func (s *Store) DeleteLatest(ctx context.Context, limit int) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, fmt.Errorf("delete latest books: %w", err)
+	}
+	if limit <= 0 {
+		return 0, fmt.Errorf("delete latest books: limit must be positive")
+	}
+
+	deleted := 0
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		bucket := tx.Bucket(sentBucket)
+		records := make([]latestRecord, 0)
+		cursor := bucket.Cursor()
+		for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+
+			record, decodeErr := decodeRecord(key, value)
+			if decodeErr != nil {
+				return decodeErr
+			}
+			records = append(records, latestRecord{
+				key:        append([]byte(nil), key...),
+				observedAt: record.ObservedAt,
+				queueOrder: record.QueueOrder,
+			})
+		}
+
+		sort.SliceStable(records, func(leftIndex, rightIndex int) bool {
+			left := records[leftIndex]
+			right := records[rightIndex]
+			if left.queueOrder > 0 && right.queueOrder > 0 && left.queueOrder != right.queueOrder {
+				return left.queueOrder > right.queueOrder
+			}
+			if left.observedAt != right.observedAt {
+				return left.observedAt > right.observedAt
+			}
+
+			return bytes.Compare(left.key, right.key) > 0
+		})
+
+		if limit > len(records) {
+			limit = len(records)
+		}
+		for _, record := range records[:limit] {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := bucket.Delete(record.key); err != nil {
+				return err
+			}
+			deleted++
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("delete latest books: %w", err)
+	}
+
+	return deleted, nil
 }
 
 // Close closes the state database.
