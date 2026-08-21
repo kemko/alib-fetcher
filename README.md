@@ -36,17 +36,20 @@ ALIB_URL='https://example.com/first?tag=one&sort=new, https://example.com/second
 ALIB_REQUEST_INTERVAL=2s
 ```
 
-Pages are requested sequentially through one HTTP client. GET parameters are
-preserved. The interval applies
-only between requests, including after a failed page; a single URL is not
-delayed. Successful listings are combined in first-seen order and deduplicated
-by their `Купить` URL, keeping the first copy. A failed page is logged as
-`alib.page_failed` with its zero-based `index`, query-free `url`, and `error`,
-then the remaining pages are attempted. Userinfo, query parameters, and fragments
-are omitted from failure logs and errors. A valid search page with no listings
-counts as a successful empty result. The fetch fails only when every configured
-page fails or the context is canceled; successful pages still produce a partial
-result when other pages fail.
+Pages are downloaded sequentially through one HTTP client. GET parameters are
+preserved. The interval applies only between requests, including after a failed
+page; a single URL is not delayed. The client completes all download attempts
+before parsing any successful response, then parses responses in URL order and
+combines listings in first-seen order, deduplicated by their `Купить` URL while
+keeping the first copy. Each page has separate download and parse events:
+`alib.page_downloaded` or `alib.page_download_failed`, followed for a successful
+download by `alib.page_parsed` or `alib.page_parse_failed`. Every event has the
+zero-based `index` and query-free `url`; parsed events also have `books`, and
+failed events have `error`. A download failure has no parse event. Userinfo,
+query parameters, and fragments are omitted from logs and errors. A valid search
+page with no listings counts as a successful empty result. The fetch fails only
+when no page parses successfully or the context is canceled; successful pages
+still produce a partial result when other pages fail.
 `FRESH_BOOKS=age:N` marks publication years from the current local year minus
 non-negative `N`, inclusive. For example, in 2026, `age:5` includes 2021.
 `FRESH_BOOKS=since:YYYY` uses the given four-digit year as the inclusive lower
@@ -111,8 +114,9 @@ contains no literal CR or LF characters. A listing with content uses
 `main → <br/> → details`. The final `Купить` paragraph also has one `<br/>`
 separator before it. Adjacent listings in one Rich Message
 are separated by `<hr/>`; no divider appears before the first listing or after
-the last. When a digest is split into multiple messages, the heading appears
-only in the first message.
+the last. A digest uses multiple Telegram messages only when pending content is
+split into chunks by `MESSAGE_LIMIT`; the heading appears only in the first
+message.
 If the heading and first pending listing cannot fit together but the listing
 fits alone, the first message contains only the heading and the listing follows
 in a headerless message.
