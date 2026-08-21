@@ -19,15 +19,16 @@ var ErrInvalid = errors.New("invalid configuration")
 var errInvalidFreshBooks = errors.New("must use age:N with a non-negative integer or since:YYYY")
 
 const (
-	defaultAlibURL           = "https://www.alib.ru/tramka.phtml?tnew=7"
-	defaultCronSchedule      = "0 0 * * *"
-	defaultHTTPTimeout       = 30 * time.Second
-	defaultMessageLimit      = 4000
-	defaultRunOnStartup      = true
-	defaultStatePath         = "/var/lib/alib-fetcher/state.db"
-	defaultTelegramAPIBase   = "https://api.telegram.org"
-	defaultTimezone          = "Europe/Moscow"
-	telegramHardMessageLimit = 4096
+	defaultAlibURL             = "https://www.alib.ru/tramka.phtml?tnew=7"
+	defaultAlibRequestInterval = time.Second
+	defaultCronSchedule        = "0 0 * * *"
+	defaultHTTPTimeout         = 30 * time.Second
+	defaultMessageLimit        = 4000
+	defaultRunOnStartup        = true
+	defaultStatePath           = "/var/lib/alib-fetcher/state.db"
+	defaultTelegramAPIBase     = "https://api.telegram.org"
+	defaultTimezone            = "Europe/Moscow"
+	telegramHardMessageLimit   = 4096
 )
 
 type freshBooksMode uint8
@@ -54,17 +55,18 @@ func (policy FreshBooksPolicy) LowerYear(currentYear int) int {
 
 // Config contains validated process configuration.
 type Config struct {
-	Location        *time.Location
-	FreshBooks      *FreshBooksPolicy
-	TelegramToken   string
-	TelegramChatID  string
-	TelegramAPIBase string
-	AlibURL         string
-	StatePath       string
-	cronSpec        string
-	HTTPTimeout     time.Duration
-	MessageLimit    int
-	RunOnStartup    bool
+	Location            *time.Location
+	FreshBooks          *FreshBooksPolicy
+	TelegramToken       string
+	TelegramChatID      string
+	TelegramAPIBase     string
+	AlibURL             string
+	AlibRequestInterval time.Duration
+	StatePath           string
+	cronSpec            string
+	HTTPTimeout         time.Duration
+	MessageLimit        int
+	RunOnStartup        bool
 }
 
 // Load reads and validates process environment variables.
@@ -93,6 +95,12 @@ func Load() (Config, error) {
 	if err != nil || timeout <= 0 {
 		return Config{}, fmt.Errorf("%w: HTTP_TIMEOUT must be a positive Go duration", ErrInvalid)
 	}
+	alibRequestInterval, err := time.ParseDuration(
+		valueOrDefault("ALIB_REQUEST_INTERVAL", defaultAlibRequestInterval.String()),
+	)
+	if err != nil || alibRequestInterval < 0 {
+		return Config{}, fmt.Errorf("%w: ALIB_REQUEST_INTERVAL must be a non-negative Go duration", ErrInvalid)
+	}
 	messageLimit, err := strconv.Atoi(valueOrDefault("MESSAGE_LIMIT", strconv.Itoa(defaultMessageLimit)))
 	if err != nil || messageLimit < 64 || messageLimit > telegramHardMessageLimit {
 		return Config{}, fmt.Errorf("%w: MESSAGE_LIMIT must be between 64 and %d", ErrInvalid, telegramHardMessageLimit)
@@ -111,17 +119,18 @@ func Load() (Config, error) {
 	}
 
 	return Config{
-		TelegramToken:   token,
-		TelegramChatID:  chatID,
-		TelegramAPIBase: valueOrDefault("TELEGRAM_API_BASE", defaultTelegramAPIBase),
-		AlibURL:         valueOrDefault("ALIB_URL", defaultAlibURL),
-		StatePath:       LoadStatePath(),
-		Location:        location,
-		FreshBooks:      freshBooks,
-		HTTPTimeout:     timeout,
-		MessageLimit:    messageLimit,
-		RunOnStartup:    runOnStartup,
-		cronSpec:        cronSpec,
+		TelegramToken:       token,
+		TelegramChatID:      chatID,
+		TelegramAPIBase:     valueOrDefault("TELEGRAM_API_BASE", defaultTelegramAPIBase),
+		AlibURL:             valueOrDefault("ALIB_URL", defaultAlibURL),
+		AlibRequestInterval: alibRequestInterval,
+		StatePath:           LoadStatePath(),
+		Location:            location,
+		FreshBooks:          freshBooks,
+		HTTPTimeout:         timeout,
+		MessageLimit:        messageLimit,
+		RunOnStartup:        runOnStartup,
+		cronSpec:            cronSpec,
 	}, nil
 }
 
