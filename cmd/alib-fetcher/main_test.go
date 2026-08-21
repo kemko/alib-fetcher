@@ -479,6 +479,7 @@ func Test_run_once_fetches_multiple_urls_and_sends_partial_deduplicated_result(t
 	require.NotContains(t, logOutput, "scope=one")
 	require.NotContains(t, logOutput, "scope=two")
 	require.NotContains(t, logOutput, "topic=one")
+	require.NotContains(t, logOutput, `"msg":"alib.page_failed"`)
 	require.Contains(t, logOutput, `"msg":"digest.completed"`)
 	require.Contains(t, logOutput, `"fetched":3`)
 	require.Contains(t, logOutput, `"new":3`)
@@ -594,6 +595,7 @@ func Test_run_once_fails_after_requesting_and_logging_all_failed_pages(t *testin
 	require.Contains(t, logOutput, `"url":"`+alibServer.URL+`/status-one"`)
 	require.Contains(t, logOutput, `"url":"`+alibServer.URL+`/broken"`)
 	require.Contains(t, logOutput, `"url":"`+alibServer.URL+`/status-two"`)
+	require.NotContains(t, logOutput, `"msg":"alib.page_failed"`)
 	require.Contains(t, logOutput, `"msg":"digest.failed"`)
 }
 

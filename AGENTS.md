@@ -214,11 +214,12 @@ that cannot fit returns `digest.ErrMessageTooLong`.
 The Alib client accepts one or more HTTP(S) endpoints, sends
 `User-Agent: alib-fetcher/1.0`, and requires HTTP 200. Endpoints are downloaded
 sequentially with `ALIB_REQUEST_INTERVAL` between attempts. All download
-attempts finish before successful responses are parsed in source order. Listings
-are then combined in first-seen order and deduplicated by `BuyURL`; a failed
-download or parse does not discard successful results from other pages. A valid
-empty search page is successful, while a cycle fails if no page parses
-successfully. The client logs `alib.page_downloaded` or
+attempts finish before successful responses are parsed in source order. Responses
+larger than 4 MiB are rejected as download failures. Listings are then combined
+in first-seen order and deduplicated by `BuyURL`; a failed download or parse does
+not discard successful results from other pages. A valid empty search page is
+successful, while a cycle fails if no page parses successfully. The client logs
+`alib.page_downloaded` or
 `alib.page_download_failed` for each download and, only after a successful
 download, logs `alib.page_parsed` or `alib.page_parse_failed` for its parse.
 Every event has the zero-based `index` and query-free endpoint `url`; parsed

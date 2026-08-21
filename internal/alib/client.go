@@ -1,6 +1,7 @@
 package alib
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -13,14 +14,17 @@ import (
 )
 
 const (
-	logKeyError = "error"
-	logKeyIndex = "index"
-	logKeyURL   = "url"
-	logKeyBooks = "books"
+	maxPageResponseBytes = 4 << 20
+	logKeyError          = "error"
+	logKeyIndex          = "index"
+	logKeyURL            = "url"
+	logKeyBooks          = "books"
 )
 
 // ErrUnexpectedStatus indicates that Alib.ru did not return an HTTP 200 response.
 var ErrUnexpectedStatus = errors.New("alib returned an unexpected status")
+
+var errResponseTooLarge = fmt.Errorf("alib response exceeds %d bytes", maxPageResponseBytes)
 
 // Client fetches book listings from configured Alib.ru pages.
 type Client struct {
@@ -30,12 +34,11 @@ type Client struct {
 	requestInterval time.Duration
 }
 
-//nolint:govet // Keep endpoint, body, and content type together between phases.
 type downloadedPage struct {
-	index       int
 	endpoint    *url.URL
-	body        string
 	contentType string
+	body        []byte
+	index       int
 }
 
 // NewClient builds an Alib.ru client with a bounded request timeout.
@@ -103,7 +106,7 @@ func (c *Client) Fetch(ctx context.Context) ([]Book, error) {
 				slog.Any(logKeyError, err),
 			)
 		} else {
-			downloaded = append(downloaded, *page)
+			downloaded = append(downloaded, page)
 			c.logger.InfoContext(ctx, "alib.page_downloaded",
 				slog.Int(logKeyIndex, index),
 				slog.String(logKeyURL, endpointForLog(endpoint)),
@@ -122,7 +125,14 @@ func (c *Client) Fetch(ctx context.Context) ([]Book, error) {
 	seen := make(map[string]struct{})
 	parsedPages := 0
 	for _, page := range downloaded {
-		pageBooks, err := Parse(strings.NewReader(page.body), page.endpoint, page.contentType)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		pageBooks, err := Parse(bytes.NewReader(page.body), page.endpoint, page.contentType)
+		if contextErr := ctx.Err(); contextErr != nil {
+			return nil, contextErr
+		}
 		if err != nil {
 			pageErr := fmt.Errorf("parse alib URL %q: %w", endpointForLog(page.endpoint), err)
 			pageErrors = append(pageErrors, pageErr)
@@ -149,6 +159,9 @@ func (c *Client) Fetch(ctx context.Context) ([]Book, error) {
 			books = append(books, book)
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	if parsedPages == 0 {
 		return nil, errors.Join(pageErrors...)
@@ -157,16 +170,16 @@ func (c *Client) Fetch(ctx context.Context) ([]Book, error) {
 	return books, nil
 }
 
-func (c *Client) downloadPage(ctx context.Context, index int, endpoint *url.URL) (*downloadedPage, error) {
+func (c *Client) downloadPage(ctx context.Context, index int, endpoint *url.URL) (downloadedPage, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
-		return nil, fmt.Errorf("create alib request %d: %w", index, err)
+		return downloadedPage{}, fmt.Errorf("create alib request %d: %w", index, err)
 	}
 	request.Header.Set("User-Agent", "alib-fetcher/1.0")
 
 	response, err := c.httpClient.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("fetch alib page: %w", urlErrorCause(err))
+		return downloadedPage{}, fmt.Errorf("fetch alib page: %w", urlErrorCause(err))
 	}
 
 	if response.StatusCode != http.StatusOK {
@@ -174,10 +187,20 @@ func (c *Client) downloadPage(ctx context.Context, index int, endpoint *url.URL)
 		if closeErr := response.Body.Close(); closeErr != nil {
 			fetchErr = errors.Join(fetchErr, fmt.Errorf("close alib response: %w", closeErr))
 		}
-		return nil, fetchErr
+		return downloadedPage{}, fetchErr
+	}
+	if response.ContentLength > maxPageResponseBytes {
+		responseErr := errResponseTooLarge
+		if closeErr := response.Body.Close(); closeErr != nil {
+			responseErr = errors.Join(responseErr, fmt.Errorf("close alib response: %w", closeErr))
+		}
+		return downloadedPage{}, responseErr
 	}
 
-	body, err := io.ReadAll(response.Body)
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxPageResponseBytes+1))
+	if err == nil && len(body) > maxPageResponseBytes {
+		err = errResponseTooLarge
+	}
 	closeErr := response.Body.Close()
 	if err != nil || closeErr != nil {
 		if err != nil {
@@ -186,14 +209,14 @@ func (c *Client) downloadPage(ctx context.Context, index int, endpoint *url.URL)
 		if closeErr != nil {
 			err = errors.Join(err, fmt.Errorf("close alib response: %w", closeErr))
 		}
-		return nil, err
+		return downloadedPage{}, err
 	}
 
-	return &downloadedPage{
-		index:       index,
+	return downloadedPage{
 		endpoint:    endpoint,
-		body:        string(body),
+		body:        body,
 		contentType: response.Header.Get("Content-Type"),
+		index:       index,
 	}, nil
 }
 

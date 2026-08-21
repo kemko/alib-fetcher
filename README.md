@@ -39,9 +39,10 @@ ALIB_REQUEST_INTERVAL=2s
 Pages are downloaded sequentially through one HTTP client. GET parameters are
 preserved. The interval applies only between requests, including after a failed
 page; a single URL is not delayed. The client completes all download attempts
-before parsing any successful response, then parses responses in URL order and
-combines listings in first-seen order, deduplicated by their `Купить` URL while
-keeping the first copy. Each page has separate download and parse events:
+before parsing any successful response. Responses larger than 4 MiB are rejected
+as download failures. The client then parses responses in URL order and combines
+listings in first-seen order, deduplicated by their `Купить` URL while keeping
+the first copy. Each page has separate download and parse events:
 `alib.page_downloaded` or `alib.page_download_failed`, followed for a successful
 download by `alib.page_parsed` or `alib.page_parse_failed`. Every event has the
 zero-based `index` and query-free `url`; parsed events also have `books`, and
