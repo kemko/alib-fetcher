@@ -287,6 +287,35 @@ func Test_Client_does_not_expose_query_credentials_in_failure(t *testing.T) {
 	require.Contains(t, logs.String(), "url="+server.URL+"/failed")
 }
 
+func Test_Client_does_not_expose_query_credentials_from_malformed_redirect(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	var logs bytes.Buffer
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Location", "/next?access_token=top-secret%zz")
+		writer.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(server.Close)
+	client, err := alib.NewClient(
+		server.URL+"/redirect",
+		time.Second,
+		0,
+		slog.New(slog.NewTextHandler(&logs, nil)),
+	)
+	require.NoError(t, err)
+
+	// When
+	books, err := client.Fetch(context.Background())
+
+	// Then
+	require.Error(t, err)
+	require.Empty(t, books)
+	require.NotContains(t, err.Error(), "top-secret")
+	require.NotContains(t, logs.String(), "top-secret")
+	require.Contains(t, logs.String(), "url="+server.URL+"/redirect")
+}
+
 func Test_Client_continues_after_page_failures_and_logs_each_failure(t *testing.T) {
 	// Given
 	var requests []string

@@ -160,10 +160,22 @@ func endpointForLog(endpoint *url.URL) string {
 	return safeEndpoint.String()
 }
 
+type redactedURLError struct {
+	cause error
+}
+
+func (err redactedURLError) Error() string {
+	return "URL operation failed"
+}
+
+func (err redactedURLError) Unwrap() error {
+	return err.cause
+}
+
 func urlErrorCause(err error) error {
 	var urlErr *url.Error
 	if errors.As(err, &urlErr) {
-		return urlErr.Err
+		return redactedURLError{cause: urlErr.Err}
 	}
 
 	return err
