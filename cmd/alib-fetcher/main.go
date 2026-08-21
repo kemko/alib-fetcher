@@ -53,7 +53,12 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	fetcher, err := alib.NewClient(settings.AlibURL, settings.HTTPTimeout)
+	fetcher, err := alib.NewClient(
+		settings.AlibURL,
+		settings.HTTPTimeout,
+		settings.AlibRequestInterval,
+		logger,
+	)
 	if err != nil {
 		return err
 	}
