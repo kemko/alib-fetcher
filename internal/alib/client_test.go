@@ -184,15 +184,15 @@ func Test_Client_fetches_urls_in_order_and_deduplicates_by_buy_url(t *testing.T)
 			_, err := writer.Write([]byte(
 				listingPage("First", "/book-1.html", "100 руб.") + listingPage("Second", "/book-2.html", "200 руб."),
 			))
-			require.NoError(t, err)
+			assert.NoError(t, err)
 		case "/second":
 			_, err := writer.Write([]byte(
 				listingPage("Duplicate", "/book-2.html", "999 руб.") + listingPage("Third", "/book-3.html", "300 руб."),
 			))
-			require.NoError(t, err)
+			assert.NoError(t, err)
 		case "/third":
 			_, err := writer.Write([]byte(listingPage("Fourth", "/book-4.html", "400 руб.")))
-			require.NoError(t, err)
+			assert.NoError(t, err)
 		default:
 			t.Errorf("unexpected path %q", request.URL.Path)
 		}
@@ -237,11 +237,11 @@ func Test_Client_continues_after_page_failures_and_logs_each_failure(t *testing.
 		case "/broken":
 			writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 			_, err := writer.Write([]byte("<html><body>changed</body></html>"))
-			require.NoError(t, err)
+			assert.NoError(t, err)
 		case "/success":
 			writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 			_, err := writer.Write([]byte(listingPage("Success", "/success-book.html", "100 руб.")))
-			require.NoError(t, err)
+			assert.NoError(t, err)
 		}
 	}))
 	t.Cleanup(server.Close)
@@ -282,8 +282,8 @@ func Test_Client_accepts_all_correct_empty_pages(t *testing.T) {
 	require.NoError(t, err)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/html; charset=windows-1251")
-		_, err := writer.Write(emptyPage)
-		require.NoError(t, err)
+		_, writeErr := writer.Write(emptyPage)
+		assert.NoError(t, writeErr)
 	}))
 	t.Cleanup(server.Close)
 	client, err := alib.NewClient(
@@ -311,7 +311,7 @@ func Test_Client_returns_combined_error_when_all_pages_fail(t *testing.T) {
 		}
 		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, err := writer.Write([]byte("<html><body>changed</body></html>"))
-		require.NoError(t, err)
+		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
 	client, err := alib.NewClient(
@@ -340,7 +340,7 @@ func Test_Client_waits_between_requests(t *testing.T) {
 		requestTimes <- time.Now()
 		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, err := writer.Write([]byte(listingPage("Book", "/book.html", "100 руб.")))
-		require.NoError(t, err)
+		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
 	client, err := alib.NewClient(
@@ -370,7 +370,7 @@ func Test_Client_returns_context_error_when_canceled_during_wait(t *testing.T) {
 		requestCount++
 		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, err := writer.Write([]byte(listingPage("Book", "/book.html", "100 руб.")))
-		require.NoError(t, err)
+		assert.NoError(t, err)
 		if requestCount == 1 {
 			close(firstResponse)
 			<-allowFirstResponse

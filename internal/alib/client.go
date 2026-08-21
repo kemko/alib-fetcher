@@ -23,9 +23,9 @@ var ErrUnexpectedStatus = errors.New("alib returned an unexpected status")
 // Client fetches book listings from configured Alib.ru pages.
 type Client struct {
 	httpClient      *http.Client
+	logger          *slog.Logger
 	endpoints       []*url.URL
 	requestInterval time.Duration
-	logger          *slog.Logger
 }
 
 // NewClient builds an Alib.ru client with a bounded request timeout.
@@ -103,8 +103,8 @@ func (c *Client) Fetch(ctx context.Context) ([]Book, error) {
 		if index == len(c.endpoints)-1 {
 			break
 		}
-		if err := wait(ctx, c.requestInterval); err != nil {
-			return nil, err
+		if waitErr := wait(ctx, c.requestInterval); waitErr != nil {
+			return nil, waitErr
 		}
 	}
 

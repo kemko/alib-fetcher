@@ -23,6 +23,7 @@ const (
 	triggerRefresh   = "refresh"
 	triggerScheduled = "scheduled"
 	triggerStartup   = "startup"
+	triggerOnce      = "once"
 )
 
 // Settings contains process-level service settings.
@@ -45,6 +46,12 @@ func Run(
 ) error {
 	if once {
 		_, err := executeJob(ctx, dependencies, settings.StatePath, logger)
+		if err != nil {
+			logger.ErrorContext(ctx, "digest.failed",
+				slog.Any(logKeyError, err),
+				slog.String(logKeyTrigger, triggerOnce),
+			)
+		}
 
 		return err
 	}
