@@ -16,9 +16,10 @@ installs the pinned golangci-lint v2 release.
 One digest cycle is deliberately ordered as follows:
 
 1. Remove sent records strictly older than 14 days.
-2. Fetch and decode the configured Alib pages sequentially, combining successful
-   results and retaining the first occurrence of each `BuyURL`.
-3. Parse and deduplicate listings by their resolved `BuyURL`.
+2. Download all configured Alib pages sequentially, retaining successful response
+   bodies and their source order.
+3. Parse successful responses only after all downloads finish, then combine and
+   deduplicate listings by their resolved `BuyURL`, retaining the first occurrence.
 4. Record fetched listings in bbolt as JSON records, preserving sent status.
 5. Load all pending records from bbolt in first-discovery order, including
    books from earlier failed cycles.
@@ -188,7 +189,9 @@ the listing do not participate.
 ## Digest and transport details
 
 The first message starts with `<p><b>Новые книги на Alib.ru</b></p>`; later
-chunks start with a listing. If the header and first listing do not fit together
+chunks start with a listing. Multiple Telegram messages occur only when content
+is split into chunks by `MESSAGE_LIMIT`. If the header and first listing do not
+fit together
 but the listing fits alone, the first chunk contains only the header. Rich HTML
 paragraphs use `<p>`, every line break uses `<br/>`, and non-empty paragraph
 blocks use one `<br/>` separator. Rendered Telegram HTML contains no literal CR
@@ -209,11 +212,19 @@ in Unicode runes, and chunks may split only between listings. A single listing
 that cannot fit returns `digest.ErrMessageTooLong`.
 
 The Alib client accepts one or more HTTP(S) endpoints, sends
-`User-Agent: alib-fetcher/1.0`, and requires HTTP 200. Endpoints are requested
-sequentially with `ALIB_REQUEST_INTERVAL` between attempts. Successful pages are
-combined in first-seen order and deduplicated by `BuyURL`; a failed page is
-logged and does not discard successful results from other pages. A valid empty
-search page is successful, while a cycle fails if no page succeeds. The
+`User-Agent: alib-fetcher/1.0`, and requires HTTP 200. Endpoints are downloaded
+sequentially with `ALIB_REQUEST_INTERVAL` between attempts. All download
+attempts finish before successful responses are parsed in source order. Responses
+larger than 4 MiB are rejected as download failures. Listings are then combined
+in first-seen order and deduplicated by `BuyURL`; a failed download or parse does
+not discard successful results from other pages. A valid empty search page is
+successful, while a cycle fails if no page parses successfully. The client logs
+`alib.page_downloaded` or
+`alib.page_download_failed` for each download and, only after a successful
+download, logs `alib.page_parsed` or `alib.page_parse_failed` for its parse.
+Every event has the zero-based `index` and query-free endpoint `url`; parsed
+events also have `books`, and failed events have `error`. Userinfo, query
+parameters, and fragments are omitted from logs and errors. The
 SDK-backed Telegram adapter accepts only HTTP(S), caps
 response decoding at 1 MiB, returns `telegram.ErrRequest` for transport failures
 and `telegram.ErrRejected` for unsuccessful API responses, and includes
@@ -225,12 +236,14 @@ flood-control retry, chat filtering, refresh ordering, and runner-lock policy.
 
 Structured logs go to stdout. Stable event names are `scheduler.started`,
 `scheduler.stopped`, `digest.started`, `digest.completed`, `digest.failed`,
-`alib.page_failed`, `callback.poll_failed`, `callback.answer_failed`,
+`alib.page_downloaded`, `alib.page_download_failed`, `alib.page_parsed`,
+`alib.page_parse_failed`, `callback.poll_failed`, `callback.answer_failed`,
 `state.forget_latest.completed`, and `service.failed`; digest completion fields
 are `fetched`, `new`, `pruned`, and `sent`, while forget-latest completion fields
-are `requested` and `deleted`. `alib.page_failed` includes the zero-based
-`index`, query-free endpoint `url`, and `error`; userinfo, query parameters, and
-fragments are omitted from failure logs and errors. Keep slog attributes typed,
+are `requested` and `deleted`. Every Alib page event includes the zero-based
+`index` and query-free endpoint `url`; `alib.page_parsed` also includes `books`,
+and failed events include `error`. Userinfo, query parameters, and fragments
+are omitted from failure logs and errors. Keep slog attributes typed,
 snake_case, and free of secrets.
 
 ## Development and verification

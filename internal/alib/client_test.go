@@ -105,6 +105,35 @@ func Test_Client_returns_context_error_when_request_is_canceled(t *testing.T) {
 	require.Empty(t, books)
 }
 
+func Test_Client_returns_context_error_when_canceled_after_download(t *testing.T) {
+	// Given
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, err := writer.Write([]byte(listingPage("Book", "/book.html", "100 руб.")))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var logs bytes.Buffer
+	logger := slog.New(&cancelOnMessageHandler{
+		Handler: slog.NewTextHandler(&logs, nil),
+		message: "alib.page_downloaded",
+		cancel:  cancel,
+	})
+	client, err := alib.NewClient(server.URL, time.Second, 0, logger)
+	require.NoError(t, err)
+
+	// When
+	books, err := client.Fetch(ctx)
+
+	// Then
+	require.ErrorIs(t, err, context.Canceled)
+	require.Empty(t, books)
+	require.Contains(t, logs.String(), "msg=alib.page_downloaded")
+	require.NotContains(t, logs.String(), "msg=alib.page_parsed")
+}
+
 func Test_NewClient_validates_configuration(t *testing.T) {
 	t.Parallel()
 
@@ -287,6 +316,40 @@ func Test_Client_does_not_expose_query_credentials_in_failure(t *testing.T) {
 	require.Contains(t, logs.String(), "url="+server.URL+"/failed")
 }
 
+func Test_Client_does_not_expose_query_credentials_in_parse_failure(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	var logs bytes.Buffer
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, err := writer.Write([]byte("<html><body>changed</body></html>"))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+	client, err := alib.NewClient(
+		server.URL+"/changed?access_token=top-secret#fragment-secret",
+		time.Second,
+		0,
+		slog.New(slog.NewTextHandler(&logs, nil)),
+	)
+	require.NoError(t, err)
+
+	// When
+	books, err := client.Fetch(context.Background())
+
+	// Then
+	require.ErrorIs(t, err, alib.ErrNoBooks)
+	require.Empty(t, books)
+	require.Contains(t, err.Error(), "parse alib URL \""+server.URL+"/changed\"")
+	require.NotContains(t, err.Error(), "top-secret")
+	require.NotContains(t, err.Error(), "fragment-secret")
+	logOutput := logs.String()
+	require.Contains(t, logOutput, "msg=alib.page_parse_failed index=0 url="+server.URL+"/changed")
+	require.NotContains(t, logOutput, "top-secret")
+	require.NotContains(t, logOutput, "fragment-secret")
+}
+
 func Test_Client_does_not_expose_query_credentials_from_malformed_redirect(t *testing.T) {
 	t.Parallel()
 
@@ -316,11 +379,13 @@ func Test_Client_does_not_expose_query_credentials_from_malformed_redirect(t *te
 	require.Contains(t, logs.String(), "url="+server.URL+"/redirect")
 }
 
-func Test_Client_continues_after_page_failures_and_logs_each_failure(t *testing.T) {
+func Test_Client_downloads_all_pages_before_parsing_and_logs_outcomes(t *testing.T) {
 	// Given
 	var requests []string
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	emptyPage, err := os.ReadFile("testdata/empty.html")
+	require.NoError(t, err)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		requests = append(requests, request.URL.Path)
 		switch request.URL.Path {
@@ -328,21 +393,26 @@ func Test_Client_continues_after_page_failures_and_logs_each_failure(t *testing.
 			writer.WriteHeader(http.StatusBadGateway)
 		case "/broken":
 			writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_, err := writer.Write([]byte("<html><body>changed</body></html>"))
-			assert.NoError(t, err)
+			_, writeErr := writer.Write([]byte("<html><body>changed</body></html>"))
+			assert.NoError(t, writeErr)
 		case "/success":
 			writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_, err := writer.Write([]byte(listingPage("Success", "/success-book.html", "100 руб.")))
-			assert.NoError(t, err)
+			_, writeErr := writer.Write([]byte(listingPage("Success", "/success-book.html", "100 руб.")))
+			assert.NoError(t, writeErr)
+		case "/empty":
+			writer.Header().Set("Content-Type", "text/html; charset=windows-1251")
+			_, writeErr := writer.Write(emptyPage)
+			assert.NoError(t, writeErr)
 		}
 	}))
 	t.Cleanup(server.Close)
 	client, err := alib.NewClient(
 		strings.Join([]string{
-			server.URL + "/before",
-			server.URL + "/broken",
-			server.URL + "/success",
-			server.URL + "/after",
+			server.URL + "/before?access_token=top-secret#fragment-secret",
+			server.URL + "/broken?scope=broken",
+			server.URL + "/success?scope=success",
+			server.URL + "/empty?scope=empty",
+			server.URL + "/after?scope=after",
 		}, ","),
 		time.Second,
 		0,
@@ -355,15 +425,93 @@ func Test_Client_continues_after_page_failures_and_logs_each_failure(t *testing.
 
 	// Then
 	require.NoError(t, err)
-	require.Equal(t, []string{"/before", "/broken", "/success", "/after"}, requests)
+	require.Equal(t, []string{"/before", "/broken", "/success", "/empty", "/after"}, requests)
 	require.Equal(t, []alib.Book{{Title: "Success", Price: "100 руб.", BuyURL: server.URL + "/success-book.html"}}, books)
-	require.Equal(t, 3, strings.Count(logs.String(), "msg=alib.page_failed"))
-	require.Contains(t, logs.String(), "index=0")
-	require.Contains(t, logs.String(), "index=1")
-	require.Contains(t, logs.String(), "index=3")
-	require.Contains(t, logs.String(), "url="+server.URL+"/before")
-	require.Contains(t, logs.String(), "url="+server.URL+"/broken")
-	require.Contains(t, logs.String(), "url="+server.URL+"/after")
+	logOutput := logs.String()
+	require.Equal(t, 3, strings.Count(logOutput, "msg=alib.page_downloaded"))
+	require.Equal(t, 2, strings.Count(logOutput, "msg=alib.page_download_failed"))
+	require.Equal(t, 1, strings.Count(logOutput, "msg=alib.page_parse_failed"))
+	require.Equal(t, 2, strings.Count(logOutput, "msg=alib.page_parsed"))
+	require.Contains(t, logOutput, "msg=alib.page_download_failed index=0")
+	require.Contains(t, logOutput, "msg=alib.page_download_failed index=0 url="+server.URL+
+		"/before error=\"alib returned an unexpected status: 502 Bad Gateway\"")
+	require.Contains(t, logOutput, "msg=alib.page_parse_failed index=1 url="+server.URL+
+		"/broken error=\"page contains no book listings\"")
+	require.Contains(t, logOutput, "msg=alib.page_download_failed index=4")
+	require.Contains(t, logOutput, "msg=alib.page_parsed index=2")
+	require.Contains(t, logOutput, "msg=alib.page_parsed index=3")
+	require.Contains(t, logOutput, "msg=alib.page_parsed index=3 url="+server.URL+"/empty books=0")
+	require.Less(t,
+		strings.Index(logOutput, "msg=alib.page_download_failed index=4"),
+		strings.Index(logOutput, "msg=alib.page_parse_failed index=1"),
+	)
+	require.NotContains(t, logOutput, "top-secret")
+	require.NotContains(t, logOutput, "fragment-secret")
+	require.NotContains(t, logOutput, "scope=broken")
+}
+
+func Test_Client_rejects_oversized_response_without_content_length(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		writer.WriteHeader(http.StatusOK)
+		flusher, ok := writer.(http.Flusher)
+		if !assert.True(t, ok) {
+			return
+		}
+		flusher.Flush()
+		_, err := writer.Write(bytes.Repeat([]byte("x"), 4<<20+1))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+	client, err := alib.NewClient(server.URL, 5*time.Second, 0, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+
+	// When
+	books, err := client.Fetch(context.Background())
+
+	// Then
+	require.ErrorContains(t, err, "alib response exceeds 4194304 bytes")
+	require.Empty(t, books)
+}
+
+func Test_Client_continues_after_response_body_read_failure(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	var logs bytes.Buffer
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if request.URL.Path == "/truncated" {
+			writer.Header().Set("Content-Length", "100")
+			_, err := writer.Write([]byte("short"))
+			assert.NoError(t, err)
+			return
+		}
+		_, err := writer.Write([]byte(listingPage("Book", "/book.html", "100 руб.")))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+	client, err := alib.NewClient(
+		server.URL+"/truncated,"+server.URL+"/success",
+		time.Second,
+		0,
+		slog.New(slog.NewTextHandler(&logs, nil)),
+	)
+	require.NoError(t, err)
+
+	// When
+	books, err := client.Fetch(context.Background())
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, []alib.Book{{Title: "Book", Price: "100 руб.", BuyURL: server.URL + "/book.html"}}, books)
+	require.Contains(t, logs.String(), "msg=alib.page_download_failed index=0")
+	require.Contains(t, logs.String(), "error=\"read alib response: unexpected EOF\"")
+	require.NotContains(t, logs.String(), "msg=alib.page_parsed index=0")
+	require.Contains(t, logs.String(), "msg=alib.page_parsed index=1")
 }
 
 func Test_Client_accepts_all_correct_empty_pages(t *testing.T) {
@@ -563,6 +711,72 @@ func Test_Client_returns_context_error_when_canceled_during_wait(t *testing.T) {
 	require.Equal(t, 1, requestCount)
 }
 
+func Test_Client_returns_context_error_when_canceled_during_body_download(t *testing.T) {
+	// Given
+	downloadStarted := make(chan struct{})
+	requests := make(chan string, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests <- request.URL.Path
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		writer.WriteHeader(http.StatusOK)
+		flusher, ok := writer.(http.Flusher)
+		if !assert.True(t, ok) {
+			return
+		}
+		flusher.Flush()
+		close(downloadStarted)
+		<-request.Context().Done()
+	}))
+	t.Cleanup(server.Close)
+	client, err := alib.NewClient(
+		server.URL+"/first,"+server.URL+"/second",
+		5*time.Second,
+		0,
+		slog.New(slog.DiscardHandler),
+	)
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		_, fetchErr := client.Fetch(ctx)
+		result <- fetchErr
+	}()
+	<-downloadStarted
+	cancel()
+
+	// When
+	select {
+	case err = <-result:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("fetch did not stop promptly after body-download cancellation")
+	}
+
+	// Then
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, "/first", <-requests)
+	select {
+	case path := <-requests:
+		t.Fatalf("unexpected request after cancellation: %s", path)
+	default:
+	}
+}
+
 func listingPage(title, buyURL, price string) string {
 	return "<p><b>" + title + "</b> Цена: " + price + " <a href=\"" + buyURL + "\"><b>Купить</b></a></p>"
+}
+
+type cancelOnMessageHandler struct {
+	slog.Handler
+	cancel  context.CancelFunc
+	message string
+}
+
+func (handler *cancelOnMessageHandler) Handle(ctx context.Context, record slog.Record) error {
+	err := handler.Handler.Handle(ctx, record)
+	if record.Message == handler.message {
+		handler.cancel()
+	}
+
+	return err
 }
