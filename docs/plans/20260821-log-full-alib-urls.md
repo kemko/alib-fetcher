@@ -62,7 +62,7 @@
 
 ### Task 3: Verify acceptance criteria
 
-- [ ] Выполнить `make verify`; форматирование, lint, race-enabled tests и build должны пройти.
-- [ ] Выполнить `make coverage`; statement coverage должно остаться не ниже 80%.
-- [ ] Проверить task-related diff: нет новых зависимостей и изменений вне логирования URL, тестов и документации.
-- [ ] Подтвердить тестами полный URL с GET-параметрами для всех четырёх Alib-событий.
+- [x] Выполнить `make verify`; форматирование, lint, race-enabled tests и build должны пройти.
+- [x] Выполнить `make coverage`; statement coverage должно остаться не ниже 80%.
+- [x] Проверить task-related diff: нет новых зависимостей и изменений вне логирования URL, тестов и документации.
+- [x] Подтвердить тестами полный URL с GET-параметрами для всех четырёх Alib-событий.
