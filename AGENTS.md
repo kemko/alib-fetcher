@@ -3,9 +3,9 @@
 ## Project purpose
 
 `alib-fetcher` is a small always-on Go service. It fetches the newest listings
-from `https://www.alib.ru/tramka.phtml?tnew=7`, records discovered books in an
-embedded bbolt database, renders pending books as Telegram HTML messages, sends
-them to one chat, and records successful deliveries in the same database.
+from one or more configured Alib pages, records discovered books in an embedded
+bbolt database, renders pending books as Telegram HTML messages, sends them to
+one chat, and records successful deliveries in the same database.
 
 The module is `github.com/kemko/alib-fetcher`. The executable entry point is
 `./cmd/alib-fetcher`. Go 1.26.5 is the supported toolchain; `make tools`
@@ -16,7 +16,8 @@ installs the pinned golangci-lint v2 release.
 One digest cycle is deliberately ordered as follows:
 
 1. Remove sent records strictly older than 14 days.
-2. Fetch and decode the configured Alib page.
+2. Fetch and decode the configured Alib pages sequentially, combining successful
+   results and retaining the first occurrence of each `BuyURL`.
 3. Parse and deduplicate listings by their resolved `BuyURL`.
 4. Record fetched listings in bbolt as JSON records, preserving sent status.
 5. Load all pending records from bbolt in first-discovery order, including
@@ -28,7 +29,7 @@ One digest cycle is deliberately ordered as follows:
 Preserve these semantics:
 
 - The first successful run records and sends every listing currently on the
-  source page.
+  configured source pages.
 - `BuyURL` is the persistent identity of a listing; titles and other metadata
   are not stable deduplication keys.
 - A failed Telegram chunk must remain pending so a later cycle can retry it.
@@ -46,9 +47,9 @@ Preserve these semantics:
   specified duration and retries the same chunk before later chunks. The wait
   honors context cancellation, and the chunk remains unacknowledged until a
   retry succeeds.
-- An empty or structurally changed Alib page is an error (`alib.ErrNoBooks`),
-  not a successful empty digest. This protects against silently accepting a
-  broken parser.
+- A valid Alib search page with no listings is a successful empty result. An
+  empty or structurally changed page is `alib.ErrNoBooks`; a cycle fails only
+  when every configured page fails or the context is canceled.
 - Retention uses a strict boundary for sent records: records sent before the
   14-day cutoff are removed; a record exactly at the cutoff remains. Pending
   records are not pruned by retention.
@@ -161,7 +162,8 @@ Optional defaults:
 | `RUN_ON_STARTUP` | `true` | whether service mode runs one digest cycle immediately after startup |
 | `FRESH_BOOKS` | empty | optional inclusive `✨` threshold: `age:N` or `since:YYYY`; empty disables only `✨` |
 | `STATE_PATH` | `/var/lib/alib-fetcher/state.db` | bbolt database; parent directories are created with mode `0750`, DB with `0600` |
-| `ALIB_URL` | `https://www.alib.ru/tramka.phtml?tnew=7` | HTTP(S) source; override it in integration tests |
+| `ALIB_URL` | `https://www.alib.ru/tramka.phtml?tnew=7` | One HTTP(S) source or comma-separated list; surrounding whitespace is trimmed, literal commas must use `%2C` |
+| `ALIB_REQUEST_INTERVAL` | `1s` | Non-negative Go duration between sequential Alib requests; `0s` disables the delay |
 | `TELEGRAM_API_BASE` | `https://api.telegram.org` | HTTP(S) API base; override it in tests |
 | `HTTP_TIMEOUT` | `30s` | positive Go duration applied per external request |
 | `MESSAGE_LIMIT` | `4000` | rune count, allowed range 64..4096 |
@@ -206,8 +208,13 @@ source `Смотрите` section is omitted and replaced with `Фото: ест
 in Unicode runes, and chunks may split only between listings. A single listing
 that cannot fit returns `digest.ErrMessageTooLong`.
 
-The Alib client accepts only HTTP(S), sends `User-Agent: alib-fetcher/1.0`, and
-requires HTTP 200. The SDK-backed Telegram adapter accepts only HTTP(S), caps
+The Alib client accepts one or more HTTP(S) endpoints, sends
+`User-Agent: alib-fetcher/1.0`, and requires HTTP 200. Endpoints are requested
+sequentially with `ALIB_REQUEST_INTERVAL` between attempts. Successful pages are
+combined in first-seen order and deduplicated by `BuyURL`; a failed page is
+logged and does not discard successful results from other pages. A valid empty
+search page is successful, while a cycle fails if no page succeeds. The
+SDK-backed Telegram adapter accepts only HTTP(S), caps
 response decoding at 1 MiB, returns `telegram.ErrRequest` for transport failures
 and `telegram.ErrRejected` for unsuccessful API responses, and includes
 Telegram's description and optional `retry_after` delay in rejection errors.
@@ -218,11 +225,12 @@ flood-control retry, chat filtering, refresh ordering, and runner-lock policy.
 
 Structured logs go to stdout. Stable event names are `scheduler.started`,
 `scheduler.stopped`, `digest.started`, `digest.completed`, `digest.failed`,
-`callback.poll_failed`, `callback.answer_failed`,
+`alib.page_failed`, `callback.poll_failed`, `callback.answer_failed`,
 `state.forget_latest.completed`, and `service.failed`; digest completion fields
 are `fetched`, `new`, `pruned`, and `sent`, while forget-latest completion fields
-are `requested` and `deleted`. Keep slog attributes typed, snake_case, and free
-of secrets.
+are `requested` and `deleted`. `alib.page_failed` includes the zero-based
+`index`, endpoint `url`, and `error`. Keep slog attributes typed, snake_case,
+and free of secrets.
 
 ## Development and verification
 

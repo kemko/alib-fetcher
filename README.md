@@ -17,7 +17,8 @@ an embedded bbolt database, which also stores the pending send queue.
 | `RUN_ON_STARTUP` | no | `true` | Run one digest cycle immediately after scheduler startup |
 | `FRESH_BOOKS` | no | empty | Optional `✨` threshold: `age:N` or `since:YYYY` |
 | `STATE_PATH` | no | `/var/lib/alib-fetcher/state.db` | bbolt state database |
-| `ALIB_URL` | no | source URL above | Listing page, also useful for testing |
+| `ALIB_URL` | no | source URL above | One HTTP(S) listing page, or a comma-separated list of pages |
+| `ALIB_REQUEST_INTERVAL` | no | `1s` | Non-negative Go duration between sequential Alib page requests; `0s` disables the delay |
 | `TELEGRAM_API_BASE` | no | `https://api.telegram.org` | Bot API base URL; custom/local servers require Bot API 10.1+ |
 | `HTTP_TIMEOUT` | no | `30s` | Positive Go duration applied to each external request |
 | `MESSAGE_LIMIT` | no | `4000` | Safe Telegram message size, max `4096` |
@@ -25,6 +26,25 @@ an embedded bbolt database, which also stores the pending send queue.
 Configuration is validated before process startup. Invalid chat IDs, including
 plain text without `@`, an empty `@` username, whitespace, and numeric overflow,
 fail fast with an error naming `TELEGRAM_CHAT_ID`.
+`ALIB_URL` accepts one URL or a comma-separated list. Surrounding whitespace is
+trimmed, URL order is preserved, and literal commas must be percent-encoded as
+`%2C`. For example:
+
+```bash
+ALIB_URL='https://example.com/first?tag=one&sort=new, https://example.com/second?tnew=7' \
+ALIB_REQUEST_INTERVAL=2s
+```
+
+Pages are requested sequentially through one HTTP client. GET parameters are
+preserved. The interval applies
+only between requests, including after a failed page; a single URL is not
+delayed. Successful listings are combined in first-seen order and deduplicated
+by their `Купить` URL, keeping the first copy. A failed page is logged as
+`alib.page_failed` with its zero-based `index`, `url`, and `error`, then the
+remaining pages are attempted. A valid search page with no listings counts as a
+successful empty result. The fetch fails only when every configured page fails
+or the context is canceled; successful pages still produce a partial result
+when other pages fail.
 `FRESH_BOOKS=age:N` marks publication years from the current local year minus
 non-negative `N`, inclusive. For example, in 2026, `age:5` includes 2021.
 `FRESH_BOOKS=since:YYYY` uses the given four-digit year as the inclusive lower
@@ -52,8 +72,8 @@ publication year, content, seller name and URL, location, price, condition and
 other details, purchase URL, and photo marker. The parser derives these fields
 from DOM nodes and logical `<br>`-delimited lines; it does not parse HTML with
 regular expressions. Existing records keep their sent status while refreshing
-the parsed payload from the latest source page. The first successful run records
-every listing currently present on the source page as pending and sends them.
+the parsed payload from the latest source pages. The first successful run records
+every listing currently present on those pages as pending and sends them.
 
 Sending reads every pending record from the database in first-discovery order,
 not only books found in the current fetch result. Books that could not be sent
