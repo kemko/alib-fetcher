@@ -33,10 +33,10 @@ type listingPosition struct {
 }
 
 type emptySearchPageMarkers struct {
-	beginResultsFound    bool
-	emptyResultHintFound bool
-	searchFormFound      bool
-	sortControlFound     bool
+	beginResultsFound      bool
+	emptyResultRegionFound bool
+	searchFormFound        bool
+	sortControlFound       bool
 }
 
 // Parse decodes an Alib.ru page and extracts unique sale listings.
@@ -86,7 +86,7 @@ func isEmptySearchResultsPage(document *html.Node) bool {
 		markers.record(node)
 	}
 
-	return markers.beginResultsFound && markers.emptyResultHintFound &&
+	return markers.beginResultsFound && markers.emptyResultRegionFound &&
 		markers.searchFormFound && markers.sortControlFound
 }
 
@@ -105,14 +105,47 @@ func (markers *emptySearchPageMarkers) record(node *html.Node) {
 			markers.searchFormFound = true
 		}
 	case "p":
-		if strings.Contains(normalizedText(node), "Если ничего не найдено") {
-			markers.emptyResultHintFound = true
+		if strings.HasPrefix(normalizedText(node), "Ссылка на этот поиск:") && hasEmptyResultRegion(node) {
+			markers.emptyResultRegionFound = true
 		}
 	case "select":
 		if attribute(node, "name") == "sortby" {
 			markers.sortControlFound = true
 		}
 	}
+}
+
+func hasEmptyResultRegion(searchLink *html.Node) bool {
+	firstDivider := nextElementSibling(searchLink)
+	if firstDivider == nil || firstDivider.Data != "hr" {
+		return false
+	}
+	secondDivider := nextElementSibling(firstDivider)
+	if secondDivider == nil || secondDivider.Data != "hr" {
+		return false
+	}
+	hint := nextElementSibling(secondDivider)
+
+	return hint != nil && hint.Data == "p" && strings.Contains(normalizedText(hint), "Если ничего не найдено")
+}
+
+func nextElementSibling(node *html.Node) *html.Node {
+	for sibling := node.NextSibling; sibling != nil; sibling = sibling.NextSibling {
+		switch sibling.Type {
+		case html.ElementNode:
+			return sibling
+		case html.TextNode:
+			if strings.TrimSpace(sibling.Data) != "" {
+				return nil
+			}
+		case html.CommentNode:
+			continue
+		case html.ErrorNode, html.DocumentNode, html.DoctypeNode, html.RawNode:
+			return nil
+		}
+	}
+
+	return nil
 }
 
 func isSearchForm(node *html.Node) bool {

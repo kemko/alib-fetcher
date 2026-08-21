@@ -323,6 +323,25 @@ func Test_Parse_rejects_listing_without_buy_link_on_empty_search_page(t *testing
 	require.Empty(t, books)
 }
 
+func Test_Parse_rejects_unrecognized_listing_in_empty_result_region(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	page, err := os.ReadFile("testdata/empty.html")
+	require.NoError(t, err)
+	listing := []byte(`<section><strong>Broken.</strong> Price: 100 <a href="/book.html">Order</a></section>`)
+	page = bytes.Replace(page, []byte("<hr><hr>"), append(listing, []byte("<hr><hr>")...), 1)
+	baseURL, err := url.Parse("https://www.alib.ru/tramka.phtml?tnew=7")
+	require.NoError(t, err)
+
+	// When
+	books, err := alib.Parse(bytes.NewReader(page), baseURL, "text/html; charset=windows-1251")
+
+	// Then
+	require.ErrorIs(t, err, alib.ErrNoBooks)
+	require.Empty(t, books)
+}
+
 func Test_Parse_rejects_page_with_buy_link_without_href(t *testing.T) {
 	t.Parallel()
 
