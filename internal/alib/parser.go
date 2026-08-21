@@ -64,10 +64,64 @@ func Parse(reader io.Reader, baseURL *url.URL, contentType string) ([]Book, erro
 	}
 
 	if len(books) == 0 {
+		if isSearchResultsPage(document) && !hasMalformedListing(document, baseURL) {
+			return books, nil
+		}
 		return nil, ErrNoBooks
 	}
 
 	return books, nil
+}
+
+func isSearchResultsPage(document *html.Node) bool {
+	beginResultsFound := false
+	searchFormFound := false
+	for node := range document.Descendants() {
+		if node.Type != html.ElementNode {
+			continue
+		}
+
+		switch node.Data {
+		case "a":
+			beginResultsFound = beginResultsFound || attribute(node, "name") == "beginStr"
+		case "form":
+			if attribute(node, "name") != "find3" {
+				continue
+			}
+			action, err := url.Parse(attribute(node, "action"))
+			searchFormFound = searchFormFound || err == nil && strings.TrimPrefix(action.Path, "/") == "find3.php4"
+		}
+	}
+
+	return beginResultsFound && searchFormFound
+}
+
+func attribute(node *html.Node, name string) string {
+	for _, attr := range node.Attr {
+		if attr.Key == name {
+			return attr.Val
+		}
+	}
+
+	return ""
+}
+
+func hasMalformedListing(document *html.Node, baseURL *url.URL) bool {
+	for node := range document.Descendants() {
+		if node.Type != html.ElementNode || node.Data != "p" {
+			continue
+		}
+
+		_, _, buyNode := listingNodes(node)
+		if buyNode == nil {
+			continue
+		}
+		if _, found := parseBook(node, baseURL); !found {
+			return true
+		}
+	}
+
+	return false
 }
 
 func parseBook(node *html.Node, baseURL *url.URL) (Book, bool) {

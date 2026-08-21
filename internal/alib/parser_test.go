@@ -3,6 +3,7 @@ package alib_test
 import (
 	"bytes"
 	"net/url"
+	"os"
 	"testing"
 
 	"github.com/kemko/alib-fetcher/internal/alib"
@@ -225,6 +226,61 @@ func Test_Parse_rejects_page_without_books(t *testing.T) {
 
 	// When
 	books, err := alib.Parse(bytes.NewBufferString("<html><body>empty</body></html>"), baseURL, "text/html")
+
+	// Then
+	require.ErrorIs(t, err, alib.ErrNoBooks)
+	require.Empty(t, books)
+}
+
+func Test_Parse_accepts_empty_windows1251_search_page(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	page, err := os.ReadFile("testdata/empty.html")
+	require.NoError(t, err)
+	baseURL, err := url.Parse("https://www.alib.ru/tramka.phtml?tnew=7")
+	require.NoError(t, err)
+
+	// When
+	books, err := alib.Parse(bytes.NewReader(page), baseURL, "text/html; charset=windows-1251")
+
+	// Then
+	require.NoError(t, err)
+	require.Empty(t, books)
+}
+
+func Test_Parse_rejects_structurally_changed_empty_search_page(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	page, err := os.ReadFile("testdata/empty.html")
+	require.NoError(t, err)
+	baseURL, err := url.Parse("https://www.alib.ru/tramka.phtml?tnew=7")
+	require.NoError(t, err)
+
+	// When
+	books, err := alib.Parse(bytes.NewReader(bytes.Replace(page, []byte(`name="find3"`), []byte(`name="changed"`), 1)),
+		baseURL, "text/html; charset=windows-1251")
+
+	// Then
+	require.ErrorIs(t, err, alib.ErrNoBooks)
+	require.Empty(t, books)
+}
+
+func Test_Parse_rejects_malformed_listing_on_empty_search_page(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	page, err := os.ReadFile("testdata/empty.html")
+	require.NoError(t, err)
+	malformed, err := charmap.Windows1251.NewEncoder().Bytes([]byte(`<p><b>Broken.</b> <a><b>Купить</b></a></p>`))
+	require.NoError(t, err)
+	page = bytes.Replace(page, []byte("</body>"), append(malformed, []byte("</body>")...), 1)
+	baseURL, err := url.Parse("https://www.alib.ru/tramka.phtml?tnew=7")
+	require.NoError(t, err)
+
+	// When
+	books, err := alib.Parse(bytes.NewReader(page), baseURL, "text/html; charset=windows-1251")
 
 	// Then
 	require.ErrorIs(t, err, alib.ErrNoBooks)
