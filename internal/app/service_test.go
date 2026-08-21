@@ -284,7 +284,7 @@ func Test_Service_retries_headerless_only_chunk_after_partial_delivery_failure(t
 	require.Equal(t, app.Result{Fetched: 2, Sent: 1}, secondResult)
 	require.NoError(t, retryPendingErr)
 	require.Empty(t, pendingAfterRetry)
-	header := `<p><b>Новые книги на Alib.ru</b></p>`
+	header := `<b>Новые книги на Alib.ru</b>`
 	require.Equal(t, []string{
 		expectedChunks[0].Text,
 		expectedChunks[1].Text,

@@ -188,24 +188,25 @@ the listing do not participate.
 
 ## Digest and transport details
 
-The first message starts with `<p><b>Новые книги на Alib.ru</b></p>`; later
+The first message starts with `<b>Новые книги на Alib.ru</b>`; when a listing
+follows in the same chunk, `<br/><br/>` separates it from the heading. Later
 chunks start with a listing. Multiple Telegram messages occur only when content
 is split into chunks by `MESSAGE_LIMIT`. If the header and first listing do not
 fit together
 but the listing fits alone, the first chunk contains only the header. Rich HTML
-paragraphs use `<p>`, every line break uses `<br/>`, and non-empty paragraph
-blocks use one `<br/>` separator. Rendered Telegram HTML contains no literal CR
-or LF characters. With content, block order is
-`main → <br/> → content → <br/> → details`; without content, it is exactly
-`main → <br/> → details`. The final `Купить` paragraph has the same single
-inter-block separator. Adjacent listings within one chunk use `<hr/>`,
+uses `<br/>` for every encoded line break and `<br/><br/>` between sections to
+render one empty line without client-specific paragraph spacing. Rendered
+Telegram HTML contains no literal CR or LF characters. With content, block order
+is `main → <br/><br/> → content → <br/><br/> → details`; without content, it is
+exactly `main → <br/><br/> → details`. The heading and final `Купить` section use
+the same separator. Adjacent listings within one chunk use `<hr/>`,
 with no divider at chunk edges.
 Each listing renders, in order: emoji plus bold title and bibliography; optional
-content as a separate paragraph; seller, price, condition/other details, and
-photo status on separate lines; then a final `Купить` link in its own paragraph.
+content as a separate section; seller, price, condition/other details, and photo
+status on separate lines; then a final `Купить` link in its own section.
 The seller format is
 `Продавец: <a href="...">Name</a>, Location.`; without seller URL, the name is
-plain text. Missing optional fields must not create extra empty paragraphs. The
+plain text. Missing optional fields must not create extra empty sections. The
 source `Смотрите` section is omitted and replaced with `Фото: есть` or
 `Фото: нет`. All dynamic text and URLs must be HTML-escaped. Limits are counted
 in Unicode runes, and chunks may split only between listings. A single listing

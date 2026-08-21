@@ -102,19 +102,20 @@ the SDK's `multipart/form-data` requests.
 Each listing inside that HTML is structured as:
 
 1. freshness marker, bold title, and bibliography;
-2. content in its own paragraph, when present;
+2. content in its own section, when present;
 3. seller as `Продавец: <a href="...">Name</a>, Location.`, then price,
    condition/other details, and photo status on separate lines;
-4. a final `Купить` link in its own paragraph.
+4. a final `Купить` link in its own section.
 
 The source photo-link section is replaced with `Фото: есть` or `Фото: нет`.
 When seller URL is absent, seller name is rendered as plain text. Missing
-optional fields do not create empty paragraphs. Dynamic text and URLs are
-HTML-escaped. Paragraphs use `<p>`. Every encoded line break uses `<br/>`, and
-non-empty paragraph blocks use one `<br/>` separator; rendered Telegram HTML
-contains no literal CR or LF characters. A listing with content uses
-`main → <br/> → content → <br/> → details`; without content it uses exactly
-`main → <br/> → details`. The final `Купить` paragraph also has one `<br/>`
+optional fields do not create empty sections. Dynamic text and URLs are
+HTML-escaped. Every encoded line break uses `<br/>`; sections use `<br/><br/>`
+to render one empty line without client-specific paragraph spacing. Rendered
+Telegram HTML contains no literal CR or LF characters. The heading has the same
+separator before the first listing. A listing with content uses
+`main → <br/><br/> → content → <br/><br/> → details`; without content it uses
+exactly `main → <br/><br/> → details`. The final `Купить` section has the same
 separator before it. Adjacent listings in one Rich Message
 are separated by `<hr/>`; no divider appears before the first listing or after
 the last. A digest uses multiple Telegram messages only when pending content is
