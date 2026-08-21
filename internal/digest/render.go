@@ -13,9 +13,9 @@ import (
 )
 
 const (
-	header           = "<p><b>Новые книги на Alib.ru</b></p>"
+	header           = "<b>Новые книги на Alib.ru</b>"
 	lineBreak        = "<br/>"
-	paragraphBreak   = lineBreak
+	sectionBreak     = lineBreak + lineBreak
 	listingSeparator = "<hr/>"
 )
 
@@ -71,6 +71,8 @@ func render(books []alib.Book, options Options, skipOversized bool) ([]Chunk, []
 		separator := ""
 		if len(current.Books) > 0 {
 			separator = listingSeparator
+		} else if current.Text != "" {
+			separator = sectionBreak
 		}
 
 		if utf8.RuneCountInString(current.Text+separator+item) > options.Limit {
@@ -96,9 +98,9 @@ func renderBook(book alib.Book, options Options) string {
 		mainLine += " " + renderMultilineText(bibliography)
 	}
 
-	paragraphs := []string{"<p>" + mainLine + "</p>"}
+	sections := []string{mainLine}
 	if content := strings.TrimSpace(book.Content); content != "" {
-		paragraphs = append(paragraphs, "<p>"+renderMultilineText(content)+"</p>")
+		sections = append(sections, renderMultilineText(content))
 	}
 
 	details := make([]string, 0, 4)
@@ -116,10 +118,10 @@ func renderBook(book alib.Book, options Options) string {
 	} else {
 		details = append(details, "Фото: нет")
 	}
-	paragraphs = append(paragraphs, "<p>"+strings.Join(details, lineBreak)+"</p>")
-	paragraphs = append(paragraphs, "<p>"+renderLink(book.BuyURL, "Купить")+"</p>")
+	sections = append(sections, strings.Join(details, lineBreak))
+	sections = append(sections, renderLink(book.BuyURL, "Купить"))
 
-	return strings.Join(paragraphs, paragraphBreak)
+	return strings.Join(sections, sectionBreak)
 }
 
 func renderMultilineText(value string) string {

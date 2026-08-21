@@ -136,28 +136,28 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 			require.Contains(t, richHTML[secondBookIndex:thirdBookIndex], "<hr/>")
 			require.NotContains(t, richHTML[thirdBookIndex:], "<hr/>")
 			require.Contains(t, richHTML, fmt.Sprintf(
-				`<p>🔥 <b>Горячая книга.</b> М., %d г.</p><br/>`+
-					`<p>Первая строка содержания.<br/>Вторая строка содержания.</p><br/>`+
-					`<p>Продавец: <a href="%s/bs.php4?bs=BotSad">BotSad</a>, Москва.`,
+				`🔥 <b>Горячая книга.</b> М., %d г.<br/><br/>`+
+					`Первая строка содержания.<br/>Вторая строка содержания.<br/><br/>`+
+					`Продавец: <a href="%s/bs.php4?bs=BotSad">BotSad</a>, Москва.`,
 				currentYear,
 				alibServer.URL,
 			))
 			require.Contains(t, richHTML, fmt.Sprintf(
-				`<p>%s<b>Свежая книга.</b> М., %d г.</p><br/><p>Цена: 500 руб.<br/>Фото: нет</p>`,
+				`%s<b>Свежая книга.</b> М., %d г.<br/><br/>Цена: 500 руб.<br/>Фото: нет`,
 				testCase.freshEmoji,
 				freshYear,
 			))
 			require.Contains(t, richHTML, fmt.Sprintf(
-				`<p>🛸 <b>Будущая книга.</b> М., %d г.</p><br/><p>Цена: 700 руб.<br/>Фото: нет</p>`,
+				`🛸 <b>Будущая книга.</b> М., %d г.<br/><br/>Цена: 700 руб.<br/>Фото: нет`,
 				futureYear,
 			))
-			require.Contains(t, richHTML, "<br/>Цена: 3 900 руб.<br/>Состояние: Отличное.<br/>Фото: есть</p>")
-			require.NotContains(t, richHTML, "<br/><br/>")
+			require.Contains(t, richHTML, "<br/>Цена: 3 900 руб.<br/>Состояние: Отличное.<br/>Фото: есть")
+			require.NotContains(t, richHTML, "<p>")
 			require.NotContains(t, richHTML, "<br>")
 			require.NotRegexp(t, `[\r\n]`, richHTML)
 			require.True(
 				t,
-				strings.HasSuffix(richHTML, `<p><a href="`+alibServer.URL+`/future.html">Купить</a></p>`),
+				strings.HasSuffix(richHTML, `<a href="`+alibServer.URL+`/future.html">Купить</a>`),
 			)
 			requireRefreshButton(t, payload)
 			require.Contains(t, logs.String(), "digest.completed")
