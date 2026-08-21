@@ -97,19 +97,19 @@ func (c *Client) Fetch(ctx context.Context) ([]Book, error) {
 				return nil, ctx.Err()
 			}
 
-			safeURL := endpointForLog(endpoint)
-			pageErr := fmt.Errorf("download alib URL %q: %w", safeURL, err)
+			pageURL := endpoint.String()
+			pageErr := fmt.Errorf("download alib URL %q: %w", pageURL, err)
 			pageErrors = append(pageErrors, pageErr)
 			c.logger.ErrorContext(ctx, "alib.page_download_failed",
 				slog.Int(logKeyIndex, index),
-				slog.String(logKeyURL, safeURL),
+				slog.String(logKeyURL, pageURL),
 				slog.Any(logKeyError, err),
 			)
 		} else {
 			downloaded = append(downloaded, page)
 			c.logger.InfoContext(ctx, "alib.page_downloaded",
 				slog.Int(logKeyIndex, index),
-				slog.String(logKeyURL, endpointForLog(endpoint)),
+				slog.String(logKeyURL, endpoint.String()),
 			)
 		}
 
@@ -134,11 +134,12 @@ func (c *Client) Fetch(ctx context.Context) ([]Book, error) {
 			return nil, contextErr
 		}
 		if err != nil {
-			pageErr := fmt.Errorf("parse alib URL %q: %w", endpointForLog(page.endpoint), err)
+			pageURL := page.endpoint.String()
+			pageErr := fmt.Errorf("parse alib URL %q: %w", pageURL, err)
 			pageErrors = append(pageErrors, pageErr)
 			c.logger.ErrorContext(ctx, "alib.page_parse_failed",
 				slog.Int(logKeyIndex, page.index),
-				slog.String(logKeyURL, endpointForLog(page.endpoint)),
+				slog.String(logKeyURL, pageURL),
 				slog.Any(logKeyError, err),
 			)
 			continue
@@ -147,7 +148,7 @@ func (c *Client) Fetch(ctx context.Context) ([]Book, error) {
 		parsedPages++
 		c.logger.InfoContext(ctx, "alib.page_parsed",
 			slog.Int(logKeyIndex, page.index),
-			slog.String(logKeyURL, endpointForLog(page.endpoint)),
+			slog.String(logKeyURL, page.endpoint.String()),
 			slog.Int(logKeyBooks, len(pageBooks)),
 		)
 		for _, book := range pageBooks {
@@ -218,16 +219,6 @@ func (c *Client) downloadPage(ctx context.Context, index int, endpoint *url.URL)
 		contentType: response.Header.Get("Content-Type"),
 		index:       index,
 	}, nil
-}
-
-func endpointForLog(endpoint *url.URL) string {
-	safeEndpoint := *endpoint
-	safeEndpoint.User = nil
-	safeEndpoint.RawQuery = ""
-	safeEndpoint.ForceQuery = false
-	safeEndpoint.Fragment = ""
-
-	return safeEndpoint.String()
 }
 
 type redactedURLError struct {
