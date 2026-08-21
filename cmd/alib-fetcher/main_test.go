@@ -465,20 +465,17 @@ func Test_run_once_fetches_multiple_urls_and_sends_partial_deduplicated_result(t
 	require.Equal(t, 1, strings.Count(logOutput, `"msg":"alib.page_download_failed"`))
 	require.Equal(t, 2, strings.Count(logOutput, `"msg":"alib.page_parsed"`))
 	require.Equal(t, 1, strings.Count(logOutput, `"msg":"alib.page_parse_failed"`))
-	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","index":0,"url":"`+alibServer.URL+`/first"`)
-	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","index":2,"url":"`+alibServer.URL+`/second"`)
-	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","index":3,"url":"`+alibServer.URL+`/changed"`)
-	require.Contains(t, logOutput, `"msg":"alib.page_download_failed","index":1,"url":"`+alibServer.URL+`/broken"`)
-	require.Contains(t, logOutput, `"msg":"alib.page_parsed","index":0,"url":"`+alibServer.URL+`/first","books":2`)
-	require.Contains(t, logOutput, `"msg":"alib.page_parsed","index":2,"url":"`+alibServer.URL+`/second","books":2`)
-	require.Contains(t, logOutput, `"msg":"alib.page_parse_failed","index":3,"url":"`+alibServer.URL+`/changed"`)
+	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","index":0,"url":"`+alibServer.URL+`/first?scope=one&format=full"`)
+	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","index":2,"url":"`+alibServer.URL+`/second?topic=one%2Ctwo&format=full"`)
+	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","index":3,"url":"`+alibServer.URL+`/changed?scope=broken"`)
+	require.Contains(t, logOutput, `"msg":"alib.page_download_failed","index":1,"url":"`+alibServer.URL+`/broken?scope=two"`)
+	require.Contains(t, logOutput, `"msg":"alib.page_parsed","index":0,"url":"`+alibServer.URL+`/first?scope=one&format=full","books":2`)
+	require.Contains(t, logOutput, `"msg":"alib.page_parsed","index":2,"url":"`+alibServer.URL+`/second?topic=one%2Ctwo&format=full","books":2`)
+	require.Contains(t, logOutput, `"msg":"alib.page_parse_failed","index":3,"url":"`+alibServer.URL+`/changed?scope=broken"`)
 	require.Less(t,
 		strings.LastIndex(logOutput, `"msg":"alib.page_downloaded"`),
 		strings.Index(logOutput, `"msg":"alib.page_parsed"`),
 	)
-	require.NotContains(t, logOutput, "scope=one")
-	require.NotContains(t, logOutput, "scope=two")
-	require.NotContains(t, logOutput, "topic=one")
 	require.NotContains(t, logOutput, `"msg":"alib.page_failed"`)
 	require.Contains(t, logOutput, `"msg":"digest.completed"`)
 	require.Contains(t, logOutput, `"fetched":3`)
@@ -532,8 +529,10 @@ func Test_run_once_accepts_all_correct_empty_pages_without_telegram_delivery(t *
 	logOutput := logs.String()
 	require.Equal(t, 2, strings.Count(logOutput, `"msg":"alib.page_downloaded"`))
 	require.Equal(t, 2, strings.Count(logOutput, `"msg":"alib.page_parsed"`))
-	require.Contains(t, logOutput, `"msg":"alib.page_parsed","index":0,"url":"`+alibServer.URL+`/empty-one","books":0`)
-	require.Contains(t, logOutput, `"msg":"alib.page_parsed","index":1,"url":"`+alibServer.URL+`/empty-two","books":0`)
+	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","index":0,"url":"`+alibServer.URL+`/empty-one?first=true"`)
+	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","index":1,"url":"`+alibServer.URL+`/empty-two?second=true"`)
+	require.Contains(t, logOutput, `"msg":"alib.page_parsed","index":0,"url":"`+alibServer.URL+`/empty-one?first=true","books":0`)
+	require.Contains(t, logOutput, `"msg":"alib.page_parsed","index":1,"url":"`+alibServer.URL+`/empty-two?second=true","books":0`)
 	require.Contains(t, logOutput, `"msg":"digest.completed"`)
 	require.Contains(t, logOutput, `"fetched":0`)
 	require.Contains(t, logOutput, `"new":0`)
@@ -569,9 +568,9 @@ func Test_run_once_fails_after_requesting_and_logging_all_failed_pages(t *testin
 	statePath := filepath.Join(t.TempDir(), "state.db")
 	setRunEnvironment(t, alibServer.URL, telegramServer.URL, statePath)
 	t.Setenv("ALIB_URL", strings.Join([]string{
-		alibServer.URL + "/status-one",
-		alibServer.URL + "/broken",
-		alibServer.URL + "/status-two",
+		alibServer.URL + "/status-one?status=one",
+		alibServer.URL + "/broken?scope=broken",
+		alibServer.URL + "/status-two?status=two",
 	}, ","))
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -592,9 +591,14 @@ func Test_run_once_fails_after_requesting_and_logging_all_failed_pages(t *testin
 	require.Equal(t, 1, strings.Count(logOutput, `"msg":"alib.page_downloaded"`))
 	require.Equal(t, 1, strings.Count(logOutput, `"msg":"alib.page_parse_failed"`))
 	require.NotContains(t, logOutput, `"msg":"alib.page_parsed"`)
-	require.Contains(t, logOutput, `"url":"`+alibServer.URL+`/status-one"`)
-	require.Contains(t, logOutput, `"url":"`+alibServer.URL+`/broken"`)
-	require.Contains(t, logOutput, `"url":"`+alibServer.URL+`/status-two"`)
+	require.Contains(t, logOutput, `"msg":"alib.page_download_failed","index":0,"url":"`+
+		alibServer.URL+`/status-one?status=one"`)
+	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","index":1,"url":"`+
+		alibServer.URL+`/broken?scope=broken"`)
+	require.Contains(t, logOutput, `"msg":"alib.page_parse_failed","index":1,"url":"`+
+		alibServer.URL+`/broken?scope=broken"`)
+	require.Contains(t, logOutput, `"msg":"alib.page_download_failed","index":2,"url":"`+
+		alibServer.URL+`/status-two?status=two"`)
 	require.NotContains(t, logOutput, `"msg":"alib.page_failed"`)
 	require.Contains(t, logOutput, `"msg":"digest.failed"`)
 }

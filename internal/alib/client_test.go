@@ -288,7 +288,7 @@ func Test_Client_fetches_urls_in_order_and_deduplicates_by_buy_url(t *testing.T)
 	}, books)
 }
 
-func Test_Client_does_not_expose_query_credentials_in_failure(t *testing.T) {
+func Test_Client_logs_full_URL_for_download_failure(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -298,7 +298,7 @@ func Test_Client_does_not_expose_query_credentials_in_failure(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	client, err := alib.NewClient(
-		server.URL+"/failed?access_token=top-secret",
+		server.URL+"/failed?scope=download",
 		time.Second,
 		0,
 		slog.New(slog.NewTextHandler(&logs, nil)),
@@ -311,12 +311,11 @@ func Test_Client_does_not_expose_query_credentials_in_failure(t *testing.T) {
 	// Then
 	require.ErrorIs(t, err, alib.ErrUnexpectedStatus)
 	require.Empty(t, books)
-	require.NotContains(t, err.Error(), "top-secret")
-	require.NotContains(t, logs.String(), "top-secret")
-	require.Contains(t, logs.String(), "url="+server.URL+"/failed")
+	require.Contains(t, err.Error(), "download alib URL \""+server.URL+"/failed?scope=download\"")
+	require.Contains(t, logs.String(), "url=\""+server.URL+"/failed?scope=download\"")
 }
 
-func Test_Client_does_not_expose_query_credentials_in_parse_failure(t *testing.T) {
+func Test_Client_logs_full_URL_for_parse_failure(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -328,7 +327,7 @@ func Test_Client_does_not_expose_query_credentials_in_parse_failure(t *testing.T
 	}))
 	t.Cleanup(server.Close)
 	client, err := alib.NewClient(
-		server.URL+"/changed?access_token=top-secret#fragment-secret",
+		server.URL+"/changed?scope=parse#results",
 		time.Second,
 		0,
 		slog.New(slog.NewTextHandler(&logs, nil)),
@@ -341,13 +340,10 @@ func Test_Client_does_not_expose_query_credentials_in_parse_failure(t *testing.T
 	// Then
 	require.ErrorIs(t, err, alib.ErrNoBooks)
 	require.Empty(t, books)
-	require.Contains(t, err.Error(), "parse alib URL \""+server.URL+"/changed\"")
-	require.NotContains(t, err.Error(), "top-secret")
-	require.NotContains(t, err.Error(), "fragment-secret")
+	require.Contains(t, err.Error(), "parse alib URL \""+server.URL+"/changed?scope=parse#results\"")
 	logOutput := logs.String()
-	require.Contains(t, logOutput, "msg=alib.page_parse_failed index=0 url="+server.URL+"/changed")
-	require.NotContains(t, logOutput, "top-secret")
-	require.NotContains(t, logOutput, "fragment-secret")
+	require.Contains(t, logOutput, "msg=alib.page_parse_failed index=0 url=\""+
+		server.URL+"/changed?scope=parse#results")
 }
 
 func Test_Client_does_not_expose_query_credentials_from_malformed_redirect(t *testing.T) {
@@ -433,21 +429,19 @@ func Test_Client_downloads_all_pages_before_parsing_and_logs_outcomes(t *testing
 	require.Equal(t, 1, strings.Count(logOutput, "msg=alib.page_parse_failed"))
 	require.Equal(t, 2, strings.Count(logOutput, "msg=alib.page_parsed"))
 	require.Contains(t, logOutput, "msg=alib.page_download_failed index=0")
-	require.Contains(t, logOutput, "msg=alib.page_download_failed index=0 url="+server.URL+
-		"/before error=\"alib returned an unexpected status: 502 Bad Gateway\"")
-	require.Contains(t, logOutput, "msg=alib.page_parse_failed index=1 url="+server.URL+
-		"/broken error=\"page contains no book listings\"")
-	require.Contains(t, logOutput, "msg=alib.page_download_failed index=4")
-	require.Contains(t, logOutput, "msg=alib.page_parsed index=2")
-	require.Contains(t, logOutput, "msg=alib.page_parsed index=3")
-	require.Contains(t, logOutput, "msg=alib.page_parsed index=3 url="+server.URL+"/empty books=0")
+	require.Contains(t, logOutput, "msg=alib.page_download_failed index=0 url=\""+server.URL+
+		"/before?access_token=top-secret#fragment-secret\" error=\"alib returned an unexpected status: 502 Bad Gateway\"")
+	require.Contains(t, logOutput, "msg=alib.page_parse_failed index=1 url=\""+server.URL+
+		"/broken?scope=broken\" error=\"page contains no book listings\"")
+	require.Contains(t, logOutput, "msg=alib.page_downloaded index=2 url=\""+server.URL+"/success?scope=success\"")
+	require.Contains(t, logOutput, "msg=alib.page_downloaded index=3 url=\""+server.URL+"/empty?scope=empty\"")
+	require.Contains(t, logOutput, "msg=alib.page_download_failed index=4 url=\""+server.URL+"/after?scope=after\"")
+	require.Contains(t, logOutput, "msg=alib.page_parsed index=2 url=\""+server.URL+"/success?scope=success\"")
+	require.Contains(t, logOutput, "msg=alib.page_parsed index=3 url=\""+server.URL+"/empty?scope=empty\" books=0")
 	require.Less(t,
 		strings.Index(logOutput, "msg=alib.page_download_failed index=4"),
 		strings.Index(logOutput, "msg=alib.page_parse_failed index=1"),
 	)
-	require.NotContains(t, logOutput, "top-secret")
-	require.NotContains(t, logOutput, "fragment-secret")
-	require.NotContains(t, logOutput, "scope=broken")
 }
 
 func Test_Client_rejects_oversized_response_without_content_length(t *testing.T) {
@@ -555,7 +549,7 @@ func Test_Client_returns_combined_error_when_all_pages_fail(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	client, err := alib.NewClient(
-		server.URL+"/status,"+server.URL+"/broken",
+		server.URL+"/status?status=bad,"+server.URL+"/broken?scope=broken",
 		time.Second,
 		0,
 		slog.New(slog.DiscardHandler),
@@ -569,6 +563,8 @@ func Test_Client_returns_combined_error_when_all_pages_fail(t *testing.T) {
 	require.ErrorIs(t, err, alib.ErrUnexpectedStatus)
 	require.ErrorIs(t, err, alib.ErrNoBooks)
 	require.Empty(t, books)
+	require.Contains(t, err.Error(), "download alib URL \""+server.URL+"/status?status=bad\"")
+	require.Contains(t, err.Error(), "parse alib URL \""+server.URL+"/broken?scope=broken\"")
 }
 
 func Test_Client_waits_between_requests(t *testing.T) {
