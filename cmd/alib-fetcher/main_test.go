@@ -32,6 +32,11 @@ type telegramRequest struct {
 	Path    string
 }
 
+type alibRequest struct {
+	Path     string
+	RawQuery string
+}
+
 func Test_run_wires_once_mode_from_environment(t *testing.T) {
 	currentYear := time.Now().In(time.UTC).Year()
 	// Keep fixtures valid if UTC year changes before run captures the cycle time.
@@ -326,6 +331,7 @@ func Test_run_sends_only_final_wired_message_with_sound(t *testing.T) {
 	t.Setenv("ALIB_URL", alibServer.URL+"/tramka.phtml?tnew=7")
 	t.Setenv("TELEGRAM_API_BASE", telegramServer.URL)
 	t.Setenv("HTTP_TIMEOUT", "2s")
+	t.Setenv("ALIB_REQUEST_INTERVAL", "0s")
 	t.Setenv("MESSAGE_LIMIT", "220")
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -377,6 +383,189 @@ func Test_run_sends_only_final_wired_message_with_sound(t *testing.T) {
 	require.NotContains(t, logs.String(), "test-token")
 }
 
+func Test_run_once_fetches_multiple_urls_and_sends_partial_deduplicated_result(t *testing.T) {
+	// Given
+	useOnceMode(t)
+	alibRequests := make(chan alibRequest, 3)
+	alibServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		alibRequests <- alibRequest{Path: request.URL.Path, RawQuery: request.URL.RawQuery}
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		switch request.URL.Path {
+		case "/first":
+			_, err := writer.Write([]byte(
+				listingPage("Первый", "/first-book.html", "100 руб.") +
+					listingPage("Общий первый", "/shared-book.html", "200 руб."),
+			))
+			assert.NoError(t, err)
+		case "/broken":
+			writer.WriteHeader(http.StatusBadGateway)
+		case "/second":
+			_, err := writer.Write([]byte(
+				listingPage("Общий второй", "/shared-book.html", "999 руб.") +
+					listingPage("Последний", "/last-book.html", "300 руб."),
+			))
+			assert.NoError(t, err)
+		default:
+			t.Errorf("unexpected Alib path %q", request.URL.Path)
+		}
+	}))
+	t.Cleanup(alibServer.Close)
+
+	telegramRequests := make(chan telegramRequest, 2)
+	telegramServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		telegramRequests <- telegramRequest{Message: decodeTelegramMessage(t, request), Path: request.URL.Path}
+		writer.Header().Set("Content-Type", "application/json")
+		_, err := writer.Write([]byte(`{"ok":true,"result":{}}`))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(telegramServer.Close)
+
+	statePath := filepath.Join(t.TempDir(), "state.db")
+	setRunEnvironment(t, alibServer.URL, telegramServer.URL, statePath)
+	t.Setenv("ALIB_URL", strings.Join([]string{
+		alibServer.URL + "/first?scope=one&format=full",
+		alibServer.URL + "/broken?scope=two",
+		alibServer.URL + "/second?topic=one%2Ctwo&format=full",
+	}, ", "))
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	// When
+	err := run(logger)
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, []alibRequest{
+		{Path: "/first", RawQuery: "scope=one&format=full"},
+		{Path: "/broken", RawQuery: "scope=two"},
+		{Path: "/second", RawQuery: "topic=one%2Ctwo&format=full"},
+	}, []alibRequest{<-alibRequests, <-alibRequests, <-alibRequests})
+	require.Len(t, telegramRequests, 1)
+	message := (<-telegramRequests).Message
+	richHTML := message.RichMessage.HTML
+	for _, buyURL := range []string{
+		alibServer.URL + "/first-book.html",
+		alibServer.URL + "/shared-book.html",
+		alibServer.URL + "/last-book.html",
+	} {
+		require.Contains(t, richHTML, buyURL)
+	}
+	require.Less(t, strings.Index(richHTML, "Первый"), strings.Index(richHTML, "Общий первый"))
+	require.Less(t, strings.Index(richHTML, "Общий первый"), strings.Index(richHTML, "Последний"))
+	require.NotContains(t, richHTML, "Общий второй")
+	requireRefreshButton(t, message)
+	require.Contains(t, logs.String(), `"msg":"alib.page_failed"`)
+	require.Contains(t, logs.String(), `"index":1`)
+	require.Contains(t, logs.String(), `"url":"`+alibServer.URL+`/broken"`)
+	require.Contains(t, logs.String(), `"msg":"digest.completed"`)
+	require.Contains(t, logs.String(), `"fetched":3`)
+	require.Contains(t, logs.String(), `"new":3`)
+	require.Contains(t, logs.String(), `"sent":3`)
+
+	state, err := store.Open(statePath, time.Now())
+	require.NoError(t, err)
+	pending, err := state.Pending(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, state.Close())
+	require.Empty(t, pending)
+}
+
+func Test_run_once_accepts_all_correct_empty_pages_without_telegram_delivery(t *testing.T) {
+	// Given
+	useOnceMode(t)
+	emptyPage, err := os.ReadFile(filepath.Join("..", "..", "internal", "alib", "testdata", "empty.html"))
+	require.NoError(t, err)
+	alibRequests := make(chan alibRequest, 2)
+	alibServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		alibRequests <- alibRequest{Path: request.URL.Path, RawQuery: request.URL.RawQuery}
+		writer.Header().Set("Content-Type", "text/html; charset=windows-1251")
+		_, writeErr := writer.Write(emptyPage)
+		assert.NoError(t, writeErr)
+	}))
+	t.Cleanup(alibServer.Close)
+	telegramRequests := make(chan struct{}, 1)
+	telegramServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		telegramRequests <- struct{}{}
+		writer.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(telegramServer.Close)
+
+	statePath := filepath.Join(t.TempDir(), "state.db")
+	setRunEnvironment(t, alibServer.URL, telegramServer.URL, statePath)
+	t.Setenv("ALIB_URL", alibServer.URL+"/empty-one?first=true, "+alibServer.URL+"/empty-two?second=true")
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	// When
+	err = run(logger)
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, []alibRequest{
+		{Path: "/empty-one", RawQuery: "first=true"},
+		{Path: "/empty-two", RawQuery: "second=true"},
+	}, []alibRequest{<-alibRequests, <-alibRequests})
+	require.Empty(t, telegramRequests)
+	require.Contains(t, logs.String(), `"msg":"digest.completed"`)
+	require.Contains(t, logs.String(), `"fetched":0`)
+	require.Contains(t, logs.String(), `"new":0`)
+	require.Contains(t, logs.String(), `"sent":0`)
+	require.NotContains(t, logs.String(), "alib.page_failed")
+}
+
+func Test_run_once_fails_after_requesting_and_logging_all_failed_pages(t *testing.T) {
+	// Given
+	useOnceMode(t)
+	alibRequests := make(chan string, 3)
+	alibServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		alibRequests <- request.URL.Path
+		switch request.URL.Path {
+		case "/status-one", "/status-two":
+			writer.WriteHeader(http.StatusBadGateway)
+		case "/broken":
+			writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, err := writer.Write([]byte("<html><body>changed</body></html>"))
+			assert.NoError(t, err)
+		default:
+			t.Errorf("unexpected Alib path %q", request.URL.Path)
+		}
+	}))
+	t.Cleanup(alibServer.Close)
+	telegramRequests := make(chan struct{}, 1)
+	telegramServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		telegramRequests <- struct{}{}
+		writer.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(telegramServer.Close)
+
+	statePath := filepath.Join(t.TempDir(), "state.db")
+	setRunEnvironment(t, alibServer.URL, telegramServer.URL, statePath)
+	t.Setenv("ALIB_URL", strings.Join([]string{
+		alibServer.URL + "/status-one",
+		alibServer.URL + "/broken",
+		alibServer.URL + "/status-two",
+	}, ","))
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	// When
+	err := run(logger)
+
+	// Then
+	require.Error(t, err)
+	require.Equal(t, []string{"/status-one", "/broken", "/status-two"}, []string{
+		<-alibRequests,
+		<-alibRequests,
+		<-alibRequests,
+	})
+	require.Empty(t, telegramRequests)
+	require.Equal(t, 3, strings.Count(logs.String(), `"msg":"alib.page_failed"`))
+	require.Contains(t, logs.String(), `"url":"`+alibServer.URL+`/status-one"`)
+	require.Contains(t, logs.String(), `"url":"`+alibServer.URL+`/broken"`)
+	require.Contains(t, logs.String(), `"url":"`+alibServer.URL+`/status-two"`)
+	require.Contains(t, logs.String(), `"msg":"digest.failed"`)
+}
+
 func useOnceMode(t *testing.T) {
 	t.Helper()
 	useCommandLine(t, "-once")
@@ -409,6 +598,7 @@ func setEnvironmentAbsentDigestConfiguration(t *testing.T) {
 		"MESSAGE_LIMIT",
 		"RUN_ON_STARTUP",
 		"FRESH_BOOKS",
+		"ALIB_REQUEST_INTERVAL",
 	} {
 		unsetEnvironment(t, key)
 	}
@@ -459,6 +649,7 @@ func setRunEnvironment(t *testing.T, alibURL, telegramAPIBase, statePath string)
 	t.Setenv("ALIB_URL", alibURL+"/tramka.phtml?tnew=7")
 	t.Setenv("TELEGRAM_API_BASE", telegramAPIBase)
 	t.Setenv("HTTP_TIMEOUT", "2s")
+	t.Setenv("ALIB_REQUEST_INTERVAL", "0s")
 	t.Setenv("MESSAGE_LIMIT", "4000")
 }
 
@@ -467,4 +658,8 @@ func unsetEnvironment(t *testing.T, key string) {
 
 	t.Setenv(key, "")
 	require.NoError(t, os.Unsetenv(key))
+}
+
+func listingPage(title, buyURL, price string) string {
+	return "<p><b>" + title + "</b> Цена: " + price + " <a href=\"" + buyURL + "\"><b>Купить</b></a></p>"
 }
