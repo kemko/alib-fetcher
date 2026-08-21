@@ -298,7 +298,7 @@ func Test_Client_logs_full_URL_for_download_failure(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	client, err := alib.NewClient(
-		server.URL+"/failed?access_token=top-secret",
+		server.URL+"/failed?scope=download",
 		time.Second,
 		0,
 		slog.New(slog.NewTextHandler(&logs, nil)),
@@ -311,8 +311,8 @@ func Test_Client_logs_full_URL_for_download_failure(t *testing.T) {
 	// Then
 	require.ErrorIs(t, err, alib.ErrUnexpectedStatus)
 	require.Empty(t, books)
-	require.Contains(t, err.Error(), "download alib URL \""+server.URL+"/failed?access_token=top-secret\"")
-	require.Contains(t, logs.String(), "url=\""+server.URL+"/failed?access_token=top-secret\"")
+	require.Contains(t, err.Error(), "download alib URL \""+server.URL+"/failed?scope=download\"")
+	require.Contains(t, logs.String(), "url=\""+server.URL+"/failed?scope=download\"")
 }
 
 func Test_Client_logs_full_URL_for_parse_failure(t *testing.T) {
@@ -327,7 +327,7 @@ func Test_Client_logs_full_URL_for_parse_failure(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	client, err := alib.NewClient(
-		server.URL+"/changed?access_token=top-secret#fragment-secret",
+		server.URL+"/changed?scope=parse#results",
 		time.Second,
 		0,
 		slog.New(slog.NewTextHandler(&logs, nil)),
@@ -340,10 +340,10 @@ func Test_Client_logs_full_URL_for_parse_failure(t *testing.T) {
 	// Then
 	require.ErrorIs(t, err, alib.ErrNoBooks)
 	require.Empty(t, books)
-	require.Contains(t, err.Error(), "parse alib URL \""+server.URL+"/changed?access_token=top-secret#fragment-secret\"")
+	require.Contains(t, err.Error(), "parse alib URL \""+server.URL+"/changed?scope=parse#results\"")
 	logOutput := logs.String()
 	require.Contains(t, logOutput, "msg=alib.page_parse_failed index=0 url=\""+
-		server.URL+"/changed?access_token=top-secret#fragment-secret")
+		server.URL+"/changed?scope=parse#results")
 }
 
 func Test_Client_does_not_expose_query_credentials_from_malformed_redirect(t *testing.T) {

@@ -48,6 +48,8 @@ download by `alib.page_parsed` or `alib.page_parse_failed`. Every event has the
 zero-based `index` and full configured `url`, including GET parameters and
 fragments; parsed events also have `books`, and failed events have `error`. A
 download failure has no parse event. Userinfo is rejected during configuration.
+Because page URLs are also included in errors and written verbatim to stdout,
+`ALIB_URL` must not contain credentials or other secrets.
 A valid search page with no listings counts as a successful empty result. The
 fetch fails only when no page parses successfully or the context is canceled;
 successful pages still produce a partial result when other pages fail.

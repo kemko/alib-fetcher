@@ -225,6 +225,8 @@ download, logs `alib.page_parsed` or `alib.page_parse_failed` for its parse.
 Every event has the zero-based `index` and full configured endpoint `url`,
 including GET parameters and fragments; parsed events also have `books`, and
 failed events have `error`. Userinfo is rejected during configuration. The
+configured endpoints are written verbatim to logs and page errors, so
+`ALIB_URL` must not contain credentials or other secrets. The
 SDK-backed Telegram adapter accepts only HTTP(S), caps
 response decoding at 1 MiB, returns `telegram.ErrRequest` for transport failures
 and `telegram.ErrRejected` for unsuccessful API responses, and includes
@@ -244,7 +246,8 @@ are `requested` and `deleted`. Every Alib page event includes the zero-based
 `index` and full configured endpoint `url`, including GET parameters and
 fragments; `alib.page_parsed` also includes `books`, and failed events include
 `error`. Userinfo is rejected during configuration. Keep slog attributes typed,
-snake_case, and free of secrets.
+snake_case, and free of secrets; full Alib URL logging relies on the
+credential-free `ALIB_URL` contract above.
 
 ## Development and verification
 
