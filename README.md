@@ -45,12 +45,12 @@ listings in first-seen order, deduplicated by their `Купить` URL while kee
 the first copy. Each page has separate download and parse events:
 `alib.page_downloaded` or `alib.page_download_failed`, followed for a successful
 download by `alib.page_parsed` or `alib.page_parse_failed`. Every event has the
-zero-based `index` and query-free `url`; parsed events also have `books`, and
-failed events have `error`. A download failure has no parse event. Userinfo,
-query parameters, and fragments are omitted from logs and errors. A valid search
-page with no listings counts as a successful empty result. The fetch fails only
-when no page parses successfully or the context is canceled; successful pages
-still produce a partial result when other pages fail.
+zero-based `index` and full configured `url`, including GET parameters and
+fragments; parsed events also have `books`, and failed events have `error`. A
+download failure has no parse event. Userinfo is rejected during configuration.
+A valid search page with no listings counts as a successful empty result. The
+fetch fails only when no page parses successfully or the context is canceled;
+successful pages still produce a partial result when other pages fail.
 `FRESH_BOOKS=age:N` marks publication years from the current local year minus
 non-negative `N`, inclusive. For example, in 2026, `age:5` includes 2021.
 `FRESH_BOOKS=since:YYYY` uses the given four-digit year as the inclusive lower
