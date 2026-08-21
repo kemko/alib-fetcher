@@ -32,6 +32,13 @@ type listingPosition struct {
 	part int
 }
 
+type emptySearchPageMarkers struct {
+	beginResultsFound    bool
+	emptyResultHintFound bool
+	searchFormFound      bool
+	sortControlFound     bool
+}
+
 // Parse decodes an Alib.ru page and extracts unique sale listings.
 func Parse(reader io.Reader, baseURL *url.URL, contentType string) ([]Book, error) {
 	decoded, err := charset.NewReader(reader, contentType)
@@ -64,7 +71,7 @@ func Parse(reader io.Reader, baseURL *url.URL, contentType string) ([]Book, erro
 	}
 
 	if len(books) == 0 {
-		if isSearchResultsPage(document) && !hasMalformedListing(document, baseURL) {
+		if isEmptySearchResultsPage(document) && !hasMalformedListing(document, baseURL) {
 			return books, nil
 		}
 		return nil, ErrNoBooks
@@ -73,27 +80,49 @@ func Parse(reader io.Reader, baseURL *url.URL, contentType string) ([]Book, erro
 	return books, nil
 }
 
-func isSearchResultsPage(document *html.Node) bool {
-	beginResultsFound := false
-	searchFormFound := false
+func isEmptySearchResultsPage(document *html.Node) bool {
+	markers := emptySearchPageMarkers{}
 	for node := range document.Descendants() {
-		if node.Type != html.ElementNode {
-			continue
-		}
-
-		switch node.Data {
-		case "a":
-			beginResultsFound = beginResultsFound || attribute(node, "name") == "beginStr"
-		case "form":
-			if attribute(node, "name") != "find3" {
-				continue
-			}
-			action, err := url.Parse(attribute(node, "action"))
-			searchFormFound = searchFormFound || err == nil && strings.TrimPrefix(action.Path, "/") == "find3.php4"
-		}
+		markers.record(node)
 	}
 
-	return beginResultsFound && searchFormFound
+	return markers.beginResultsFound && markers.emptyResultHintFound &&
+		markers.searchFormFound && markers.sortControlFound
+}
+
+func (markers *emptySearchPageMarkers) record(node *html.Node) {
+	if node.Type != html.ElementNode {
+		return
+	}
+
+	switch node.Data {
+	case "a":
+		if attribute(node, "name") == "beginStr" {
+			markers.beginResultsFound = true
+		}
+	case "form":
+		if isSearchForm(node) {
+			markers.searchFormFound = true
+		}
+	case "p":
+		if strings.Contains(normalizedText(node), "Если ничего не найдено") {
+			markers.emptyResultHintFound = true
+		}
+	case "select":
+		if attribute(node, "name") == "sortby" {
+			markers.sortControlFound = true
+		}
+	}
+}
+
+func isSearchForm(node *html.Node) bool {
+	if attribute(node, "name") != "find3" {
+		return false
+	}
+
+	action, err := url.Parse(attribute(node, "action"))
+
+	return err == nil && strings.TrimPrefix(action.Path, "/") == "find3.php4"
 }
 
 func attribute(node *html.Node, name string) string {
@@ -112,8 +141,8 @@ func hasMalformedListing(document *html.Node, baseURL *url.URL) bool {
 			continue
 		}
 
-		_, _, buyNode := listingNodes(node)
-		if buyNode == nil {
+		titleNode, _, buyNode := listingNodes(node)
+		if buyNode == nil && (titleNode == nil || !strings.Contains(normalizedText(node), priceLabel)) {
 			continue
 		}
 		if _, found := parseBook(node, baseURL); !found {

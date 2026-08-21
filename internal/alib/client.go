@@ -36,6 +36,9 @@ func NewClient(rawURLs string, timeout, requestInterval time.Duration, logger *s
 	if requestInterval < 0 {
 		return nil, errors.New("create alib client: request interval must be non-negative")
 	}
+	if logger == nil {
+		return nil, errors.New("create alib client: logger is required")
+	}
 
 	endpoints := make([]*url.URL, 0)
 	for index, rawURL := range strings.Split(rawURLs, ",") {
@@ -46,19 +49,19 @@ func NewClient(rawURLs string, timeout, requestInterval time.Duration, logger *s
 
 		endpoint, err := url.Parse(rawURL)
 		if err != nil {
-			return nil, fmt.Errorf("parse alib URL item %d %q: %w", index, rawURL, err)
+			return nil, fmt.Errorf("parse alib URL item %d: %w", index, urlErrorCause(err))
 		}
 		if endpoint.Scheme != "http" && endpoint.Scheme != "https" {
-			return nil, fmt.Errorf("parse alib URL item %d %q: unsupported scheme %q", index, rawURL, endpoint.Scheme)
+			return nil, fmt.Errorf("parse alib URL item %d: unsupported scheme %q", index, endpoint.Scheme)
 		}
 		if endpoint.Host == "" {
-			return nil, fmt.Errorf("parse alib URL item %d %q: host is required", index, rawURL)
+			return nil, fmt.Errorf("parse alib URL item %d: host is required", index)
+		}
+		if endpoint.User != nil {
+			return nil, fmt.Errorf("parse alib URL item %d: userinfo is not supported", index)
 		}
 
 		endpoints = append(endpoints, endpoint)
-	}
-	if logger == nil {
-		logger = slog.Default()
 	}
 
 	return &Client{
@@ -82,11 +85,12 @@ func (c *Client) Fetch(ctx context.Context) ([]Book, error) {
 				return nil, ctx.Err()
 			}
 
-			pageErr := fmt.Errorf("fetch alib URL %q: %w", endpoint.String(), err)
+			safeURL := endpointForLog(endpoint)
+			pageErr := fmt.Errorf("fetch alib URL %q: %w", safeURL, err)
 			pageErrors = append(pageErrors, pageErr)
 			c.logger.ErrorContext(ctx, "alib.page_failed",
 				slog.Int(logKeyIndex, index),
-				slog.String(logKeyURL, endpoint.String()),
+				slog.String(logKeyURL, safeURL),
 				slog.Any(logKeyError, err),
 			)
 		} else {
@@ -124,7 +128,7 @@ func (c *Client) fetchPage(ctx context.Context, endpoint *url.URL) ([]Book, erro
 
 	response, err := c.httpClient.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("fetch alib page: %w", err)
+		return nil, fmt.Errorf("fetch alib page: %w", urlErrorCause(err))
 	}
 
 	if response.StatusCode != http.StatusOK {
@@ -144,6 +148,25 @@ func (c *Client) fetchPage(ctx context.Context, endpoint *url.URL) ([]Book, erro
 	}
 
 	return books, nil
+}
+
+func endpointForLog(endpoint *url.URL) string {
+	safeEndpoint := *endpoint
+	safeEndpoint.User = nil
+	safeEndpoint.RawQuery = ""
+	safeEndpoint.ForceQuery = false
+	safeEndpoint.Fragment = ""
+
+	return safeEndpoint.String()
+}
+
+func urlErrorCause(err error) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return urlErr.Err
+	}
+
+	return err
 }
 
 func wait(ctx context.Context, duration time.Duration) error {

@@ -267,6 +267,22 @@ func Test_Parse_rejects_structurally_changed_empty_search_page(t *testing.T) {
 	require.Empty(t, books)
 }
 
+func Test_Parse_rejects_search_page_shell_without_empty_result_marker(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	page := `<a name="beginStr"></a><form action="/find3.php4" name="find3"><select name="sortby"></select></form>`
+	baseURL, err := url.Parse("https://www.alib.ru/tramka.phtml?tnew=7")
+	require.NoError(t, err)
+
+	// When
+	books, err := alib.Parse(bytes.NewBufferString(page), baseURL, "text/html")
+
+	// Then
+	require.ErrorIs(t, err, alib.ErrNoBooks)
+	require.Empty(t, books)
+}
+
 func Test_Parse_rejects_malformed_listing_on_empty_search_page(t *testing.T) {
 	t.Parallel()
 
@@ -274,6 +290,26 @@ func Test_Parse_rejects_malformed_listing_on_empty_search_page(t *testing.T) {
 	page, err := os.ReadFile("testdata/empty.html")
 	require.NoError(t, err)
 	malformed, err := charmap.Windows1251.NewEncoder().Bytes([]byte(`<p><b>Broken.</b> <a><b>Купить</b></a></p>`))
+	require.NoError(t, err)
+	page = bytes.Replace(page, []byte("</body>"), append(malformed, []byte("</body>")...), 1)
+	baseURL, err := url.Parse("https://www.alib.ru/tramka.phtml?tnew=7")
+	require.NoError(t, err)
+
+	// When
+	books, err := alib.Parse(bytes.NewReader(page), baseURL, "text/html; charset=windows-1251")
+
+	// Then
+	require.ErrorIs(t, err, alib.ErrNoBooks)
+	require.Empty(t, books)
+}
+
+func Test_Parse_rejects_listing_without_buy_link_on_empty_search_page(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	page, err := os.ReadFile("testdata/empty.html")
+	require.NoError(t, err)
+	malformed, err := charmap.Windows1251.NewEncoder().Bytes([]byte(`<p><b>Broken.</b> Цена: 100 руб.</p>`))
 	require.NoError(t, err)
 	page = bytes.Replace(page, []byte("</body>"), append(malformed, []byte("</body>")...), 1)
 	baseURL, err := url.Parse("https://www.alib.ru/tramka.phtml?tnew=7")

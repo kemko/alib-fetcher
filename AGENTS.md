@@ -162,7 +162,7 @@ Optional defaults:
 | `RUN_ON_STARTUP` | `true` | whether service mode runs one digest cycle immediately after startup |
 | `FRESH_BOOKS` | empty | optional inclusive `✨` threshold: `age:N` or `since:YYYY`; empty disables only `✨` |
 | `STATE_PATH` | `/var/lib/alib-fetcher/state.db` | bbolt database; parent directories are created with mode `0750`, DB with `0600` |
-| `ALIB_URL` | `https://www.alib.ru/tramka.phtml?tnew=7` | One HTTP(S) source or comma-separated list; surrounding whitespace is trimmed, literal commas must use `%2C` |
+| `ALIB_URL` | `https://www.alib.ru/tramka.phtml?tnew=7` | One HTTP(S) source or comma-separated list; surrounding whitespace is trimmed, literal commas must use `%2C`, URL userinfo is rejected |
 | `ALIB_REQUEST_INTERVAL` | `1s` | Non-negative Go duration between sequential Alib requests; `0s` disables the delay |
 | `TELEGRAM_API_BASE` | `https://api.telegram.org` | HTTP(S) API base; override it in tests |
 | `HTTP_TIMEOUT` | `30s` | positive Go duration applied per external request |
@@ -229,8 +229,9 @@ Structured logs go to stdout. Stable event names are `scheduler.started`,
 `state.forget_latest.completed`, and `service.failed`; digest completion fields
 are `fetched`, `new`, `pruned`, and `sent`, while forget-latest completion fields
 are `requested` and `deleted`. `alib.page_failed` includes the zero-based
-`index`, endpoint `url`, and `error`. Keep slog attributes typed, snake_case,
-and free of secrets.
+`index`, query-free endpoint `url`, and `error`; userinfo, query parameters, and
+fragments are omitted from failure logs and errors. Keep slog attributes typed,
+snake_case, and free of secrets.
 
 ## Development and verification
 

@@ -69,16 +69,6 @@ type Config struct {
 	RunOnStartup        bool
 }
 
-type validatedOptions struct {
-	location            *time.Location
-	freshBooks          *FreshBooksPolicy
-	cronSpec            string
-	alibRequestInterval time.Duration
-	httpTimeout         time.Duration
-	messageLimit        int
-	runOnStartup        bool
-}
-
 // Load reads and validates process environment variables.
 func Load() (Config, error) {
 	token := os.Getenv("TELEGRAM_BOT_TOKEN")
@@ -93,71 +83,56 @@ func Load() (Config, error) {
 		)
 	}
 
-	options, err := loadValidatedOptions()
-	if err != nil {
-		return Config{}, err
+	settings := Config{
+		TelegramToken:   token,
+		TelegramChatID:  chatID,
+		TelegramAPIBase: valueOrDefault("TELEGRAM_API_BASE", defaultTelegramAPIBase),
+		AlibURL:         valueOrDefault("ALIB_URL", defaultAlibURL),
+		StatePath:       LoadStatePath(),
 	}
 
-	return Config{
-		TelegramToken:       token,
-		TelegramChatID:      chatID,
-		TelegramAPIBase:     valueOrDefault("TELEGRAM_API_BASE", defaultTelegramAPIBase),
-		AlibURL:             valueOrDefault("ALIB_URL", defaultAlibURL),
-		AlibRequestInterval: options.alibRequestInterval,
-		StatePath:           LoadStatePath(),
-		Location:            options.location,
-		FreshBooks:          options.freshBooks,
-		HTTPTimeout:         options.httpTimeout,
-		MessageLimit:        options.messageLimit,
-		RunOnStartup:        options.runOnStartup,
-		cronSpec:            options.cronSpec,
-	}, nil
+	return loadValidatedConfig(settings)
 }
 
-func loadValidatedOptions() (validatedOptions, error) {
-	cronSpec := valueOrDefault("CRON_SCHEDULE", defaultCronSchedule)
-	if _, err := cron.ParseStandard(cronSpec); err != nil {
-		return validatedOptions{}, fmt.Errorf("%w: CRON_SCHEDULE must be a valid cron expression: %w", ErrInvalid, err)
+func loadValidatedConfig(settings Config) (Config, error) {
+	settings.cronSpec = valueOrDefault("CRON_SCHEDULE", defaultCronSchedule)
+	if _, err := cron.ParseStandard(settings.cronSpec); err != nil {
+		return Config{}, fmt.Errorf("%w: CRON_SCHEDULE must be a valid cron expression: %w", ErrInvalid, err)
 	}
 
 	location, err := time.LoadLocation(valueOrDefault("TIMEZONE", defaultTimezone))
 	if err != nil {
-		return validatedOptions{}, fmt.Errorf("%w: load TIMEZONE: %w", ErrInvalid, err)
+		return Config{}, fmt.Errorf("%w: load TIMEZONE: %w", ErrInvalid, err)
 	}
-	timeout, err := parsePositiveDuration("HTTP_TIMEOUT", defaultHTTPTimeout)
+	settings.Location = location
+	settings.HTTPTimeout, err = parsePositiveDuration("HTTP_TIMEOUT", defaultHTTPTimeout)
 	if err != nil {
-		return validatedOptions{}, err
+		return Config{}, err
 	}
-	alibRequestInterval, err := parseNonNegativeDuration("ALIB_REQUEST_INTERVAL", defaultAlibRequestInterval)
+	settings.AlibRequestInterval, err = parseNonNegativeDuration(
+		"ALIB_REQUEST_INTERVAL",
+		defaultAlibRequestInterval,
+	)
 	if err != nil {
-		return validatedOptions{}, err
+		return Config{}, err
 	}
-	messageLimit, err := parseMessageLimit()
+	settings.MessageLimit, err = parseMessageLimit()
 	if err != nil {
-		return validatedOptions{}, err
+		return Config{}, err
 	}
-	runOnStartup, err := parseRunOnStartup()
+	settings.RunOnStartup, err = parseRunOnStartup()
 	if err != nil {
-		return validatedOptions{}, err
+		return Config{}, err
 	}
-	freshBooksPolicy, freshBooksConfigured, err := parseFreshBooksSetting()
-	if err != nil {
-		return validatedOptions{}, err
-	}
-	var freshBooks *FreshBooksPolicy
-	if freshBooksConfigured {
-		freshBooks = &freshBooksPolicy
+	if value := os.Getenv("FRESH_BOOKS"); value != "" {
+		policy, parseErr := parseFreshBooks(value)
+		if parseErr != nil {
+			return Config{}, fmt.Errorf("%w: FRESH_BOOKS %w", ErrInvalid, parseErr)
+		}
+		settings.FreshBooks = &policy
 	}
 
-	return validatedOptions{
-		cronSpec:            cronSpec,
-		location:            location,
-		freshBooks:          freshBooks,
-		alibRequestInterval: alibRequestInterval,
-		httpTimeout:         timeout,
-		messageLimit:        messageLimit,
-		runOnStartup:        runOnStartup,
-	}, nil
+	return settings, nil
 }
 
 func parsePositiveDuration(name string, defaultValue time.Duration) (time.Duration, error) {
@@ -194,20 +169,6 @@ func parseRunOnStartup() (bool, error) {
 	}
 
 	return value, nil
-}
-
-func parseFreshBooksSetting() (FreshBooksPolicy, bool, error) {
-	value := os.Getenv("FRESH_BOOKS")
-	if value == "" {
-		return FreshBooksPolicy{}, false, nil
-	}
-
-	policy, err := parseFreshBooks(value)
-	if err != nil {
-		return FreshBooksPolicy{}, false, fmt.Errorf("%w: FRESH_BOOKS %w", ErrInvalid, err)
-	}
-
-	return policy, true, nil
 }
 
 // LoadStatePath reads the state database path without validating the rest of the

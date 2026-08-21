@@ -456,7 +456,7 @@ func Test_run_once_fetches_multiple_urls_and_sends_partial_deduplicated_result(t
 	requireRefreshButton(t, message)
 	require.Contains(t, logs.String(), `"msg":"alib.page_failed"`)
 	require.Contains(t, logs.String(), `"index":1`)
-	require.Contains(t, logs.String(), `"url":"`+alibServer.URL+`/broken?scope=two"`)
+	require.Contains(t, logs.String(), `"url":"`+alibServer.URL+`/broken"`)
 	require.Contains(t, logs.String(), `"msg":"digest.completed"`)
 	require.Contains(t, logs.String(), `"fetched":3`)
 	require.Contains(t, logs.String(), `"new":3`)

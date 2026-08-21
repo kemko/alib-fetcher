@@ -1,10 +1,11 @@
 # alib-fetcher
 
-Always-on Go service that fetches the latest listings from
-[`alib.ru/tramka.phtml?tnew=7`](https://www.alib.ru/tramka.phtml?tnew=7) and
-delivers unseen books to a Telegram chat as Rich Messages on a configurable
-cron schedule. Delivered listings are tracked by their unique `Купить` link in
-an embedded bbolt database, which also stores the pending send queue.
+Always-on Go service that fetches the latest listings from one or more Alib
+pages, defaulting to
+[`alib.ru/tramka.phtml?tnew=7`](https://www.alib.ru/tramka.phtml?tnew=7), and
+delivers unseen books to a Telegram chat as Rich Messages on a configurable cron
+schedule. Delivered listings are tracked by their unique `Купить` link in an
+embedded bbolt database, which also stores the pending send queue.
 
 ## Configuration
 
@@ -28,7 +29,7 @@ plain text without `@`, an empty `@` username, whitespace, and numeric overflow,
 fail fast with an error naming `TELEGRAM_CHAT_ID`.
 `ALIB_URL` accepts one URL or a comma-separated list. Surrounding whitespace is
 trimmed, URL order is preserved, and literal commas must be percent-encoded as
-`%2C`. For example:
+`%2C`. URL userinfo is rejected. For example:
 
 ```bash
 ALIB_URL='https://example.com/first?tag=one&sort=new, https://example.com/second?tnew=7' \
@@ -40,11 +41,12 @@ preserved. The interval applies
 only between requests, including after a failed page; a single URL is not
 delayed. Successful listings are combined in first-seen order and deduplicated
 by their `Купить` URL, keeping the first copy. A failed page is logged as
-`alib.page_failed` with its zero-based `index`, `url`, and `error`, then the
-remaining pages are attempted. A valid search page with no listings counts as a
-successful empty result. The fetch fails only when every configured page fails
-or the context is canceled; successful pages still produce a partial result
-when other pages fail.
+`alib.page_failed` with its zero-based `index`, query-free `url`, and `error`,
+then the remaining pages are attempted. Userinfo, query parameters, and fragments
+are omitted from failure logs and errors. A valid search page with no listings
+counts as a successful empty result. The fetch fails only when every configured
+page fails or the context is canceled; successful pages still produce a partial
+result when other pages fail.
 `FRESH_BOOKS=age:N` marks publication years from the current local year minus
 non-negative `N`, inclusive. For example, in 2026, `age:5` includes 2021.
 `FRESH_BOOKS=since:YYYY` uses the given four-digit year as the inclusive lower
