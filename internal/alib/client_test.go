@@ -316,11 +316,13 @@ func Test_Client_does_not_expose_query_credentials_from_malformed_redirect(t *te
 	require.Contains(t, logs.String(), "url="+server.URL+"/redirect")
 }
 
-func Test_Client_continues_after_page_failures_and_logs_each_failure(t *testing.T) {
+func Test_Client_downloads_all_pages_before_parsing_and_logs_outcomes(t *testing.T) {
 	// Given
 	var requests []string
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	emptyPage, err := os.ReadFile("testdata/empty.html")
+	require.NoError(t, err)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		requests = append(requests, request.URL.Path)
 		switch request.URL.Path {
@@ -328,21 +330,26 @@ func Test_Client_continues_after_page_failures_and_logs_each_failure(t *testing.
 			writer.WriteHeader(http.StatusBadGateway)
 		case "/broken":
 			writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_, err := writer.Write([]byte("<html><body>changed</body></html>"))
-			assert.NoError(t, err)
+			_, writeErr := writer.Write([]byte("<html><body>changed</body></html>"))
+			assert.NoError(t, writeErr)
 		case "/success":
 			writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_, err := writer.Write([]byte(listingPage("Success", "/success-book.html", "100 руб.")))
-			assert.NoError(t, err)
+			_, writeErr := writer.Write([]byte(listingPage("Success", "/success-book.html", "100 руб.")))
+			assert.NoError(t, writeErr)
+		case "/empty":
+			writer.Header().Set("Content-Type", "text/html; charset=windows-1251")
+			_, writeErr := writer.Write(emptyPage)
+			assert.NoError(t, writeErr)
 		}
 	}))
 	t.Cleanup(server.Close)
 	client, err := alib.NewClient(
 		strings.Join([]string{
-			server.URL + "/before",
-			server.URL + "/broken",
-			server.URL + "/success",
-			server.URL + "/after",
+			server.URL + "/before?access_token=top-secret",
+			server.URL + "/broken?scope=broken",
+			server.URL + "/success?scope=success",
+			server.URL + "/empty?scope=empty",
+			server.URL + "/after?scope=after",
 		}, ","),
 		time.Second,
 		0,
@@ -355,15 +362,25 @@ func Test_Client_continues_after_page_failures_and_logs_each_failure(t *testing.
 
 	// Then
 	require.NoError(t, err)
-	require.Equal(t, []string{"/before", "/broken", "/success", "/after"}, requests)
+	require.Equal(t, []string{"/before", "/broken", "/success", "/empty", "/after"}, requests)
 	require.Equal(t, []alib.Book{{Title: "Success", Price: "100 руб.", BuyURL: server.URL + "/success-book.html"}}, books)
-	require.Equal(t, 3, strings.Count(logs.String(), "msg=alib.page_failed"))
-	require.Contains(t, logs.String(), "index=0")
-	require.Contains(t, logs.String(), "index=1")
-	require.Contains(t, logs.String(), "index=3")
-	require.Contains(t, logs.String(), "url="+server.URL+"/before")
-	require.Contains(t, logs.String(), "url="+server.URL+"/broken")
-	require.Contains(t, logs.String(), "url="+server.URL+"/after")
+	logOutput := logs.String()
+	require.Equal(t, 3, strings.Count(logOutput, "msg=alib.page_downloaded"))
+	require.Equal(t, 2, strings.Count(logOutput, "msg=alib.page_download_failed"))
+	require.Equal(t, 1, strings.Count(logOutput, "msg=alib.page_parse_failed"))
+	require.Equal(t, 2, strings.Count(logOutput, "msg=alib.page_parsed"))
+	require.Contains(t, logOutput, "msg=alib.page_download_failed index=0")
+	require.Contains(t, logOutput, "msg=alib.page_parse_failed index=1")
+	require.Contains(t, logOutput, "msg=alib.page_download_failed index=4")
+	require.Contains(t, logOutput, "msg=alib.page_parsed index=2")
+	require.Contains(t, logOutput, "msg=alib.page_parsed index=3")
+	require.Contains(t, logOutput, "msg=alib.page_parsed index=3 url="+server.URL+"/empty books=0")
+	require.Less(t,
+		strings.Index(logOutput, "msg=alib.page_download_failed index=4"),
+		strings.Index(logOutput, "msg=alib.page_parse_failed index=1"),
+	)
+	require.NotContains(t, logOutput, "top-secret")
+	require.NotContains(t, logOutput, "scope=broken")
 }
 
 func Test_Client_accepts_all_correct_empty_pages(t *testing.T) {

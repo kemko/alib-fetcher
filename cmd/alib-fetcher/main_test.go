@@ -454,7 +454,7 @@ func Test_run_once_fetches_multiple_urls_and_sends_partial_deduplicated_result(t
 	require.Less(t, strings.Index(richHTML, "Общий первый"), strings.Index(richHTML, "Последний"))
 	require.NotContains(t, richHTML, "Общий второй")
 	requireRefreshButton(t, message)
-	require.Contains(t, logs.String(), `"msg":"alib.page_failed"`)
+	require.Contains(t, logs.String(), `"msg":"alib.page_download_failed"`)
 	require.Contains(t, logs.String(), `"index":1`)
 	require.Contains(t, logs.String(), `"url":"`+alibServer.URL+`/broken"`)
 	require.Contains(t, logs.String(), `"msg":"digest.completed"`)
@@ -559,7 +559,7 @@ func Test_run_once_fails_after_requesting_and_logging_all_failed_pages(t *testin
 		<-alibRequests,
 	})
 	require.Empty(t, telegramRequests)
-	require.Equal(t, 3, strings.Count(logs.String(), `"msg":"alib.page_failed"`))
+	require.Equal(t, 2, strings.Count(logs.String(), `"msg":"alib.page_download_failed"`))
 	require.Contains(t, logs.String(), `"url":"`+alibServer.URL+`/status-one"`)
 	require.Contains(t, logs.String(), `"url":"`+alibServer.URL+`/broken"`)
 	require.Contains(t, logs.String(), `"url":"`+alibServer.URL+`/status-two"`)

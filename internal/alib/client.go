@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -15,6 +16,7 @@ const (
 	logKeyError = "error"
 	logKeyIndex = "index"
 	logKeyURL   = "url"
+	logKeyBooks = "books"
 )
 
 // ErrUnexpectedStatus indicates that Alib.ru did not return an HTTP 200 response.
@@ -26,6 +28,14 @@ type Client struct {
 	logger          *slog.Logger
 	endpoints       []*url.URL
 	requestInterval time.Duration
+}
+
+//nolint:govet // Keep endpoint, body, and content type together between phases.
+type downloadedPage struct {
+	index       int
+	endpoint    *url.URL
+	body        string
+	contentType string
 }
 
 // NewClient builds an Alib.ru client with a bounded request timeout.
@@ -72,36 +82,32 @@ func NewClient(rawURLs string, timeout, requestInterval time.Duration, logger *s
 	}, nil
 }
 
-// Fetch downloads and parses configured listings pages in order.
+// Fetch downloads all configured pages and then parses successful responses in order.
 func (c *Client) Fetch(ctx context.Context) ([]Book, error) {
-	books := make([]Book, 0)
-	seen := make(map[string]struct{})
+	downloaded := make([]downloadedPage, 0, len(c.endpoints))
 	pageErrors := make([]error, 0, len(c.endpoints))
 
 	for index, endpoint := range c.endpoints {
-		pageBooks, err := c.fetchPage(ctx, endpoint)
+		page, err := c.downloadPage(ctx, index, endpoint)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
 
 			safeURL := endpointForLog(endpoint)
-			pageErr := fmt.Errorf("fetch alib URL %q: %w", safeURL, err)
+			pageErr := fmt.Errorf("download alib URL %q: %w", safeURL, err)
 			pageErrors = append(pageErrors, pageErr)
-			c.logger.ErrorContext(ctx, "alib.page_failed",
+			c.logger.ErrorContext(ctx, "alib.page_download_failed",
 				slog.Int(logKeyIndex, index),
 				slog.String(logKeyURL, safeURL),
 				slog.Any(logKeyError, err),
 			)
 		} else {
-			for _, book := range pageBooks {
-				if _, exists := seen[book.BuyURL]; exists {
-					continue
-				}
-
-				seen[book.BuyURL] = struct{}{}
-				books = append(books, book)
-			}
+			downloaded = append(downloaded, *page)
+			c.logger.InfoContext(ctx, "alib.page_downloaded",
+				slog.Int(logKeyIndex, index),
+				slog.String(logKeyURL, endpointForLog(endpoint)),
+			)
 		}
 
 		if index == len(c.endpoints)-1 {
@@ -112,17 +118,49 @@ func (c *Client) Fetch(ctx context.Context) ([]Book, error) {
 		}
 	}
 
-	if len(pageErrors) == len(c.endpoints) {
+	books := make([]Book, 0)
+	seen := make(map[string]struct{})
+	parsedPages := 0
+	for _, page := range downloaded {
+		pageBooks, err := Parse(strings.NewReader(page.body), page.endpoint, page.contentType)
+		if err != nil {
+			pageErr := fmt.Errorf("parse alib URL %q: %w", endpointForLog(page.endpoint), err)
+			pageErrors = append(pageErrors, pageErr)
+			c.logger.ErrorContext(ctx, "alib.page_parse_failed",
+				slog.Int(logKeyIndex, page.index),
+				slog.String(logKeyURL, endpointForLog(page.endpoint)),
+				slog.Any(logKeyError, err),
+			)
+			continue
+		}
+
+		parsedPages++
+		c.logger.InfoContext(ctx, "alib.page_parsed",
+			slog.Int(logKeyIndex, page.index),
+			slog.String(logKeyURL, endpointForLog(page.endpoint)),
+			slog.Int(logKeyBooks, len(pageBooks)),
+		)
+		for _, book := range pageBooks {
+			if _, exists := seen[book.BuyURL]; exists {
+				continue
+			}
+
+			seen[book.BuyURL] = struct{}{}
+			books = append(books, book)
+		}
+	}
+
+	if parsedPages == 0 {
 		return nil, errors.Join(pageErrors...)
 	}
 
 	return books, nil
 }
 
-func (c *Client) fetchPage(ctx context.Context, endpoint *url.URL) ([]Book, error) {
+func (c *Client) downloadPage(ctx context.Context, index int, endpoint *url.URL) (*downloadedPage, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
-		return nil, fmt.Errorf("create alib request: %w", err)
+		return nil, fmt.Errorf("create alib request %d: %w", index, err)
 	}
 	request.Header.Set("User-Agent", "alib-fetcher/1.0")
 
@@ -139,15 +177,24 @@ func (c *Client) fetchPage(ctx context.Context, endpoint *url.URL) ([]Book, erro
 		return nil, fetchErr
 	}
 
-	books, fetchErr := Parse(response.Body, endpoint, response.Header.Get("Content-Type"))
-	if closeErr := response.Body.Close(); closeErr != nil {
-		fetchErr = errors.Join(fetchErr, fmt.Errorf("close alib response: %w", closeErr))
-	}
-	if fetchErr != nil {
-		return nil, fmt.Errorf("parse alib response: %w", fetchErr)
+	body, err := io.ReadAll(response.Body)
+	closeErr := response.Body.Close()
+	if err != nil || closeErr != nil {
+		if err != nil {
+			err = fmt.Errorf("read alib response: %w", err)
+		}
+		if closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close alib response: %w", closeErr))
+		}
+		return nil, err
 	}
 
-	return books, nil
+	return &downloadedPage{
+		index:       index,
+		endpoint:    endpoint,
+		body:        string(body),
+		contentType: response.Header.Get("Content-Type"),
+	}, nil
 }
 
 func endpointForLog(endpoint *url.URL) string {
