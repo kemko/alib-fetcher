@@ -216,6 +216,56 @@ func Test_Service_sends_only_final_chunk_with_sound(t *testing.T) {
 	require.Equal(t, []bool{false, false, true}, sender.attachRefresh)
 }
 
+func Test_Service_sorts_pending_books_by_publication_year_before_chunking(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	now := time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC)
+	books := []alib.Book{
+		{Title: "Без года", PublicationYear: 0, BuyURL: "https://example.com/zero"},
+		{Title: "2022 первая", PublicationYear: 2022, BuyURL: "https://example.com/2022-first"},
+		{Title: "2024", PublicationYear: 2024, BuyURL: "https://example.com/2024"},
+		{Title: "2022 вторая", PublicationYear: 2022, BuyURL: "https://example.com/2022-second"},
+		{Title: "2026", PublicationYear: 2026, BuyURL: "https://example.com/2026"},
+	}
+	expectedOrder := []alib.Book{books[4], books[2], books[1], books[3], books[0]}
+	messageLimit := 170
+	expectedChunks, err := digest.Render(expectedOrder, digest.Options{LocalTime: now, Limit: messageLimit})
+	require.NoError(t, err)
+	require.Len(t, expectedChunks, len(expectedOrder))
+	state := &fakeState{pending: books, recordedNew: len(books)}
+	sender := &fakeSender{}
+	service := app.NewService(app.Dependencies{
+		Fetcher:      fakeFetcher{books: books},
+		State:        state,
+		Sender:       sender,
+		MessageLimit: messageLimit,
+		Now:          func() time.Time { return now },
+	})
+
+	// When
+	result, runErr := service.Run(context.Background())
+
+	// Then
+	require.NoError(t, runErr)
+	require.Equal(t, app.Result{Fetched: len(books), New: len(books), Sent: len(books)}, result)
+	require.Equal(t, books, state.pending)
+	require.Equal(t, expectedOrder, state.marked)
+	require.Equal(t, now, state.markedAt)
+	require.Equal(t, expectedChunkTexts(expectedChunks), sender.messages)
+	require.Equal(t, []bool{true, true, true, true, false}, sender.silent)
+	require.Equal(t, []bool{false, false, false, false, true}, sender.attachRefresh)
+}
+
+func expectedChunkTexts(chunks []digest.Chunk) []string {
+	texts := make([]string, 0, len(chunks))
+	for _, chunk := range chunks {
+		texts = append(texts, chunk.Text)
+	}
+
+	return texts
+}
+
 func Test_Service_sends_later_chunk_that_fits_only_without_header(t *testing.T) {
 	t.Parallel()
 

@@ -119,9 +119,9 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 			require.Equal(t, "-100123", payload.ChatID)
 			require.False(t, payload.DisableNotification)
 			richHTML := payload.RichMessage.HTML
-			firstBook := fmt.Sprintf("🔥 <b>Горячая книга.</b> М., %d г.", currentYear)
-			secondBook := testCase.freshEmoji + "<b>Свежая книга.</b>"
-			thirdBook := fmt.Sprintf("🛸 <b>Будущая книга.</b> М., %d г.", futureYear)
+			firstBook := fmt.Sprintf("🛸 <b>Будущая книга.</b> М., %d г.", futureYear)
+			secondBook := fmt.Sprintf("🔥 <b>Горячая книга.</b> М., %d г.", currentYear)
+			thirdBook := testCase.freshEmoji + "<b>Свежая книга.</b>"
 			firstBookIndex := strings.Index(richHTML, firstBook)
 			secondBookIndex := strings.Index(richHTML, secondBook)
 			thirdBookIndex := strings.Index(richHTML, thirdBook)
@@ -157,7 +157,7 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 			require.NotRegexp(t, `[\r\n]`, richHTML)
 			require.True(
 				t,
-				strings.HasSuffix(richHTML, `<a href="`+alibServer.URL+`/future.html">Купить</a>`),
+				strings.HasSuffix(richHTML, `<a href="`+alibServer.URL+`/fresh.html">Купить</a>`),
 			)
 			requireRefreshButton(t, payload)
 			require.Contains(t, logs.String(), "digest.completed")

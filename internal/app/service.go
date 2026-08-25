@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -98,6 +99,19 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 	if len(pending) == 0 {
 		return result, nil
 	}
+
+	pending = append([]alib.Book(nil), pending...)
+	sort.SliceStable(pending, func(i, j int) bool {
+		left, right := pending[i].PublicationYear, pending[j].PublicationYear
+		if left == 0 {
+			return false
+		}
+		if right == 0 {
+			return true
+		}
+
+		return left > right
+	})
 
 	chunks, skippedBuyURLs, err := digest.RenderSendable(pending, renderOptions)
 	if err != nil {
