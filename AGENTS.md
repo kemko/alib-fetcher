@@ -23,8 +23,10 @@ One digest cycle is deliberately ordered as follows:
 4. Record fetched listings in bbolt as JSON records, preserving sent status.
 5. Load all pending records from bbolt in first-discovery order, including
    books from earlier failed cycles.
-6. Render pending books into Telegram-sized chunks.
-7. Send each chunk and mark only that chunk's books as delivered, only after
+6. Sort pending books by publication year descending, preserving first-discovery
+   order for equal years and placing year `0` last.
+7. Render pending books into Telegram-sized chunks.
+8. Send each chunk and mark only that chunk's books as delivered, only after
    Telegram accepts it.
 
 Preserve these semantics:
@@ -35,8 +37,9 @@ Preserve these semantics:
   are not stable deduplication keys.
 - A failed Telegram chunk must remain pending so a later cycle can retry it.
   Earlier successfully sent chunks stay acknowledged.
-- Pending delivery order is the first-discovery/source order, not bbolt key
-  sort order.
+- `State.Pending` returns records in first-discovery/source order, not bbolt key
+  sort order; the digest sends them by publication year descending, with stable
+  first-discovery order for equal years and unrecognized year `0` last.
 - A pending listing that cannot fit one Telegram message remains pending and
   must not block other renderable pending listings.
 - When a digest has multiple chunks, all but the last are sent silently; the
