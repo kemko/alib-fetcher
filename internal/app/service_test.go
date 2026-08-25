@@ -222,13 +222,27 @@ func Test_Service_sorts_pending_books_by_publication_year_before_chunking(t *tes
 	// Given
 	now := time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC)
 	books := []alib.Book{
-		{Title: "Без года", PublicationYear: 0, BuyURL: "https://example.com/zero"},
+		{Title: "Без года первая", PublicationYear: 0, BuyURL: "https://example.com/zero-first"},
 		{Title: "2022 первая", PublicationYear: 2022, BuyURL: "https://example.com/2022-first"},
 		{Title: "2024", PublicationYear: 2024, BuyURL: "https://example.com/2024"},
 		{Title: "2022 вторая", PublicationYear: 2022, BuyURL: "https://example.com/2022-second"},
 		{Title: "2026", PublicationYear: 2026, BuyURL: "https://example.com/2026"},
+		{Title: "Без года вторая", PublicationYear: 0, BuyURL: "https://example.com/zero-second"},
+		{Title: "2022 третья", PublicationYear: 2022, BuyURL: "https://example.com/2022-third"},
+		{Title: "2023 первая", PublicationYear: 2023, BuyURL: "https://example.com/2023-first"},
+		{Title: "2022 четвёртая", PublicationYear: 2022, BuyURL: "https://example.com/2022-fourth"},
+		{Title: "2023 вторая", PublicationYear: 2023, BuyURL: "https://example.com/2023-second"},
+		{Title: "2021", PublicationYear: 2021, BuyURL: "https://example.com/2021"},
+		{Title: "2022 пятая", PublicationYear: 2022, BuyURL: "https://example.com/2022-fifth"},
+		{Title: "2025", PublicationYear: 2025, BuyURL: "https://example.com/2025"},
+		{Title: "Без года третья", PublicationYear: 0, BuyURL: "https://example.com/zero-third"},
+		{Title: "2022 шестая", PublicationYear: 2022, BuyURL: "https://example.com/2022-sixth"},
 	}
-	expectedOrder := []alib.Book{books[4], books[2], books[1], books[3], books[0]}
+	originalOrder := append([]alib.Book(nil), books...)
+	expectedOrder := []alib.Book{
+		books[4], books[12], books[2], books[7], books[9], books[1], books[3], books[6],
+		books[8], books[11], books[14], books[10], books[0], books[5], books[13],
+	}
 	messageLimit := 170
 	expectedChunks, err := digest.Render(expectedOrder, digest.Options{LocalTime: now, Limit: messageLimit})
 	require.NoError(t, err)
@@ -249,12 +263,16 @@ func Test_Service_sorts_pending_books_by_publication_year_before_chunking(t *tes
 	// Then
 	require.NoError(t, runErr)
 	require.Equal(t, app.Result{Fetched: len(books), New: len(books), Sent: len(books)}, result)
-	require.Equal(t, books, state.pending)
+	require.Equal(t, originalOrder, state.pending)
 	require.Equal(t, expectedOrder, state.marked)
 	require.Equal(t, now, state.markedAt)
 	require.Equal(t, expectedChunkTexts(expectedChunks), sender.messages)
-	require.Equal(t, []bool{true, true, true, true, false}, sender.silent)
-	require.Equal(t, []bool{false, false, false, false, true}, sender.attachRefresh)
+	require.Len(t, sender.silent, len(expectedOrder))
+	require.NotContains(t, sender.silent[:len(sender.silent)-1], false)
+	require.False(t, sender.silent[len(sender.silent)-1])
+	require.Len(t, sender.attachRefresh, len(expectedOrder))
+	require.NotContains(t, sender.attachRefresh[:len(sender.attachRefresh)-1], true)
+	require.True(t, sender.attachRefresh[len(sender.attachRefresh)-1])
 }
 
 func expectedChunkTexts(chunks []digest.Chunk) []string {
