@@ -100,18 +100,7 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 		return result, nil
 	}
 
-	pending = append([]alib.Book(nil), pending...)
-	sort.SliceStable(pending, func(i, j int) bool {
-		left, right := pending[i].PublicationYear, pending[j].PublicationYear
-		if left == 0 {
-			return false
-		}
-		if right == 0 {
-			return true
-		}
-
-		return left > right
-	})
+	pending = sortPending(pending)
 
 	chunks, skippedBuyURLs, err := digest.RenderSendable(pending, renderOptions)
 	if err != nil {
@@ -142,6 +131,23 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 	}
 
 	return result, nil
+}
+
+func sortPending(pending []alib.Book) []alib.Book {
+	pending = append([]alib.Book(nil), pending...)
+	sort.SliceStable(pending, func(i, j int) bool {
+		left, right := pending[i].PublicationYear, pending[j].PublicationYear
+		if left == 0 {
+			return false
+		}
+		if right == 0 {
+			return true
+		}
+
+		return left > right
+	})
+
+	return pending
 }
 
 func (s *Service) renderOptions(cycleTime time.Time) digest.Options {
