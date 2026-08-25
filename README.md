@@ -83,14 +83,17 @@ regular expressions. Existing records keep their sent status while refreshing
 the parsed payload from the latest source pages. The first successful run records
 every listing currently present on those pages as pending and sends them.
 
-Sending reads every pending record from the database in first-discovery order,
-not only books found in the current fetch result. Books that could not be sent
-remain pending across later digest cycles. A chunk is acknowledged only after
-Telegram accepts it, and then its records become sent. Sent records older than
-14 days are removed once at the beginning of every digest cycle; pending records
-are not removed by retention pruning. If one pending listing cannot fit in a
-Telegram message, other renderable pending listings are still sent while the
-oversized listing remains pending and the cycle reports the rendering error.
+`Store.Pending` returns every pending record in first-discovery order, not only
+books found in the current fetch result. Before rendering, the service sorts
+those books by publication year in descending order. Equal years retain their
+first-discovery order, and an unrecognized year (`0`) is placed last. Books that
+could not be sent remain pending across later digest cycles. A chunk is
+acknowledged only after Telegram accepts it, and then its records become sent.
+Sent records older than 14 days are removed once at the beginning of every
+digest cycle; pending records are not removed by retention pruning. If one
+pending listing cannot fit in a Telegram message, other renderable pending
+listings are still sent while the oversized listing remains pending and the
+cycle reports the rendering error.
 Telegram operations use the pinned
 [`github.com/go-telegram/bot`](https://github.com/go-telegram/bot) v1.23.0 SDK.
 Each Telegram Rich Message is sent through its `SendRichMessage` method with
