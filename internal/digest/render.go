@@ -114,11 +114,15 @@ func renderBook(book alib.Book, options Options) string {
 		details = append(details, renderMultilineText(condition))
 	}
 	if len(book.PhotoURLs) > 0 {
-		details = append(details, "Фото: есть")
-	} else {
-		details = append(details, "Фото: нет")
+		photoLinks := make([]string, 0, len(book.PhotoURLs))
+		for _, photoURL := range book.PhotoURLs {
+			photoLinks = append(photoLinks, renderLink(photoURL, "фото"))
+		}
+		details = append(details, "Смотрите: "+strings.Join(photoLinks, " - "))
 	}
-	sections = append(sections, strings.Join(details, lineBreak))
+	if len(details) > 0 {
+		sections = append(sections, strings.Join(details, lineBreak))
+	}
 	sections = append(sections, renderLink(book.BuyURL, "Купить"))
 
 	return strings.Join(sections, sectionBreak)

@@ -33,7 +33,7 @@ func Test_Service_marks_each_chunk_only_after_delivery(t *testing.T) {
 		Fetcher:      fakeFetcher{books: books},
 		State:        state,
 		Sender:       sender,
-		MessageLimit: 180,
+		MessageLimit: 150,
 		Now:          func() time.Time { return now },
 	})
 
@@ -189,7 +189,7 @@ func Test_Service_sends_only_final_chunk_with_sound(t *testing.T) {
 		Fetcher:      fakeFetcher{books: books},
 		State:        state,
 		Sender:       sender,
-		MessageLimit: 170,
+		MessageLimit: 130,
 		Now:          func() time.Time { return now },
 	})
 
@@ -243,7 +243,7 @@ func Test_Service_sorts_pending_books_by_publication_year_before_chunking(t *tes
 		books[4], books[12], books[2], books[7], books[9], books[1], books[3], books[6],
 		books[8], books[11], books[14], books[10], books[0], books[5], books[13],
 	}
-	messageLimit := 170
+	messageLimit := 130
 	expectedChunks, err := digest.Render(expectedOrder, digest.Options{LocalTime: now, Limit: messageLimit})
 	require.NoError(t, err)
 	require.Len(t, expectedChunks, len(expectedOrder))
@@ -479,7 +479,7 @@ func Test_Service_waits_and_retries_only_rate_limited_chunk(t *testing.T) {
 
 			return nil
 		},
-		MessageLimit: 170,
+		MessageLimit: 130,
 	})
 
 	// When

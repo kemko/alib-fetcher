@@ -485,7 +485,7 @@ func Test_Open_leaves_valid_json_records_unchanged(t *testing.T) {
 			"text_before_buy": "Stored before buy",
 			"buy_url": "https://example.com/json-record",
 			"text_after_buy": "Stored after buy",
-			"has_photos": true
+			"photo_urls": ["https://example.com/legacy-photo"]
 		},
 		"observed_at": %d,
 		"sent_at": %d,
@@ -501,6 +501,33 @@ func Test_Open_leaves_valid_json_records_unchanged(t *testing.T) {
 
 	// Then
 	require.JSONEq(t, record, string(readRawRecord(t, path, buyURL)))
+}
+
+func Test_Open_ignores_legacy_has_photos_without_fabricating_photo_url(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	path := filepath.Join(t.TempDir(), "state.db")
+	buyURL := "https://example.com/legacy-photo-marker"
+	record := []byte(fmt.Sprintf(`{
+		"book": {
+			"title": "Legacy title",
+			"buy_url": %q,
+			"has_photos": true
+		},
+		"sent": true
+	}`, buyURL))
+	require.NoError(t, writeLegacyMarker(path, buyURL, record))
+
+	// When
+	db, err := store.Open(path, time.Now())
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+	stored := readStoredRecord(t, path, buyURL)
+
+	// Then
+	require.Empty(t, stored.Book.PhotoURLs)
+	require.Equal(t, record, readRawRecord(t, path, buyURL))
 }
 
 func Test_Store_loads_legacy_pending_record_and_rewrites_it_only_on_mutating_write(t *testing.T) {
@@ -520,7 +547,7 @@ func Test_Store_loads_legacy_pending_record_and_rewrites_it_only_on_mutating_wri
 			"text_before_buy": ", Moscow.) Цена: 250 rub.",
 			"buy_url": %q,
 			"text_after_buy": "\nLegacy content\nСостояние: Legacy condition",
-			"has_photos": true
+			"photo_urls": ["https://example.com/legacy-photo"]
 		},
 		"observed_at": %d,
 		"queue_order": 27,
@@ -555,7 +582,7 @@ func Test_Store_loads_legacy_pending_record_and_rewrites_it_only_on_mutating_wri
 		Price:           "250 rub.",
 		Condition:       "Состояние: Legacy condition",
 		BuyURL:          buyURL,
-		PhotoURLs:       nil,
+		PhotoURLs:       []string{"https://example.com/legacy-photo"},
 	}
 	require.Equal(t, []alib.Book{expectedPending}, pending)
 	require.Equal(t, []byte(legacyRecord), rawAfterOpen)
