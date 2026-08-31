@@ -17,8 +17,8 @@ type Book struct {
 	Price           string   `json:"price,omitempty"`
 	Condition       string   `json:"condition,omitempty"`
 	BuyURL          string   `json:"buy_url"`
-	PublicationYear int      `json:"publication_year,omitempty"`
 	PhotoURLs       []string `json:"photo_urls,omitempty"`
+	PublicationYear int      `json:"publication_year,omitempty"`
 }
 
 type legacyBookJSON struct {
