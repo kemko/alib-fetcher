@@ -28,7 +28,10 @@ func Test_Render_formats_structured_listing_and_escapes_HTML(t *testing.T) {
 		Price:           "3 900 руб.",
 		Condition:       "Состояние: Отличное.\nКомплект <полный>.",
 		BuyURL:          "https://example.com/book?a=1&b=2",
-		HasPhotos:       true,
+		PhotoURLs: []string{
+			"https://example.com/photo?id=1&size=large",
+			"https://example.com/photo?id=2",
+		},
 	}
 	options := digest.Options{
 		Limit:               4096,
@@ -47,7 +50,9 @@ func Test_Render_formats_structured_listing_and_escapes_HTML(t *testing.T) {
 			`<br/><br/>Первая строка &lt;содержания&gt;.<br/>Вторая &amp; строка.` +
 			`<br/><br/>` +
 			`Продавец: <a href="https://example.com/seller?a=1&amp;b=2">Bot &amp; Sad</a>, Москва.` +
-			`<br/>Цена: 3 900 руб.<br/>Состояние: Отличное.<br/>Комплект &lt;полный&gt;.<br/>Фото: есть` +
+			`<br/>Цена: 3 900 руб.<br/>Состояние: Отличное.<br/>Комплект &lt;полный&gt;.` +
+			`<br/>Смотрите: <a href="https://example.com/photo?id=1&amp;size=large">фото</a> - ` +
+			`<a href="https://example.com/photo?id=2">фото</a>` +
 			`<br/><br/><a href="https://example.com/book?a=1&amp;b=2">Купить</a>`,
 		Books: []alib.Book{book},
 	}}, chunks)
@@ -79,7 +84,7 @@ func Test_Render_normalizes_line_breaks_in_all_dynamic_fields(t *testing.T) {
 		`<b>Новые книги на Alib.ru</b><br/><br/>`+
 			`<b>Первая<br/>Вторая</b><br/><br/>`+
 			`Продавец: <a href="https://example.com/sell%0D%0Aer">Bot<br/>Sad</a>, Моск<br/>ва.`+
-			`<br/>Цена: 500<br/>руб.<br/>Фото: нет<br/><br/>`+
+			`<br/>Цена: 500<br/>руб.<br/><br/>`+
 			`<a href="https://example.com/bo%0Aok">Купить</a>`,
 		chunks[0].Text,
 	)
@@ -202,7 +207,6 @@ func Test_Render_highlights_publication_year(t *testing.T) {
 			require.Equal(
 				t,
 				`<b>Новые книги на Alib.ru</b><br/><br/>`+test.emoji+`<b>Книга</b>`+
-					`<br/><br/>Фото: нет`+
 					`<br/><br/><a href="https://example.com/book">Купить</a>`,
 				chunks[0].Text,
 			)
@@ -240,7 +244,7 @@ func Test_Render_omits_optional_fields_without_extra_sections(t *testing.T) {
 	require.Equal(
 		t,
 		`<b>Новые книги на Alib.ru</b><br/><br/><b>Книга без содержания</b> Л., 1970 г.`+
-			`<br/><br/>Продавец: BotSad, Москва.<br/>Цена: 500 руб.<br/>Фото: нет`+
+			`<br/><br/>Продавец: BotSad, Москва.<br/>Цена: 500 руб.`+
 			`<br/><br/><a href="https://example.com/book">Купить</a>`,
 		chunks[0].Text,
 	)
@@ -263,10 +267,10 @@ func Test_Render_separates_listings_with_divider(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []digest.Chunk{{
 		Text: `<b>Новые книги на Alib.ru</b><br/><br/>` +
-			`<b>Первая</b><br/><br/>Фото: нет` +
+			`<b>Первая</b>` +
 			`<br/><br/><a href="https://example.com/1">Купить</a>` +
 			`<hr/>` +
-			`<b>Вторая</b><br/><br/>Фото: нет` +
+			`<b>Вторая</b>` +
 			`<br/><br/><a href="https://example.com/2">Купить</a>`,
 		Books: books,
 	}}, chunks)
@@ -287,11 +291,11 @@ func Test_Render_splits_only_between_complete_listings(t *testing.T) {
 	localTime := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
 	header := `<b>Новые книги на Alib.ru</b>`
 	firstMessage := header + `<br/><br/>🔥 <b>Первая</b>` +
-		`<br/><br/>Фото: нет<br/><br/><a href="https://example.com/1">Купить</a>`
+		`<br/><br/><a href="https://example.com/1">Купить</a>`
 	secondMessage := `🔥 <b>Вторая длиннее первой</b>` +
-		`<br/><br/>Фото: нет<br/><br/><a href="https://example.com/2">Купить</a>`
+		`<br/><br/><a href="https://example.com/2">Купить</a>`
 	thirdMessage := `<b>Третья тоже длинная</b>` +
-		`<br/><br/>Фото: нет<br/><br/><a href="https://example.com/3">Купить</a>`
+		`<br/><br/><a href="https://example.com/3">Купить</a>`
 	messageLimit := utf8.RuneCountInString(firstMessage)
 	require.Greater(t, utf8.RuneCountInString(header+secondMessage), messageLimit)
 
@@ -402,7 +406,7 @@ func Test_RenderSendable_skips_oversized_listings_in_one_pass(t *testing.T) {
 	// When
 	chunks, skippedBuyURLs, err := digest.RenderSendable(
 		[]alib.Book{first, oversized, second},
-		digest.Options{Limit: 180},
+		digest.Options{Limit: 150},
 	)
 
 	// Then
@@ -411,12 +415,12 @@ func Test_RenderSendable_skips_oversized_listings_in_one_pass(t *testing.T) {
 	require.Equal(t, []digest.Chunk{
 		{
 			Text: `<b>Новые книги на Alib.ru</b><br/><br/>` +
-				`<b>Первая</b><br/><br/>Фото: нет` +
+				`<b>Первая</b>` +
 				`<br/><br/><a href="https://example.com/1">Купить</a>`,
 			Books: []alib.Book{first},
 		},
 		{
-			Text: `<b>Вторая</b><br/><br/>Фото: нет` +
+			Text: `<b>Вторая</b>` +
 				`<br/><br/><a href="https://example.com/2">Купить</a>`,
 			Books: []alib.Book{second},
 		},

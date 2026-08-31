@@ -143,15 +143,18 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 				alibServer.URL,
 			))
 			require.Contains(t, richHTML, fmt.Sprintf(
-				`%s<b>Свежая книга.</b> М., %d г.<br/><br/>Цена: 500 руб.<br/>Фото: нет`,
+				`%s<b>Свежая книга.</b> М., %d г.<br/><br/>Цена: 500 руб.`,
 				testCase.freshEmoji,
 				freshYear,
 			))
 			require.Contains(t, richHTML, fmt.Sprintf(
-				`🛸 <b>Будущая книга.</b> М., %d г.<br/><br/>Цена: 700 руб.<br/>Фото: нет`,
+				`🛸 <b>Будущая книга.</b> М., %d г.<br/><br/>Цена: 700 руб.`,
 				futureYear,
 			))
-			require.Contains(t, richHTML, "<br/>Цена: 3 900 руб.<br/>Состояние: Отличное.<br/>Фото: есть")
+			require.Contains(t, richHTML, fmt.Sprintf(
+				`<br/>Цена: 3 900 руб.<br/>Состояние: Отличное.<br/>Смотрите: <a href="%s/foto.php4?id=1">фото</a>`,
+				alibServer.URL,
+			))
 			require.NotContains(t, richHTML, "<p>")
 			require.NotContains(t, richHTML, "<br>")
 			require.NotRegexp(t, `[\r\n]`, richHTML)
@@ -332,7 +335,7 @@ func Test_run_sends_only_final_wired_message_with_sound(t *testing.T) {
 	t.Setenv("TELEGRAM_API_BASE", telegramServer.URL)
 	t.Setenv("HTTP_TIMEOUT", "2s")
 	t.Setenv("ALIB_REQUEST_INTERVAL", "0s")
-	t.Setenv("MESSAGE_LIMIT", "220")
+	t.Setenv("MESSAGE_LIMIT", "150")
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
 

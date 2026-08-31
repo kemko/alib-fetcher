@@ -77,7 +77,7 @@ freshness markers.
 Each digest first records every fetched listing in the state database as a
 pending record with the full semantic Alib payload: title, bibliography,
 publication year, content, seller name and URL, location, price, condition and
-other details, purchase URL, and photo marker. The parser derives these fields
+other details, purchase URL, and ordered photo URLs. The parser derives these fields
 from DOM nodes and logical `<br>`-delimited lines; it does not parse HTML with
 regular expressions. Existing records keep their sent status while refreshing
 the parsed payload from the latest source pages. The first successful run records
@@ -107,19 +107,22 @@ Each listing inside that HTML is structured as:
 1. freshness marker, bold title, and bibliography;
 2. content in its own section, when present;
 3. seller as `Продавец: <a href="...">Name</a>, Location.`, then price,
-   condition/other details, and photo status on separate lines;
+   condition/other details, and photo links when present on separate lines;
 4. a final `Купить` link in its own section.
 
-The source photo-link section is replaced with `Фото: есть` or `Фото: нет`.
+When photos are available, the source photo-link section is rendered as
+`Смотрите: <a href="...">фото</a> - <a href="...">фото</a>` in source order,
+including repeated links. When an announcement has no photos, the photo line is
+omitted completely.
 When seller URL is absent, seller name is rendered as plain text. Missing
 optional fields do not create empty sections. Dynamic text and URLs are
 HTML-escaped. Every encoded line break uses `<br/>`; sections use `<br/><br/>`
 to render one empty line without client-specific paragraph spacing. Rendered
 Telegram HTML contains no literal CR or LF characters. The heading has the same
-separator before the first listing. A listing with content uses
-`main → <br/><br/> → content → <br/><br/> → details`; without content it uses
-exactly `main → <br/><br/> → details`. The final `Купить` section has the same
-separator before it. Adjacent listings in one Rich Message
+separator before the first listing. Content and details are independent optional
+sections between `main` and the final `Купить` section. When both are absent,
+the layout is exactly `main → <br/><br/> → Купить`. Adjacent listings in one
+Rich Message
 are separated by `<hr/>`; no divider appears before the first listing or after
 the last. A digest uses multiple Telegram messages only when pending content is
 split into chunks by `MESSAGE_LIMIT`; the heading appears only in the first
@@ -213,9 +216,11 @@ state entries are migrated to JSON records. Structured records from releases
 that stored `text_before_seller`, `text_before_buy`, and `text_after_buy` remain
 readable: a narrow JSON compatibility decoder converts those fragments to the
 semantic `Book` model in memory. Opening the database does not rewrite valid
-legacy structured records. The next mutating write, including rediscovery or a
-successful-delivery acknowledgement, writes the current schema. Values that look
-like structured JSON records must decode successfully, and their stored purchase
+legacy structured records. A structured legacy `has_photos` field is ignored
+because it contains no recoverable photo URLs; its photo line stays
+absent until rediscovery supplies URLs. The next mutating write, including
+rediscovery or a successful-delivery acknowledgement, writes the current schema.
+Values that look like structured JSON records must decode successfully, and their stored purchase
 URL must match the bbolt key. A malformed or mismatched structured record makes
 state opening fail transactionally: it is not treated as a legacy marker, and no
 neighboring migration is committed. Back up `STATE_PATH` before upgrading. If

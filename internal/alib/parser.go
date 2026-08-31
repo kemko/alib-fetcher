@@ -231,7 +231,7 @@ func parseBook(node *html.Node, baseURL *url.URL) (Book, bool) {
 		Price:           parsePrice(lines[buyPosition.line], buyPosition.part),
 		Condition:       condition,
 		BuyURL:          buyURL,
-		HasPhotos:       hasPhotoLink(node),
+		PhotoURLs:       photoURLs(node, baseURL),
 	}, true
 }
 
@@ -514,14 +514,17 @@ func isASCIIDigit(character rune) bool {
 	return character >= '0' && character <= '9'
 }
 
-func hasPhotoLink(node *html.Node) bool {
+func photoURLs(node *html.Node, baseURL *url.URL) []string {
+	var photoURLs []string
 	for descendant := range node.Descendants() {
 		if isPhotoLink(descendant) {
-			return true
+			if photoURL := resolveURL(baseURL, href(descendant)); photoURL != "" {
+				photoURLs = append(photoURLs, photoURL)
+			}
 		}
 	}
 
-	return false
+	return photoURLs
 }
 
 func isPhotoLink(node *html.Node) bool {
