@@ -81,7 +81,7 @@ func Test_Store_persists_stable_json_schema(t *testing.T) {
 			"condition": "Condition: Full",
 			"buy_url": "https://example.com/schema",
 			"publication_year": 2026,
-			"has_photos": true
+			"photo_urls": ["https://example.com/photo"]
 			},
 			"observed_at": %d,
 			"queue_order": 1,
@@ -555,7 +555,7 @@ func Test_Store_loads_legacy_pending_record_and_rewrites_it_only_on_mutating_wri
 		Price:           "250 rub.",
 		Condition:       "Состояние: Legacy condition",
 		BuyURL:          buyURL,
-		HasPhotos:       true,
+		PhotoURLs:       nil,
 	}
 	require.Equal(t, []alib.Book{expectedPending}, pending)
 	require.Equal(t, []byte(legacyRecord), rawAfterOpen)
@@ -656,7 +656,7 @@ func Test_Open_migrates_legacy_timestamp_marker_to_sent_record(t *testing.T) {
 	require.Equal(t, alib.Book{BuyURL: buyURL}, record.Book)
 	require.Empty(t, record.Book.Title)
 	require.Empty(t, record.Book.Seller)
-	require.False(t, record.Book.HasPhotos)
+	require.Empty(t, record.Book.PhotoURLs)
 	require.True(t, record.Sent)
 	require.True(t, decodeStoredTime(record.SentAt).Equal(migratedAt.UTC()))
 }
@@ -692,7 +692,7 @@ func Test_Open_migrates_unknown_legacy_marker_without_immediate_pruning(t *testi
 	require.Equal(t, book, record.Book)
 	require.Empty(t, record.Book.Title)
 	require.Empty(t, record.Book.Seller)
-	require.False(t, record.Book.HasPhotos)
+	require.Empty(t, record.Book.PhotoURLs)
 	require.True(t, record.Sent)
 	require.NotZero(t, record.SentAt)
 	require.True(t, decodeStoredTime(record.SentAt).Equal(migratedAt.UTC()))
@@ -741,7 +741,7 @@ func fullBook(buyURL string) alib.Book {
 		Price:           "100 rub.",
 		Condition:       "Condition: Full",
 		BuyURL:          buyURL,
-		HasPhotos:       true,
+		PhotoURLs:       []string{"https://example.com/photo"},
 	}
 }
 

@@ -113,7 +113,7 @@ func renderBook(book alib.Book, options Options) string {
 	if condition := strings.TrimSpace(book.Condition); condition != "" {
 		details = append(details, renderMultilineText(condition))
 	}
-	if book.HasPhotos {
+	if len(book.PhotoURLs) > 0 {
 		details = append(details, "Фото: есть")
 	} else {
 		details = append(details, "Фото: нет")

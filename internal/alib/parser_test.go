@@ -22,7 +22,7 @@ func Test_Parse_returns_semantic_unique_books_from_windows1251_page(t *testing.T
 Цена: 3 900 руб. <a href="/book-1.html"><b>Купить</b></a><br>
 Первая строка содержания.<br>Переиздание текста 1970 г.<br>
 Состояние: Отличное.<br>Комплект полный.<br>
-Смотрите: <a href="/foto.php4?id=1">фото</a> - <a href="/foto.php4?id=2">фото</a></p>
+Смотрите: <a href="/foto.php4?id=1">фото</a> - <a href="foto.php4?id=2">фото</a> - <a href="/foto.php4?id=1">фото</a></p>
 <p><b>Книга без содержания.</b> Л., 1970 г. ISBN 5-0000-1970-2.<br>
 Цена: 500 руб. <a href="https://www.alib.ru/book-2.html"><b>Купить</b></a><br>
 Состояние: Хорошее.</p>
@@ -50,7 +50,11 @@ func Test_Parse_returns_semantic_unique_books_from_windows1251_page(t *testing.T
 			Price:           "3 900 руб.",
 			Condition:       "Состояние: Отличное.\nКомплект полный.",
 			BuyURL:          "https://www.alib.ru/book-1.html",
-			HasPhotos:       true,
+			PhotoURLs: []string{
+				"https://www.alib.ru/foto.php4?id=1",
+				"https://www.alib.ru/foto.php4?id=2",
+				"https://www.alib.ru/foto.php4?id=1",
+			},
 		},
 		{
 			Title:           "Книга без содержания.",
@@ -61,6 +65,7 @@ func Test_Parse_returns_semantic_unique_books_from_windows1251_page(t *testing.T
 			BuyURL:          "https://www.alib.ru/book-2.html",
 		},
 	}, books)
+	require.Empty(t, books[1].PhotoURLs)
 }
 
 func Test_Parse_extracts_last_bibliographic_year_and_ignores_content_year(t *testing.T) {
@@ -121,7 +126,7 @@ func Test_Parse_excludes_anchor_only_photo_section(t *testing.T) {
 	require.Len(t, books, 1)
 	require.Equal(t, "Описание.", books[0].Content)
 	require.Equal(t, "Состояние: Хорошее.", books[0].Condition)
-	require.True(t, books[0].HasPhotos)
+	require.Equal(t, []string{"https://www.alib.ru/foto.php4?id=1"}, books[0].PhotoURLs)
 }
 
 func Test_Parse_extracts_bibliography_when_seller_is_on_title_line(t *testing.T) {

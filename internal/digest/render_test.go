@@ -28,7 +28,7 @@ func Test_Render_formats_structured_listing_and_escapes_HTML(t *testing.T) {
 		Price:           "3 900 руб.",
 		Condition:       "Состояние: Отличное.\nКомплект <полный>.",
 		BuyURL:          "https://example.com/book?a=1&b=2",
-		HasPhotos:       true,
+		PhotoURLs:       []string{"https://example.com/photo"},
 	}
 	options := digest.Options{
 		Limit:               4096,
