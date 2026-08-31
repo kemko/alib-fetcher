@@ -77,7 +77,7 @@ freshness markers.
 Each digest first records every fetched listing in the state database as a
 pending record with the full semantic Alib payload: title, bibliography,
 publication year, content, seller name and URL, location, price, condition and
-other details, purchase URL, and photo marker. The parser derives these fields
+other details, purchase URL, and ordered photo URLs. The parser derives these fields
 from DOM nodes and logical `<br>`-delimited lines; it does not parse HTML with
 regular expressions. Existing records keep their sent status while refreshing
 the parsed payload from the latest source pages. The first successful run records
@@ -107,10 +107,13 @@ Each listing inside that HTML is structured as:
 1. freshness marker, bold title, and bibliography;
 2. content in its own section, when present;
 3. seller as `Продавец: <a href="...">Name</a>, Location.`, then price,
-   condition/other details, and photo status on separate lines;
+   condition/other details, and photo links when present on separate lines;
 4. a final `Купить` link in its own section.
 
-The source photo-link section is replaced with `Фото: есть` or `Фото: нет`.
+When photos are available, the source photo-link section is rendered as
+`Смотрите: <a href="...">фото</a> - <a href="...">фото</a>` in source order,
+including repeated links. When an announcement has no photos, the photo line is
+omitted completely.
 When seller URL is absent, seller name is rendered as plain text. Missing
 optional fields do not create empty sections. Dynamic text and URLs are
 HTML-escaped. Every encoded line break uses `<br/>`; sections use `<br/><br/>`
