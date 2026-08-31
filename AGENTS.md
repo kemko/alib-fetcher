@@ -119,8 +119,9 @@ Preserve these semantics:
   by a title in `<b>` and a `Купить` link; seller links contain `bs.php4`.
   Logical lines are split on `<br>` and become semantic bibliography,
   publication year, content, seller, location, price, condition, purchase URL,
-  and photo fields without regex-based HTML parsing. Publication year is the
-  last four-digit year in the bibliography followed by `г` or `г.`; content
+  and ordered photo URLs without regex-based HTML parsing. Relative photo URLs
+  are resolved while source order and repeats are preserved. Publication year is
+  the last four-digit year in the bibliography followed by `г` or `г.`; content
   years are ignored.
 - `internal/app`: use-case orchestration through small `Fetcher`, `State`, and
   `Sender` interfaces. Keep policy here and transport/storage details in their
@@ -199,19 +200,21 @@ fit together
 but the listing fits alone, the first chunk contains only the header. Rich HTML
 uses `<br/>` for every encoded line break and `<br/><br/>` between sections to
 render one empty line without client-specific paragraph spacing. Rendered
-Telegram HTML contains no literal CR or LF characters. With content, block order
-is `main → <br/><br/> → content → <br/><br/> → details`; without content, it is
-exactly `main → <br/><br/> → details`. The heading and final `Купить` section use
-the same separator. Adjacent listings within one chunk use `<hr/>`,
+Telegram HTML contains no literal CR or LF characters. Content and details are
+independent optional sections between `main` and the final `Купить` section.
+When both are absent, the block is exactly `main → <br/><br/> → Купить`. The
+heading and final `Купить` section use the same separator. Adjacent listings
+within one chunk use `<hr/>`,
 with no divider at chunk edges.
 Each listing renders, in order: emoji plus bold title and bibliography; optional
 content as a separate section; seller, price, condition/other details, and photo
-status on separate lines; then a final `Купить` link in its own section.
+links on separate lines; then a final `Купить` link in its own section.
 The seller format is
 `Продавец: <a href="...">Name</a>, Location.`; without seller URL, the name is
-plain text. Missing optional fields must not create extra empty sections. The
-source `Смотрите` section is omitted and replaced with `Фото: есть` or
-`Фото: нет`. All dynamic text and URLs must be HTML-escaped. Limits are counted
+plain text. Missing optional fields must not create extra empty sections. Photo
+links render as `Смотрите: <a href="...">фото</a> - <a href="...">фото</a>` in
+source order, including repeats; the line is omitted when no photos exist. All
+dynamic text and URLs must be HTML-escaped. Limits are counted
 in Unicode runes, and chunks may split only between listings. A single listing
 that cannot fit returns `digest.ErrMessageTooLong`.
 

@@ -119,10 +119,10 @@ optional fields do not create empty sections. Dynamic text and URLs are
 HTML-escaped. Every encoded line break uses `<br/>`; sections use `<br/><br/>`
 to render one empty line without client-specific paragraph spacing. Rendered
 Telegram HTML contains no literal CR or LF characters. The heading has the same
-separator before the first listing. A listing with content uses
-`main → <br/><br/> → content → <br/><br/> → details`; without content it uses
-exactly `main → <br/><br/> → details`. The final `Купить` section has the same
-separator before it. Adjacent listings in one Rich Message
+separator before the first listing. Content and details are independent optional
+sections between `main` and the final `Купить` section. When both are absent,
+the layout is exactly `main → <br/><br/> → Купить`. Adjacent listings in one
+Rich Message
 are separated by `<hr/>`; no divider appears before the first listing or after
 the last. A digest uses multiple Telegram messages only when pending content is
 split into chunks by `MESSAGE_LIMIT`; the heading appears only in the first
@@ -216,9 +216,11 @@ state entries are migrated to JSON records. Structured records from releases
 that stored `text_before_seller`, `text_before_buy`, and `text_after_buy` remain
 readable: a narrow JSON compatibility decoder converts those fragments to the
 semantic `Book` model in memory. Opening the database does not rewrite valid
-legacy structured records. The next mutating write, including rediscovery or a
-successful-delivery acknowledgement, writes the current schema. Values that look
-like structured JSON records must decode successfully, and their stored purchase
+legacy structured records. A structured legacy `has_photos` field is ignored
+because it contains no recoverable photo URLs; its photo line stays
+absent until rediscovery supplies URLs. The next mutating write, including
+rediscovery or a successful-delivery acknowledgement, writes the current schema.
+Values that look like structured JSON records must decode successfully, and their stored purchase
 URL must match the bbolt key. A malformed or mismatched structured record makes
 state opening fail transactionally: it is not treated as a legacy marker, and no
 neighboring migration is committed. Back up `STATE_PATH` before upgrading. If
