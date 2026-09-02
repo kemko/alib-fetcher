@@ -6,9 +6,10 @@ import (
 	"time"
 	"unicode/utf8"
 
+	htmlparser "golang.org/x/net/html"
+
 	"github.com/kemko/alib-fetcher/internal/alib"
 	"github.com/kemko/alib-fetcher/internal/digest"
-	htmlparser "golang.org/x/net/html"
 
 	"github.com/stretchr/testify/require"
 )
