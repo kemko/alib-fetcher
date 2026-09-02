@@ -7,7 +7,8 @@ import (
 	"html"
 	"strings"
 	"time"
-	"unicode/utf8"
+
+	xhtml "golang.org/x/net/html"
 
 	"github.com/kemko/alib-fetcher/internal/alib"
 )
@@ -51,7 +52,7 @@ func render(books []alib.Book, options Options, skipOversized bool) ([]Chunk, []
 	if len(books) == 0 {
 		return nil, nil, nil
 	}
-	if utf8.RuneCountInString(header) > options.Limit {
+	if renderedRuneCount(header) > options.Limit {
 		return nil, nil, fmt.Errorf("%w: %s", ErrMessageTooLong, books[0].BuyURL)
 	}
 
@@ -61,11 +62,11 @@ func render(books []alib.Book, options Options, skipOversized bool) ([]Chunk, []
 	for _, book := range books {
 		item := renderBook(book, options)
 		itemLimit := options.Limit
-		if utf8.RuneCountInString(item) > itemLimit && strings.TrimSpace(book.Content) != "" {
+		if renderedRuneCount(item) > itemLimit && strings.TrimSpace(book.Content) != "" {
 			item = truncateContent(book, options)
 			itemLimit--
 		}
-		if utf8.RuneCountInString(item) > itemLimit {
+		if renderedRuneCount(item) > itemLimit {
 			if skipOversized {
 				skippedBuyURLs = append(skippedBuyURLs, book.BuyURL)
 				continue
@@ -80,7 +81,7 @@ func render(books []alib.Book, options Options, skipOversized bool) ([]Chunk, []
 			separator = sectionBreak
 		}
 
-		if utf8.RuneCountInString(current.Text+separator+item) > options.Limit {
+		if renderedRuneCount(current.Text+separator+item) > options.Limit {
 			chunks = append(chunks, current)
 			current = Chunk{Books: make([]alib.Book, 0)}
 			separator = ""
@@ -103,7 +104,7 @@ func truncateContent(book alib.Book, options Options) string {
 		middle := (low + high + 1) / 2
 		candidate := book
 		candidate.Content = string(contentRunes[:middle]) + "…"
-		if utf8.RuneCountInString(renderBook(candidate, options)) <= options.Limit-1 {
+		if renderedRuneCount(renderBook(candidate, options)) <= options.Limit-1 {
 			low = middle
 			continue
 		}
@@ -113,6 +114,32 @@ func truncateContent(book alib.Book, options Options) string {
 	book.Content = string(contentRunes[:low]) + "…"
 
 	return renderBook(book, options)
+}
+
+func renderedRuneCount(value string) int {
+	document, err := xhtml.Parse(strings.NewReader(value))
+	if err != nil {
+		return 0
+	}
+
+	var count func(*xhtml.Node) int
+	count = func(node *xhtml.Node) int {
+		runes := 0
+		if node.Type == xhtml.TextNode {
+			runes += len([]rune(node.Data))
+		}
+		if node.Type == xhtml.ElementNode && node.Data == "br" {
+			runes++
+		}
+
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			runes += count(child)
+		}
+
+		return runes
+	}
+
+	return count(document)
 }
 
 func renderBook(book alib.Book, options Options) string {
