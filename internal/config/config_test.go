@@ -42,9 +42,54 @@ func Test_Load_applies_service_defaults(t *testing.T) {
 	require.Equal(t, time.Second, loaded.AlibRequestInterval)
 	require.Equal(t, "https://api.telegram.org", loaded.TelegramAPIBase)
 	require.Equal(t, 30*time.Second, loaded.HTTPTimeout)
-	require.Equal(t, 4000, loaded.MessageLimit)
+	require.Equal(t, 32000, loaded.MessageLimit)
 	require.True(t, loaded.RunOnStartup)
 	require.Nil(t, loaded.FreshBooks)
+}
+
+func Test_Load_validates_message_limit(t *testing.T) {
+	testCases := map[string]struct {
+		value     string
+		wantError bool
+		expected  int
+	}{
+		"hard limit": {
+			value:    "32768",
+			expected: 32768,
+		},
+		"above hard limit": {
+			value:     "32769",
+			wantError: true,
+		},
+		"below minimum": {
+			value:     "63",
+			wantError: true,
+		},
+	}
+
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			// Given
+			setEnvironment(t, map[string]string{
+				"TELEGRAM_BOT_TOKEN": "token",
+				"TELEGRAM_CHAT_ID":   "-100123",
+				"MESSAGE_LIMIT":      testCase.value,
+			})
+
+			// When
+			loaded, err := config.Load()
+
+			// Then
+			if testCase.wantError {
+				require.ErrorIs(t, err, config.ErrInvalid)
+				require.ErrorContains(t, err, "MESSAGE_LIMIT")
+				require.Empty(t, loaded)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, testCase.expected, loaded.MessageLimit)
+		})
+	}
 }
 
 func Test_LoadStatePath_reads_environment_without_full_configuration(t *testing.T) {

@@ -23,12 +23,12 @@ const (
 	defaultAlibRequestInterval = time.Second
 	defaultCronSchedule        = "0 0 * * *"
 	defaultHTTPTimeout         = 30 * time.Second
-	defaultMessageLimit        = 4000
+	defaultMessageLimit        = 32000
 	defaultRunOnStartup        = true
 	defaultStatePath           = "/var/lib/alib-fetcher/state.db"
 	defaultTelegramAPIBase     = "https://api.telegram.org"
 	defaultTimezone            = "Europe/Moscow"
-	telegramHardMessageLimit   = 4096
+	telegramHardMessageLimit   = 32768
 )
 
 type freshBooksMode uint8
