@@ -1,9 +1,14 @@
 package digest_test
 
 import (
+	"bytes"
+	"html"
+	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kemko/alib-fetcher/internal/alib"
 	"github.com/kemko/alib-fetcher/internal/digest"
@@ -598,4 +603,45 @@ func Test_Render_returns_no_chunks_for_no_books(t *testing.T) {
 	// Then
 	require.NoError(t, err)
 	require.Nil(t, chunks)
+}
+
+func Test_Render_parses_and_sends_belyaev_listing_with_long_photo_urls(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	page, err := os.ReadFile("testdata/belyaev-long-photo-listing.html")
+	require.NoError(t, err)
+	baseURL, err := url.Parse("https://www.alib.ru/tramka.phtml?tnew=7")
+	require.NoError(t, err)
+	books, err := alib.Parse(bytes.NewReader(page), baseURL, "text/html")
+	require.NoError(t, err)
+	require.Len(t, books, 1)
+	book := books[0]
+	require.Equal(t, "https://www.alib.ru/book-belyaev.html", book.BuyURL)
+	require.Len(t, book.PhotoURLs, 16)
+	require.Equal(t, "Полное описание книги Беляева: издание включает лучшие произведения автора, подробные сведения о составе, состоянии и особенностях экземпляра.", book.Content)
+
+	// When
+	for _, limit := range []int{4000, 32000} {
+		chunks, renderErr := digest.Render(books, digest.Options{Limit: limit})
+
+		// Then
+		require.NoError(t, renderErr)
+		require.Len(t, chunks, 1)
+		require.Equal(t, []alib.Book{book}, chunks[0].Books)
+		require.Less(t, displayedRuneCount(t, chunks[0].Text), limit+1)
+		require.Greater(t, utf8.RuneCount(page), 4000)
+		require.Contains(t, chunks[0].Text, book.Content)
+		require.Contains(t, chunks[0].Text, book.Title)
+		require.Contains(t, chunks[0].Text, book.Bibliography)
+		require.Contains(t, chunks[0].Text, book.Seller)
+		require.Contains(t, chunks[0].Text, book.Location)
+		require.Contains(t, chunks[0].Text, book.Price)
+		require.Contains(t, chunks[0].Text, book.Condition)
+		require.Contains(t, chunks[0].Text, html.EscapeString(book.BuyURL))
+		for _, photoURL := range book.PhotoURLs {
+			require.Contains(t, chunks[0].Text, html.EscapeString(photoURL))
+		}
+		require.Equal(t, 16, strings.Count(chunks[0].Text, ">фото</a>"))
+	}
 }
