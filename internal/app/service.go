@@ -113,7 +113,7 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 	}
 	ackCtx := context.WithoutCancel(ctx)
 	for index, chunk := range chunks {
-		silent := index < len(chunks)-1
+		silent := index > 0
 		attachRefresh := index == len(chunks)-1
 		if sendErr := s.send(ctx, chunk.Text, silent, attachRefresh); sendErr != nil {
 			return result, fmt.Errorf("send digest: %w", sendErr)
@@ -138,10 +138,10 @@ func sortPending(pending []alib.Book) []alib.Book {
 	sort.SliceStable(pending, func(i, j int) bool {
 		left, right := pending[i].PublicationYear, pending[j].PublicationYear
 		if left == 0 {
-			return false
+			return right != 0
 		}
 		if right == 0 {
-			return true
+			return false
 		}
 
 		return left > right

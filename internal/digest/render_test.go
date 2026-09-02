@@ -82,7 +82,7 @@ func Test_Render_normalizes_line_breaks_in_all_dynamic_fields(t *testing.T) {
 	require.Equal(
 		t,
 		`<b>Новые книги на Alib.ru</b><br/><br/>`+
-			`<b>Первая<br/>Вторая</b><br/><br/>`+
+			`🛸 <b>Первая<br/>Вторая</b><br/><br/>`+
 			`Продавец: <a href="https://example.com/sell%0D%0Aer">Bot<br/>Sad</a>, Моск<br/>ва.`+
 			`<br/>Цена: 500<br/>руб.<br/><br/>`+
 			`<a href="https://example.com/bo%0Aok">Купить</a>`,
@@ -176,10 +176,11 @@ func Test_Render_highlights_publication_year(t *testing.T) {
 			emoji:     "🛸 ",
 		},
 		{
-			name:      "book without year has no emoji",
+			name:      "book without year is marked as unknown future",
 			localTime: time.Date(currentYear, time.August, 1, 0, 0, 0, 0, time.UTC),
 			lowerYear: thresholdYear,
 			freshness: true,
+			emoji:     "🛸 ",
 		},
 	}
 
@@ -243,7 +244,7 @@ func Test_Render_omits_optional_fields_without_extra_sections(t *testing.T) {
 	require.Len(t, chunks, 1)
 	require.Equal(
 		t,
-		`<b>Новые книги на Alib.ru</b><br/><br/><b>Книга без содержания</b> Л., 1970 г.`+
+		`<b>Новые книги на Alib.ru</b><br/><br/>🛸 <b>Книга без содержания</b> Л., 1970 г.`+
 			`<br/><br/>Продавец: BotSad, Москва.<br/>Цена: 500 руб.`+
 			`<br/><br/><a href="https://example.com/book">Купить</a>`,
 		chunks[0].Text,
@@ -267,10 +268,10 @@ func Test_Render_separates_listings_with_divider(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []digest.Chunk{{
 		Text: `<b>Новые книги на Alib.ru</b><br/><br/>` +
-			`<b>Первая</b>` +
+			`🛸 <b>Первая</b>` +
 			`<br/><br/><a href="https://example.com/1">Купить</a>` +
 			`<hr/>` +
-			`<b>Вторая</b>` +
+			`🛸 <b>Вторая</b>` +
 			`<br/><br/><a href="https://example.com/2">Купить</a>`,
 		Books: books,
 	}}, chunks)
@@ -379,8 +380,9 @@ func Test_Render_rejects_listing_over_rune_limit(t *testing.T) {
 
 	// Given
 	book := alib.Book{
-		Title:  strings.Repeat("Книга ", 20),
-		BuyURL: "https://example.com/oversized",
+		Title:   strings.Repeat("Книга ", 20),
+		Content: "Описание",
+		BuyURL:  "https://example.com/oversized",
 	}
 
 	// When
@@ -398,8 +400,9 @@ func Test_RenderSendable_skips_oversized_listings_in_one_pass(t *testing.T) {
 	// Given
 	first := alib.Book{Title: "Первая", BuyURL: "https://example.com/1"}
 	oversized := alib.Book{
-		Title:  strings.Repeat("Очень длинная книга ", 20),
-		BuyURL: "https://example.com/oversized",
+		Title:   strings.Repeat("Очень длинная книга ", 20),
+		Content: "Описание",
+		BuyURL:  "https://example.com/oversized",
 	}
 	second := alib.Book{Title: "Вторая", BuyURL: "https://example.com/2"}
 
@@ -415,16 +418,153 @@ func Test_RenderSendable_skips_oversized_listings_in_one_pass(t *testing.T) {
 	require.Equal(t, []digest.Chunk{
 		{
 			Text: `<b>Новые книги на Alib.ru</b><br/><br/>` +
-				`<b>Первая</b>` +
+				`🛸 <b>Первая</b>` +
 				`<br/><br/><a href="https://example.com/1">Купить</a>`,
 			Books: []alib.Book{first},
 		},
 		{
-			Text: `<b>Вторая</b>` +
+			Text: `🛸 <b>Вторая</b>` +
 				`<br/><br/><a href="https://example.com/2">Купить</a>`,
 			Books: []alib.Book{second},
 		},
 	}, chunks)
+}
+
+func Test_Render_preserves_content_at_or_below_item_limit(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	book := alib.Book{
+		Title:   "Книга",
+		Content: "я",
+		BuyURL:  "https://example.com/book",
+	}
+	unlimitedChunks, err := digest.Render([]alib.Book{book}, digest.Options{Limit: 4096})
+	require.NoError(t, err)
+	listing := strings.TrimPrefix(unlimitedChunks[0].Text, `<b>Новые книги на Alib.ru</b><br/><br/>`)
+	listingLength := utf8.RuneCountInString(listing)
+	tests := []struct {
+		name  string
+		limit int
+	}{
+		{name: "exact limit", limit: listingLength},
+		{name: "limit minus one", limit: listingLength + 1},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			// When
+			chunks, renderErr := digest.Render([]alib.Book{book}, digest.Options{Limit: test.limit})
+
+			// Then
+			require.NoError(t, renderErr)
+			require.Len(t, chunks, 2)
+			require.Equal(t, listing, chunks[1].Text)
+			require.NotContains(t, chunks[1].Text, "…")
+		})
+	}
+}
+
+func Test_Render_truncates_long_content_to_limit_minus_one(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	prefix := strings.Repeat("Описание ", 8)
+	book := alib.Book{
+		Title:        "Книга",
+		Bibliography: "Библиография",
+		Content:      prefix + "и ещё " + strings.Repeat("длинное описание ", 20),
+		Seller:       "Продавец",
+		Location:     "Москва",
+		Price:        "500 руб.",
+		BuyURL:       "https://example.com/book",
+	}
+	candidate := book
+	candidate.Content = prefix + "…"
+	candidateChunks, err := digest.Render([]alib.Book{candidate}, digest.Options{Limit: 4096})
+	require.NoError(t, err)
+	listing := strings.TrimPrefix(candidateChunks[0].Text, `<b>Новые книги на Alib.ru</b><br/><br/>`)
+	messageLimit := utf8.RuneCountInString(listing) + 1
+
+	// When
+	chunks, err := digest.Render([]alib.Book{book}, digest.Options{Limit: messageLimit})
+	sendableChunks, skippedBuyURLs, sendableErr := digest.RenderSendable(
+		[]alib.Book{book},
+		digest.Options{Limit: messageLimit},
+	)
+
+	// Then
+	require.NoError(t, err)
+	require.NoError(t, sendableErr)
+	require.Empty(t, skippedBuyURLs)
+	require.Len(t, chunks, 2)
+	require.Equal(t, chunks, sendableChunks)
+	require.Equal(t, []alib.Book{}, chunks[0].Books)
+	require.Equal(t, []alib.Book{book}, chunks[1].Books)
+	require.Equal(t, messageLimit-1, utf8.RuneCountInString(chunks[1].Text))
+	require.Contains(t, chunks[1].Text, prefix+"…")
+	require.NotContains(t, chunks[1].Text, "и ещё")
+}
+
+func Test_Render_truncates_content_at_escaped_rune_boundary(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	book := alib.Book{
+		Title:   "Книга",
+		Content: "абв<ёж&зий" + strings.Repeat("длинное описание ", 20),
+		BuyURL:  "https://example.com/book",
+	}
+	candidate := book
+	candidate.Content = "абв…"
+	candidateChunks, err := digest.Render([]alib.Book{candidate}, digest.Options{Limit: 4096})
+	require.NoError(t, err)
+	listing := strings.TrimPrefix(candidateChunks[0].Text, `<b>Новые книги на Alib.ru</b><br/><br/>`)
+	messageLimit := utf8.RuneCountInString(listing) + 2
+
+	// When
+	chunks, err := digest.Render([]alib.Book{book}, digest.Options{Limit: messageLimit})
+
+	// Then
+	require.NoError(t, err)
+	require.Len(t, chunks, 2)
+	rendered := chunks[1].Text
+	require.Equal(t, messageLimit-2, utf8.RuneCountInString(rendered))
+	require.Equal(
+		t,
+		`🛸 <b>Книга</b><br/><br/>абв…<br/><br/><a href="https://example.com/book">Купить</a>`,
+		rendered,
+	)
+}
+
+func Test_Render_truncates_content_by_source_runes_without_mutating_chunk_book(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	book := alib.Book{
+		Title:   "Книга",
+		Content: "начало &lt; середина < конец " + strings.Repeat("текст ", 20),
+		BuyURL:  "https://example.com/book",
+	}
+	candidate := book
+	candidate.Content = "начало &…"
+	candidateChunks, err := digest.Render([]alib.Book{candidate}, digest.Options{Limit: 4096})
+	require.NoError(t, err)
+	listing := strings.TrimPrefix(candidateChunks[0].Text, `<b>Новые книги на Alib.ru</b><br/><br/>`)
+	messageLimit := utf8.RuneCountInString(listing) + 1
+
+	// When
+	chunks, err := digest.Render([]alib.Book{book}, digest.Options{Limit: messageLimit})
+
+	// Then
+	require.NoError(t, err)
+	require.Len(t, chunks, 2)
+	require.Equal(t, []alib.Book{book}, chunks[1].Books)
+	require.Contains(t, chunks[1].Text, "начало &amp;…")
+	require.NotContains(t, chunks[1].Text, "начало &amp;lt;")
+	require.Equal(t, messageLimit-1, utf8.RuneCountInString(chunks[1].Text))
 }
 
 func Test_Render_returns_no_chunks_for_no_books(t *testing.T) {

@@ -23,8 +23,8 @@ One digest cycle is deliberately ordered as follows:
 4. Record fetched listings in bbolt as JSON records, preserving sent status.
 5. Load all pending records from bbolt in first-discovery order, including
    books from earlier failed cycles.
-6. Sort pending books by publication year descending, preserving first-discovery
-   order for equal years and placing year `0` last.
+6. Sort pending books with year `0` first, then publication year descending,
+   preserving first-discovery order within each group.
 7. Render pending books into Telegram-sized chunks.
 8. Send each chunk and mark only that chunk's books as delivered, only after
    Telegram accepts it.
@@ -38,12 +38,14 @@ Preserve these semantics:
 - A failed Telegram chunk must remain pending so a later cycle can retry it.
   Earlier successfully sent chunks stay acknowledged.
 - `State.Pending` returns records in first-discovery/source order, not bbolt key
-  sort order; the digest sends them by publication year descending, with stable
-  first-discovery order for equal years and unrecognized year `0` last.
-- A pending listing that cannot fit one Telegram message remains pending and
-  must not block other renderable pending listings.
-- When a digest has multiple chunks, all but the last are sent silently; the
-  last chunk uses the normal notification sound.
+  sort order; the digest sends year `0` records first, then recognized years in
+  descending order, with stable first-discovery order within each group.
+- A listing's `Content` is shortened with `…` to the longest prefix that fits
+  within `MESSAGE_LIMIT - 1` runes after rendering. If mandatory fields still
+  cannot fit after minimal content, it remains pending and must not block other
+  renderable pending listings; `digest.ErrMessageTooLong` is reported.
+- When a digest has multiple chunks, the first uses the normal notification
+  sound and all later chunks are sent silently.
 - Every sent digest attaches the `Обновить` inline button only to the final
   Telegram chunk. A digest that sends no chunks does not create or move a
   refresh button.
@@ -185,9 +187,10 @@ or absent `FRESH_BOOKS` disables `✨`, not `🔥`. The cycle time in `TIMEZONE`
 controls classification: the current year gets `🔥`; in January, the previous
 year also gets `🔥` regardless of the optional threshold. Other recognized
 years from the threshold through the current year get `✨`. A recognized year
-greater than the current year gets `🛸` independently of `FRESH_BOOKS`; an
-unrecognized year gets no marker. The recognized year is the last
-four-digit year in the bibliography followed by `г` or `г.`; years elsewhere in
+greater than the current year gets `🛸` independently of `FRESH_BOOKS`; a year
+`0` also gets `🛸`, while other unrecognized years get no marker. The recognized
+year is the last four-digit year in the bibliography followed by `г` or `г.`;
+years elsewhere in
 the listing do not participate.
 
 ## Digest and transport details
@@ -215,8 +218,10 @@ plain text. Missing optional fields must not create extra empty sections. Photo
 links render as `Смотрите: <a href="...">фото</a> - <a href="...">фото</a>` in
 source order, including repeats; the line is omitted when no photos exist. All
 dynamic text and URLs must be HTML-escaped. Limits are counted
-in Unicode runes, and chunks may split only between listings. A single listing
-that cannot fit returns `digest.ErrMessageTooLong`.
+in Unicode runes, and chunks may split only between listings. Content that
+exceeds the limit is truncated before HTML escaping to the longest prefix plus
+`…` that fits within `MESSAGE_LIMIT - 1`; if mandatory fields still cannot fit,
+the listing returns `digest.ErrMessageTooLong`.
 
 The Alib client accepts one or more HTTP(S) endpoints, sends
 `User-Agent: alib-fetcher/1.0`, and requires HTTP 200. Endpoints are downloaded
