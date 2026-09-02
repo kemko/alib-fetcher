@@ -138,10 +138,10 @@ func sortPending(pending []alib.Book) []alib.Book {
 	sort.SliceStable(pending, func(i, j int) bool {
 		left, right := pending[i].PublicationYear, pending[j].PublicationYear
 		if left == 0 {
-			return false
+			return right != 0
 		}
 		if right == 0 {
-			return true
+			return false
 		}
 
 		return left > right

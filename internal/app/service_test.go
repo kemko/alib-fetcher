@@ -240,8 +240,8 @@ func Test_Service_sorts_pending_books_by_publication_year_before_chunking(t *tes
 	}
 	originalOrder := append([]alib.Book(nil), books...)
 	expectedOrder := []alib.Book{
-		books[4], books[12], books[2], books[7], books[9], books[1], books[3], books[6],
-		books[8], books[11], books[14], books[10], books[0], books[5], books[13],
+		books[0], books[5], books[13], books[4], books[12], books[2], books[7], books[9],
+		books[1], books[3], books[6], books[8], books[11], books[14], books[10],
 	}
 	messageLimit := 130
 	expectedChunks, err := digest.Render(expectedOrder, digest.Options{LocalTime: now, Limit: messageLimit})

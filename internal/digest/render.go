@@ -141,7 +141,10 @@ func publicationEmoji(publicationYear int, options Options) string {
 	if publicationYear > currentYear {
 		return "🛸 "
 	}
-	if publicationYear <= 0 {
+	if publicationYear == 0 {
+		return "🛸 "
+	}
+	if publicationYear < 0 {
 		return ""
 	}
 	if publicationYear == currentYear ||

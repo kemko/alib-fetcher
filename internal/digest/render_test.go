@@ -82,7 +82,7 @@ func Test_Render_normalizes_line_breaks_in_all_dynamic_fields(t *testing.T) {
 	require.Equal(
 		t,
 		`<b>Новые книги на Alib.ru</b><br/><br/>`+
-			`<b>Первая<br/>Вторая</b><br/><br/>`+
+			`🛸 <b>Первая<br/>Вторая</b><br/><br/>`+
 			`Продавец: <a href="https://example.com/sell%0D%0Aer">Bot<br/>Sad</a>, Моск<br/>ва.`+
 			`<br/>Цена: 500<br/>руб.<br/><br/>`+
 			`<a href="https://example.com/bo%0Aok">Купить</a>`,
@@ -176,10 +176,11 @@ func Test_Render_highlights_publication_year(t *testing.T) {
 			emoji:     "🛸 ",
 		},
 		{
-			name:      "book without year has no emoji",
+			name:      "book without year is marked as unknown future",
 			localTime: time.Date(currentYear, time.August, 1, 0, 0, 0, 0, time.UTC),
 			lowerYear: thresholdYear,
 			freshness: true,
+			emoji:     "🛸 ",
 		},
 	}
 
@@ -243,7 +244,7 @@ func Test_Render_omits_optional_fields_without_extra_sections(t *testing.T) {
 	require.Len(t, chunks, 1)
 	require.Equal(
 		t,
-		`<b>Новые книги на Alib.ru</b><br/><br/><b>Книга без содержания</b> Л., 1970 г.`+
+		`<b>Новые книги на Alib.ru</b><br/><br/>🛸 <b>Книга без содержания</b> Л., 1970 г.`+
 			`<br/><br/>Продавец: BotSad, Москва.<br/>Цена: 500 руб.`+
 			`<br/><br/><a href="https://example.com/book">Купить</a>`,
 		chunks[0].Text,
@@ -267,10 +268,10 @@ func Test_Render_separates_listings_with_divider(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []digest.Chunk{{
 		Text: `<b>Новые книги на Alib.ru</b><br/><br/>` +
-			`<b>Первая</b>` +
+			`🛸 <b>Первая</b>` +
 			`<br/><br/><a href="https://example.com/1">Купить</a>` +
 			`<hr/>` +
-			`<b>Вторая</b>` +
+			`🛸 <b>Вторая</b>` +
 			`<br/><br/><a href="https://example.com/2">Купить</a>`,
 		Books: books,
 	}}, chunks)
@@ -415,12 +416,12 @@ func Test_RenderSendable_skips_oversized_listings_in_one_pass(t *testing.T) {
 	require.Equal(t, []digest.Chunk{
 		{
 			Text: `<b>Новые книги на Alib.ru</b><br/><br/>` +
-				`<b>Первая</b>` +
+				`🛸 <b>Первая</b>` +
 				`<br/><br/><a href="https://example.com/1">Купить</a>`,
 			Books: []alib.Book{first},
 		},
 		{
-			Text: `<b>Вторая</b>` +
+			Text: `🛸 <b>Вторая</b>` +
 				`<br/><br/><a href="https://example.com/2">Купить</a>`,
 			Books: []alib.Book{second},
 		},
