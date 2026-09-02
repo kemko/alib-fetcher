@@ -2,6 +2,7 @@ package digest_test
 
 import (
 	"bytes"
+	"fmt"
 	"html"
 	"net/url"
 	"os"
@@ -377,6 +378,34 @@ func Test_Render_does_not_count_divider_toward_message_limit(t *testing.T) {
 	require.Equal(t, unlimitedChunks, chunks)
 }
 
+func Test_Render_splits_before_rich_message_block_limit(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	const messageLimit = 32000
+	books := make([]alib.Book, 251)
+	for index := range books {
+		books[index] = alib.Book{
+			Title:  "К",
+			BuyURL: fmt.Sprintf("https://example.com/%d", index),
+		}
+	}
+
+	// When
+	chunks, err := digest.Render(books, digest.Options{Limit: messageLimit})
+
+	// Then
+	require.NoError(t, err)
+	require.Len(t, chunks, 2)
+	require.Len(t, chunks[0].Books, 250)
+	require.Len(t, chunks[1].Books, 1)
+	require.Equal(t, 249, strings.Count(chunks[0].Text, "<hr/>"))
+	require.NotContains(t, chunks[1].Text, "<hr/>")
+	for _, chunk := range chunks {
+		require.LessOrEqual(t, displayedRuneCount(t, chunk.Text), messageLimit)
+	}
+}
+
 func Test_Render_rejects_listing_over_rune_limit(t *testing.T) {
 	t.Parallel()
 
@@ -630,7 +659,7 @@ func Test_Render_parses_and_sends_belyaev_listing_with_long_photo_urls(t *testin
 		require.Len(t, chunks, 1)
 		require.Equal(t, []alib.Book{book}, chunks[0].Books)
 		require.Less(t, displayedRuneCount(t, chunks[0].Text), limit+1)
-		require.Greater(t, utf8.RuneCount(page), 4000)
+		require.Greater(t, utf8.RuneCountInString(chunks[0].Text), 4000)
 		require.Contains(t, chunks[0].Text, book.Content)
 		require.Contains(t, chunks[0].Text, book.Title)
 		require.Contains(t, chunks[0].Text, book.Bibliography)

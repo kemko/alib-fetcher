@@ -47,6 +47,8 @@ Preserve these semantics:
   runes. If mandatory displayed fields plus minimal content still cannot fit,
   it remains pending and must not block other renderable pending listings;
   `digest.ErrMessageTooLong` is reported.
+- Chunks split at 250 listings so the generated paragraph and `<hr/>` divider
+  blocks stay within Telegram's 500-block Rich Message limit.
 - When a digest has multiple chunks, the first uses the normal notification
   sound and all later chunks are sent silently.
 - Every sent digest attaches the `Обновить` inline button only to the final
@@ -210,8 +212,8 @@ Telegram HTML contains no literal CR or LF characters. Content and details are
 independent optional sections between `main` and the final `Купить` section.
 When both are absent, the block is exactly `main → <br/><br/> → Купить`. The
 heading and final `Купить` section use the same separator. Adjacent listings
-within one chunk use `<hr/>`,
-with no divider at chunk edges.
+within one chunk use `<hr/>`, with no divider at chunk edges. Chunks contain at
+most 250 listings to stay within Telegram's 500-block Rich Message limit.
 Each listing renders, in order: emoji plus bold title and bibliography; optional
 content as a separate section; seller, price, condition/other details, and photo
 links on separate lines; then a final `Купить` link in its own section.

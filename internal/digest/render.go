@@ -14,10 +14,13 @@ import (
 )
 
 const (
-	header           = "<b>Новые книги на Alib.ru</b>"
-	lineBreak        = "<br/>"
-	sectionBreak     = lineBreak + lineBreak
-	listingSeparator = "<hr/>"
+	header                = "<b>Новые книги на Alib.ru</b>"
+	lineBreak             = "<br/>"
+	sectionBreak          = lineBreak + lineBreak
+	listingSeparator      = "<hr/>"
+	richMessageBlockLimit = 500
+	// The first listing is one paragraph; each later listing adds a divider and a paragraph.
+	maxListingsPerChunk = (richMessageBlockLimit + 1) / 2
 )
 
 // ErrMessageTooLong indicates that one listing cannot fit into a message.
@@ -81,7 +84,8 @@ func render(books []alib.Book, options Options, skipOversized bool) ([]Chunk, []
 			separator = sectionBreak
 		}
 
-		if renderedRuneCount(current.Text+separator+item) > options.Limit {
+		if len(current.Books) >= maxListingsPerChunk ||
+			renderedRuneCount(current.Text+separator+item) > options.Limit {
 			chunks = append(chunks, current)
 			current = Chunk{Books: make([]alib.Book, 0)}
 			separator = ""
