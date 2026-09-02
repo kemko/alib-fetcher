@@ -40,10 +40,13 @@ Preserve these semantics:
 - `State.Pending` returns records in first-discovery/source order, not bbolt key
   sort order; the digest sends year `0` records first, then recognized years in
   descending order, with stable first-discovery order within each group.
-- A listing's `Content` is shortened with `…` to the longest prefix that fits
-  within `MESSAGE_LIMIT - 1` runes after rendering. If mandatory fields still
-  cannot fit after minimal content, it remains pending and must not block other
-  renderable pending listings; `digest.ErrMessageTooLong` is reported.
+- `MESSAGE_LIMIT` counts Unicode runes in displayed Rich Message text after
+  parsing HTML; formatting tags and URL attribute values do not count, while
+  encoded text and `<br/>` line breaks do. A listing's `Content` is shortened
+  with `…` to the longest prefix that fits within `MESSAGE_LIMIT - 1` displayed
+  runes. If mandatory displayed fields plus minimal content still cannot fit,
+  it remains pending and must not block other renderable pending listings;
+  `digest.ErrMessageTooLong` is reported.
 - When a digest has multiple chunks, the first uses the normal notification
   sound and all later chunks are sent silently.
 - Every sent digest attaches the `Обновить` inline button only to the final
@@ -173,7 +176,7 @@ Optional defaults:
 | `ALIB_REQUEST_INTERVAL` | `1s` | Non-negative Go duration between sequential Alib requests; `0s` disables the delay |
 | `TELEGRAM_API_BASE` | `https://api.telegram.org` | HTTP(S) API base; override it in tests |
 | `HTTP_TIMEOUT` | `30s` | positive Go duration applied per external request |
-| `MESSAGE_LIMIT` | `4000` | rune count, allowed range 64..4096 |
+| `MESSAGE_LIMIT` | `32000` | displayed Rich Message text rune count after HTML parsing, allowed range 64..32768 |
 
 Invalid configuration, including a malformed or overflowing
 `TELEGRAM_CHAT_ID`, prevents process startup. Errors name the invalid variable.
@@ -217,11 +220,14 @@ The seller format is
 plain text. Missing optional fields must not create extra empty sections. Photo
 links render as `Смотрите: <a href="...">фото</a> - <a href="...">фото</a>` in
 source order, including repeats; the line is omitted when no photos exist. All
-dynamic text and URLs must be HTML-escaped. Limits are counted
-in Unicode runes, and chunks may split only between listings. Content that
-exceeds the limit is truncated before HTML escaping to the longest prefix plus
-`…` that fits within `MESSAGE_LIMIT - 1`; if mandatory fields still cannot fit,
-the listing returns `digest.ErrMessageTooLong`.
+dynamic text and URLs must be HTML-escaped. Limits are counted in Unicode runes
+of displayed Rich Message text after HTML parsing: formatting tags and URL
+attribute values do not consume the limit, while encoded text and `<br/>` line
+breaks do. Chunks may split only between listings. Content that exceeds the
+limit is truncated before HTML escaping to the longest prefix plus `…` that
+fits within `MESSAGE_LIMIT - 1`; only `Content` is shortened. If mandatory
+displayed fields plus minimal content still cannot fit, the listing returns
+`digest.ErrMessageTooLong`.
 
 The Alib client accepts one or more HTTP(S) endpoints, sends
 `User-Agent: alib-fetcher/1.0`, and requires HTTP 200. Endpoints are downloaded
