@@ -64,8 +64,8 @@ current year and whether the January exception applies:
 - `✨` marks other recognized years between the configured inclusive boundary
   and the current year;
 - `🛸` marks any recognized year greater than the current year, independently of
-  `FRESH_BOOKS`;
-- unrecognized publication years receive no marker.
+  `FRESH_BOOKS`, and also marks listings without a recognized publication year;
+- other unrecognized publication years receive no marker.
 
 The January `🔥` rule applies even when `FRESH_BOOKS` is empty or its configured
 boundary excludes the previous year.
@@ -84,16 +84,19 @@ the parsed payload from the latest source pages. The first successful run record
 every listing currently present on those pages as pending and sends them.
 
 `Store.Pending` returns every pending record in first-discovery order, not only
-books found in the current fetch result. Before rendering, the service sorts
-those books by publication year in descending order. Equal years retain their
-first-discovery order, and an unrecognized year (`0`) is placed last. Books that
-could not be sent remain pending across later digest cycles. A chunk is
-acknowledged only after Telegram accepts it, and then its records become sent.
-Sent records older than 14 days are removed once at the beginning of every
-digest cycle; pending records are not removed by retention pruning. If one
-pending listing cannot fit in a Telegram message, other renderable pending
-listings are still sent while the oversized listing remains pending and the
-cycle reports the rendering error.
+books found in the current fetch result. Before rendering, the service puts
+books without a recognized publication year (`0`) first, preserving their
+first-discovery order, then sorts recognized years in descending order with the
+same stable ordering for equal years. Books that could not be sent remain
+pending across later digest cycles. A chunk is acknowledged only after
+Telegram accepts it, and then its records become sent. Sent records older than
+14 days are removed once at the beginning of every digest cycle; pending
+records are not removed by retention pruning. Content that makes a listing too
+long is shortened with `…` before HTML escaping to the longest prefix that fits
+within `MESSAGE_LIMIT - 1` runes. If the listing's mandatory fields still do
+not fit after the shortest content, `digest.ErrMessageTooLong` is returned;
+other renderable pending listings are still sent while that listing remains
+pending.
 Telegram operations use the pinned
 [`github.com/go-telegram/bot`](https://github.com/go-telegram/bot) v1.23.0 SDK.
 Each Telegram Rich Message is sent through its `SendRichMessage` method with
@@ -130,10 +133,9 @@ message.
 If the heading and first pending listing cannot fit together but the listing
 fits alone, the first message contains only the heading and the listing follows
 in a headerless message.
-Only the final message uses the normal notification sound; earlier messages are
-silent.
-Whenever a digest sends at least one message, the final message includes an
-inline `Обновить` button.
+The first message uses the normal notification sound; all later messages are
+silent. Whenever a digest sends at least one message, the final message
+includes an inline `Обновить` button.
 Pressing it asks a running service with the same bot token to start one
 out-of-schedule digest. If that refresh sends new notifications, the clicked
 message's old button is removed before the first new message is sent, and the
