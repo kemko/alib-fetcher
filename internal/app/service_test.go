@@ -740,6 +740,38 @@ func Test_Service_sends_renderable_pending_books_when_one_pending_book_is_too_lo
 	require.Equal(t, 1, hookCalls)
 }
 
+func Test_Service_sends_and_marks_book_with_truncated_content(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	now := time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC)
+	book := alib.Book{
+		Title:   "Книга",
+		Content: strings.Repeat("длинное описание ", 100),
+		BuyURL:  "https://example.com/book",
+	}
+	state := &fakeState{pending: []alib.Book{book}, recordedNew: 1}
+	sender := &fakeSender{}
+	service := app.NewService(app.Dependencies{
+		Fetcher:      fakeFetcher{books: []alib.Book{book}},
+		State:        state,
+		Sender:       sender,
+		MessageLimit: 180,
+		Now:          func() time.Time { return now },
+	})
+
+	// When
+	result, err := service.Run(context.Background())
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, app.Result{Fetched: 1, New: 1, Sent: 1}, result)
+	require.Equal(t, []alib.Book{book}, state.marked)
+	require.Len(t, sender.messages, 2)
+	require.Contains(t, strings.Join(sender.messages, ""), "…")
+	require.NotContains(t, strings.Join(sender.messages, ""), strings.Repeat("длинное описание ", 20))
+}
+
 func Test_Service_does_not_run_pre_delivery_hook_when_no_chunks_are_renderable(t *testing.T) {
 	t.Parallel()
 

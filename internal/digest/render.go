@@ -60,6 +60,18 @@ func render(books []alib.Book, options Options, skipOversized bool) ([]Chunk, []
 	current := Chunk{Text: header, Books: make([]alib.Book, 0)}
 	for _, book := range books {
 		item := renderBook(book, options)
+		if utf8.RuneCountInString(item) > options.Limit-1 && strings.TrimSpace(book.Content) != "" {
+			var fits bool
+			item, fits = truncateContent(book, options)
+			if !fits {
+				if skipOversized {
+					skippedBuyURLs = append(skippedBuyURLs, book.BuyURL)
+					continue
+				}
+
+				return nil, nil, fmt.Errorf("%w: %s", ErrMessageTooLong, book.BuyURL)
+			}
+		}
 		if utf8.RuneCountInString(item) > options.Limit {
 			if skipOversized {
 				skippedBuyURLs = append(skippedBuyURLs, book.BuyURL)
@@ -89,6 +101,30 @@ func render(books []alib.Book, options Options, skipOversized bool) ([]Chunk, []
 	}
 
 	return append(chunks, current), skippedBuyURLs, nil
+}
+
+func truncateContent(book alib.Book, options Options) (string, bool) {
+	content := strings.TrimSpace(book.Content)
+	if content == "" {
+		return "", false
+	}
+
+	contentRunes := []rune(content)
+	low, high := 0, len(contentRunes)
+	for low < high {
+		middle := (low + high + 1) / 2
+		candidate := book
+		candidate.Content = string(contentRunes[:middle]) + "…"
+		if utf8.RuneCountInString(renderBook(candidate, options)) <= options.Limit-1 {
+			low = middle
+			continue
+		}
+		high = middle - 1
+	}
+
+	book.Content = string(contentRunes[:low]) + "…"
+	item := renderBook(book, options)
+	return item, utf8.RuneCountInString(item) <= options.Limit-1
 }
 
 func renderBook(book alib.Book, options Options) string {

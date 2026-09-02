@@ -8,6 +8,7 @@ import (
 
 	"github.com/kemko/alib-fetcher/internal/alib"
 	"github.com/kemko/alib-fetcher/internal/digest"
+	htmlparser "golang.org/x/net/html"
 
 	"github.com/stretchr/testify/require"
 )
@@ -426,6 +427,106 @@ func Test_RenderSendable_skips_oversized_listings_in_one_pass(t *testing.T) {
 			Books: []alib.Book{second},
 		},
 	}, chunks)
+}
+
+func Test_Render_truncates_long_content_to_limit_minus_one(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	prefix := strings.Repeat("Описание ", 8)
+	book := alib.Book{
+		Title:        "Книга",
+		Bibliography: "Библиография",
+		Content:      prefix + "и ещё " + strings.Repeat("длинное описание ", 20),
+		Seller:       "Продавец",
+		Location:     "Москва",
+		Price:        "500 руб.",
+		BuyURL:       "https://example.com/book",
+	}
+	candidate := book
+	candidate.Content = prefix + "…"
+	candidateChunks, err := digest.Render([]alib.Book{candidate}, digest.Options{Limit: 4096})
+	require.NoError(t, err)
+	listing := strings.TrimPrefix(candidateChunks[0].Text, `<b>Новые книги на Alib.ru</b><br/><br/>`)
+	messageLimit := utf8.RuneCountInString(listing) + 1
+
+	// When
+	chunks, err := digest.Render([]alib.Book{book}, digest.Options{Limit: messageLimit})
+	sendableChunks, skippedBuyURLs, sendableErr := digest.RenderSendable(
+		[]alib.Book{book},
+		digest.Options{Limit: messageLimit},
+	)
+
+	// Then
+	require.NoError(t, err)
+	require.NoError(t, sendableErr)
+	require.Empty(t, skippedBuyURLs)
+	require.Len(t, chunks, 2)
+	require.Equal(t, chunks, sendableChunks)
+	require.Equal(t, []alib.Book{}, chunks[0].Books)
+	require.Equal(t, []alib.Book{book}, chunks[1].Books)
+	require.Equal(t, messageLimit-1, utf8.RuneCountInString(chunks[1].Text))
+	require.Contains(t, chunks[1].Text, prefix+"…")
+	require.NotContains(t, chunks[1].Text, "и ещё")
+}
+
+func Test_Render_truncates_content_at_escaped_rune_boundary(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	book := alib.Book{
+		Title:   "Книга",
+		Content: "абв<ёж&зий" + strings.Repeat("длинное описание ", 20),
+		BuyURL:  "https://example.com/book",
+	}
+	candidate := book
+	candidate.Content = "абв…"
+	candidateChunks, err := digest.Render([]alib.Book{candidate}, digest.Options{Limit: 4096})
+	require.NoError(t, err)
+	listing := strings.TrimPrefix(candidateChunks[0].Text, `<b>Новые книги на Alib.ru</b><br/><br/>`)
+	messageLimit := utf8.RuneCountInString(listing) + 2
+
+	// When
+	chunks, err := digest.Render([]alib.Book{book}, digest.Options{Limit: messageLimit})
+
+	// Then
+	require.NoError(t, err)
+	require.Len(t, chunks, 2)
+	rendered := chunks[1].Text
+	require.Equal(t, messageLimit-2, utf8.RuneCountInString(rendered))
+	require.Contains(t, rendered, "абв…")
+	require.NotContains(t, rendered, "&lt;")
+	require.NotContains(t, rendered, "абв<")
+	_, err = htmlparser.Parse(strings.NewReader("<html><body>" + rendered + "</body></html>"))
+	require.NoError(t, err)
+}
+
+func Test_Render_truncates_content_by_source_runes_without_mutating_chunk_book(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	book := alib.Book{
+		Title:   "Книга",
+		Content: "начало &lt; середина < конец " + strings.Repeat("текст ", 20),
+		BuyURL:  "https://example.com/book",
+	}
+	candidate := book
+	candidate.Content = "начало &…"
+	candidateChunks, err := digest.Render([]alib.Book{candidate}, digest.Options{Limit: 4096})
+	require.NoError(t, err)
+	listing := strings.TrimPrefix(candidateChunks[0].Text, `<b>Новые книги на Alib.ru</b><br/><br/>`)
+	messageLimit := utf8.RuneCountInString(listing) + 1
+
+	// When
+	chunks, err := digest.Render([]alib.Book{book}, digest.Options{Limit: messageLimit})
+
+	// Then
+	require.NoError(t, err)
+	require.Len(t, chunks, 2)
+	require.Equal(t, []alib.Book{book}, chunks[1].Books)
+	require.Contains(t, chunks[1].Text, "начало &amp;…")
+	require.NotContains(t, chunks[1].Text, "начало &amp;lt;")
+	require.Equal(t, messageLimit-1, utf8.RuneCountInString(chunks[1].Text))
 }
 
 func Test_Render_returns_no_chunks_for_no_books(t *testing.T) {
