@@ -47,7 +47,7 @@ func Test_Service_marks_each_chunk_only_after_delivery(t *testing.T) {
 	require.Equal(t, 1, result.Sent)
 	require.Equal(t, books[:1], state.marked)
 	require.Equal(t, now, state.markedAt)
-	require.Equal(t, []bool{true, false}, sender.silent)
+	require.Equal(t, []bool{false, true}, sender.silent)
 	require.Equal(t, []bool{false, true}, sender.attachRefresh)
 }
 
@@ -173,7 +173,7 @@ func Test_Service_renders_freshness_using_cycle_time_in_configured_timezone(t *t
 	}
 }
 
-func Test_Service_sends_only_final_chunk_with_sound(t *testing.T) {
+func Test_Service_sends_only_first_chunk_with_sound(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -212,7 +212,7 @@ func Test_Service_sends_only_final_chunk_with_sound(t *testing.T) {
 	require.Contains(t, sender.messages[2], "Третья")
 	require.Equal(t, books, state.marked)
 	require.Equal(t, now, state.markedAt)
-	require.Equal(t, []bool{true, true, false}, sender.silent)
+	require.Equal(t, []bool{false, true, true}, sender.silent)
 	require.Equal(t, []bool{false, false, true}, sender.attachRefresh)
 }
 
@@ -268,8 +268,8 @@ func Test_Service_sorts_pending_books_by_publication_year_before_chunking(t *tes
 	require.Equal(t, now, state.markedAt)
 	require.Equal(t, expectedChunkTexts(expectedChunks), sender.messages)
 	require.Len(t, sender.silent, len(expectedOrder))
-	require.NotContains(t, sender.silent[:len(sender.silent)-1], false)
-	require.False(t, sender.silent[len(sender.silent)-1])
+	require.False(t, sender.silent[0])
+	require.NotContains(t, sender.silent[1:], false)
 	require.Len(t, sender.attachRefresh, len(expectedOrder))
 	require.NotContains(t, sender.attachRefresh[:len(sender.attachRefresh)-1], true)
 	require.True(t, sender.attachRefresh[len(sender.attachRefresh)-1])
@@ -359,7 +359,7 @@ func Test_Service_retries_headerless_only_chunk_after_partial_delivery_failure(t
 		header,
 		expectedChunks[1].Text,
 	}, sender.messages)
-	require.Equal(t, []bool{true, false, true, false}, sender.silent)
+	require.Equal(t, []bool{false, true, false, true}, sender.silent)
 	require.Equal(t, []bool{false, true, false, true}, sender.attachRefresh)
 }
 
@@ -493,7 +493,7 @@ func Test_Service_waits_and_retries_only_rate_limited_chunk(t *testing.T) {
 	require.NotEqual(t, sender.messages[0], sender.messages[1])
 	require.NotEqual(t, sender.messages[1], sender.messages[2])
 	require.Equal(t, sender.messages[2], sender.messages[3])
-	require.Equal(t, []bool{true, true, false, false}, sender.silent)
+	require.Equal(t, []bool{false, true, true, true}, sender.silent)
 	require.Equal(t, []bool{false, false, true, true}, sender.attachRefresh)
 	require.Equal(t, []string{
 		"record",
@@ -736,7 +736,7 @@ func Test_Service_sends_renderable_pending_books_when_one_pending_book_is_too_lo
 	require.Contains(t, sender.messages[0], "Обычная")
 	require.NotContains(t, strings.Join(sender.messages, "\n"), "Очень длинная книга")
 	require.Equal(t, []bool{false, true}, sender.attachRefresh)
-	require.Equal(t, []bool{true, false}, sender.silent)
+	require.Equal(t, []bool{false, true}, sender.silent)
 	require.Equal(t, 1, hookCalls)
 }
 

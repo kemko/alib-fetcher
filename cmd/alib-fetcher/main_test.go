@@ -295,7 +295,7 @@ func Test_run_forget_latest_documented_cli_scenario_deletes_latest_records_witho
 	require.Equal(t, []alib.Book{books[0], books[1]}, pending)
 }
 
-func Test_run_sends_only_final_wired_message_with_sound(t *testing.T) {
+func Test_run_sends_only_first_wired_message_with_sound(t *testing.T) {
 	// Given
 	useOnceMode(t)
 
@@ -373,14 +373,16 @@ func Test_run_sends_only_final_wired_message_with_sound(t *testing.T) {
 		} else {
 			require.NotContains(t, payload.RichMessage.HTML, "<b>Новые книги на Alib.ru</b>")
 		}
-		if index < len(payloads)-1 {
+		if index == 0 {
+			require.False(t, payload.DisableNotification)
+		} else {
 			require.True(t, payload.DisableNotification)
-			require.Nil(t, payload.ReplyMarkup)
-			continue
 		}
-
-		require.False(t, payload.DisableNotification)
-		requireRefreshButton(t, payload)
+		if index == len(payloads)-1 {
+			requireRefreshButton(t, payload)
+		} else {
+			require.Nil(t, payload.ReplyMarkup)
+		}
 	}
 	require.Contains(t, logs.String(), "digest.completed")
 	require.NotContains(t, logs.String(), "test-token")
