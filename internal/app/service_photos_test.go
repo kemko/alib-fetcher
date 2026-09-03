@@ -255,6 +255,8 @@ func Test_Service_integratesPhotoPreparationAndSlideshow(t *testing.T) {
 			writer.Header().Set("Content-Type", "application/json")
 			_, err := io.WriteString(writer, `{"url":"/published/image"}`)
 			assert.NoError(t, err)
+		case "/published/image":
+			writer.Header().Set("Content-Type", "image/png")
 		default:
 			writer.WriteHeader(http.StatusNotFound)
 		}
@@ -340,6 +342,8 @@ func Test_Service_integratesParsedPhotosWithPersistentStore(t *testing.T) {
 			assert.Equal(t, []string{"integration-tag"}, request.MultipartForm.Value["tagIds[]"])
 			_, err = io.WriteString(writer, `{"url":"published/image"}`)
 			assert.NoError(t, err)
+		case request.URL.Path == "/base/published/image":
+			writer.Header().Set("Content-Type", "image/png")
 		default:
 			writer.WriteHeader(http.StatusNotFound)
 		}
@@ -503,6 +507,8 @@ func photoServer(events *[]string) *httptest.Server {
 			if _, err := io.WriteString(writer, `{"url":"/published/image"}`); err != nil {
 				return
 			}
+		case "/published/image":
+			writer.Header().Set("Content-Type", "image/png")
 		default:
 			writer.WriteHeader(http.StatusNotFound)
 		}

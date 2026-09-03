@@ -211,34 +211,42 @@ func (c *Client) preparePhotos(ctx context.Context, prepared *PreparedBook, refe
 			applyPhotoResult(photo, result)
 			continue
 		}
-		if _, reusable := c.reusableResult(*photo); reusable {
-			cache[photo.URL] = photoResultFromPhoto(*photo)
-			continue
-		}
-
-		result, file, processErr := c.processPhoto(ctx, prepared.TemporaryDirectory(), *photo, referer)
+		result, processErr := c.preparePhoto(ctx, prepared.TemporaryDirectory(), *photo, referer)
 		if processErr != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			c.logFailure(ctx, index, processErr)
-			return processErr
-		}
-		if file != "" {
-			result, processErr = c.publishImage(ctx, file, result.contentType)
-			if processErr != nil {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				c.logFailure(ctx, index, processErr)
-				return processErr
-			}
+			return c.handlePhotoFailure(ctx, index, processErr)
 		}
 		applyPhotoResult(photo, result)
 		cache[photo.URL] = result
 	}
 
 	return nil
+}
+
+func (c *Client) preparePhoto(
+	ctx context.Context,
+	directory string,
+	photo alib.Photo,
+	referer string,
+) (photoResult, error) {
+	if _, reusable := c.reusableResult(photo); reusable {
+		return c.resolvePersistedResult(ctx, photo)
+	}
+
+	result, file, err := c.processPhoto(ctx, directory, photo, referer)
+	if err != nil || file == "" {
+		return result, err
+	}
+
+	return c.publishImage(ctx, file, result.contentType)
+}
+
+func (c *Client) handlePhotoFailure(ctx context.Context, index int, err error) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	c.logFailure(ctx, index, err)
+
+	return err
 }
 
 type photoResult struct {
@@ -428,8 +436,12 @@ func (c *Client) publishImage(ctx context.Context, path, contentType string) (ph
 	if err != nil {
 		return photoResult{}, photoFailure("slink_upload", "response_url", 0, err)
 	}
+	mediaURL, err := c.resolveMediaURL(ctx, resolvedURL)
+	if err != nil {
+		return photoResult{}, err
+	}
 
-	return photoResult{slinkURL: resolvedURL, slinkProfile: c.profile}, nil
+	return photoResult{slinkURL: mediaURL, slinkProfile: c.profile}, nil
 }
 
 func multipartBody(path, contentType, tagID string) (io.Reader, int64, string, error) {
@@ -546,8 +558,88 @@ func (c *Client) resolveSlinkURL(rawURL string) (string, error) {
 	if validationErr := validateHTTPURL(resolved); validationErr != nil {
 		return "", fmt.Errorf("invalid slink image URL: %w", validationErr)
 	}
+	if !sameOrigin(c.baseURL, resolved) {
+		return "", errors.New("slink image URL must use the configured origin")
+	}
 
 	return resolved.String(), nil
+}
+
+func (c *Client) resolveMediaURL(ctx context.Context, rawURL string) (string, error) {
+	resolvedURL, err := c.resolveSlinkURL(rawURL)
+	if err != nil {
+		return "", photoFailure("slink_media", "response_url", 0, err)
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(requestCtx, http.MethodHead, resolvedURL, nil)
+	if err != nil {
+		return "", photoFailure("slink_media", "request", 0, err)
+	}
+	request.Header.Set("User-Agent", userAgent)
+
+	mediaClient := *c.http
+	mediaClient.Timeout = c.timeout
+	mediaClient.CheckRedirect = c.checkSlinkRedirect
+	response, err := mediaClient.Do(request)
+	if err != nil {
+		return "", photoFailure("slink_media", "request", 0, contextError(err))
+	}
+	defer c.closeResponseBody(response.Body)
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return "", photoFailure("slink_media", "slink_http", response.StatusCode, nil)
+	}
+	if !isImageType(response.Header.Get("Content-Type")) {
+		return "", photoFailure("slink_media", "content_type", 0, nil)
+	}
+	if response.Request == nil || response.Request.URL == nil {
+		return "", photoFailure("slink_media", "response_url", 0, nil)
+	}
+	finalURL := response.Request.URL
+	if validationErr := validateHTTPURL(finalURL); validationErr != nil {
+		return "", photoFailure("slink_media", "response_url", 0, validationErr)
+	}
+	if !sameOrigin(c.baseURL, finalURL) {
+		return "", photoFailure(
+			"slink_media",
+			"response_url",
+			0,
+			errors.New("slink media response must use the configured origin"),
+		)
+	}
+
+	return finalURL.String(), nil
+}
+
+func (c *Client) checkSlinkRedirect(request *http.Request, via []*http.Request) error {
+	if len(via) > maxHTTPRedirects {
+		return errors.New("slink media redirect limit exceeded")
+	}
+	if err := validateHTTPURL(request.URL); err != nil {
+		return err
+	}
+	if !sameOrigin(c.baseURL, request.URL) {
+		return errors.New("slink media redirect must use the configured origin")
+	}
+
+	return nil
+}
+
+func sameOrigin(left, right *url.URL) bool {
+	return strings.EqualFold(left.Scheme, right.Scheme) &&
+		strings.EqualFold(left.Hostname(), right.Hostname()) &&
+		originPort(left) == originPort(right)
+}
+
+func originPort(value *url.URL) string {
+	if port := value.Port(); port != "" {
+		return port
+	}
+	if strings.EqualFold(value.Scheme, "https") {
+		return "443"
+	}
+
+	return "80"
 }
 
 func secureDialContext(
@@ -647,6 +739,20 @@ func (c *Client) reusableResult(photo alib.Photo) (photoResult, bool) {
 	}
 
 	return photoResultFromPhoto(photo), true
+}
+
+func (c *Client) resolvePersistedResult(ctx context.Context, photo alib.Photo) (photoResult, error) {
+	result := photoResultFromPhoto(photo)
+	if result.nonImage {
+		return result, nil
+	}
+	mediaURL, err := c.resolveMediaURL(ctx, result.slinkURL)
+	if err != nil {
+		return photoResult{}, err
+	}
+	result.slinkURL = mediaURL
+
+	return result, nil
 }
 
 func photoResultFromPhoto(photo alib.Photo) photoResult {

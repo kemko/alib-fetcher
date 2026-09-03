@@ -35,6 +35,10 @@ func TestProcess_uploadsImageWithAuthAndTagAndCleansFiles(t *testing.T) {
 			writeBytes(t, writer, []byte("\x89PNG\r\n\x1a\n"))
 			return
 		}
+		if request.Method == http.MethodHead {
+			writer.Header().Set("Content-Type", "image/png")
+			return
+		}
 		assert.Equal(t, http.MethodPost, request.Method)
 		assert.Equal(t, "/api/external/upload", request.URL.Path)
 		assert.Equal(t, "Bearer sk_secret-api-key", request.Header.Get("Authorization"))
@@ -90,6 +94,7 @@ func TestProcess_uploadsImageWithAuthAndTagAndCleansFiles(t *testing.T) {
 func TestProcess_followsHTTPAndMetaRedirectsAndReusesDuplicate(t *testing.T) {
 	var downloads atomic.Int32
 	var uploads atomic.Int32
+	var mediaChecks atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/redirect":
@@ -100,6 +105,9 @@ func TestProcess_followsHTTPAndMetaRedirectsAndReusesDuplicate(t *testing.T) {
 		case "/image":
 			downloads.Add(1)
 			writeBytes(t, writer, []byte("GIF89a"))
+		case "/uploaded":
+			mediaChecks.Add(1)
+			writer.Header().Set("Content-Type", "image/gif")
 		default:
 			uploads.Add(1)
 			writer.Header().Set("Content-Type", "application/json")
@@ -120,7 +128,127 @@ func TestProcess_followsHTTPAndMetaRedirectsAndReusesDuplicate(t *testing.T) {
 	require.Equal(t, prepared.Book.Photos[0].SlinkProfile, prepared.Book.Photos[1].SlinkProfile)
 	require.EqualValues(t, 1, downloads.Load())
 	require.EqualValues(t, 1, uploads.Load())
+	require.EqualValues(t, 1, mediaChecks.Load())
 	require.NoError(t, prepared.Cleanup())
+}
+
+func TestProcess_resolvesSlinkShareURLToDirectMediaURL(t *testing.T) {
+	var mediaChecks atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/photo":
+			writeBytes(t, writer, []byte("GIF89a"))
+		case "/api/external/upload":
+			writer.Header().Set("Content-Type", "application/json")
+			writeText(t, writer, `{"url":"i/share-code"}`)
+		case "/i/share-code":
+			assert.Equal(t, http.MethodHead, request.Method)
+			assert.Equal(t, userAgent, request.Header.Get("User-Agent"))
+			mediaChecks.Add(1)
+			http.Redirect(writer, request, "/image/123.png", http.StatusFound)
+		case "/image/123.png":
+			assert.Equal(t, http.MethodHead, request.Method)
+			mediaChecks.Add(1)
+			writer.Header().Set("Content-Type", "image/png")
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	client := testClient(t, server)
+
+	prepared, err := client.Process(context.Background(), alib.Book{
+		Photos: []alib.Photo{{URL: "http://photo.test/photo"}},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, server.URL+"/image/123.png", prepared.Book.Photos[0].SlinkURL)
+	require.EqualValues(t, 2, mediaChecks.Load())
+	require.NoError(t, prepared.Cleanup())
+}
+
+func TestProcess_rejectsInvalidSlinkMediaResponses(t *testing.T) {
+	offOrigin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "image/png")
+	}))
+	t.Cleanup(offOrigin.Close)
+
+	testCases := []struct {
+		name, contentType, location, wantCategory string
+		status, wantStatus                        int
+	}{
+		{name: "HTML response", status: http.StatusOK, contentType: "text/html", wantCategory: "content_type"},
+		{name: "not found", status: http.StatusNotFound, wantCategory: "slink_http", wantStatus: http.StatusNotFound},
+		{name: "server error", status: http.StatusBadGateway, wantCategory: "slink_http", wantStatus: http.StatusBadGateway},
+		{name: "missing Location", status: http.StatusFound, wantCategory: "slink_http", wantStatus: http.StatusFound},
+		{name: "off-origin Location", status: http.StatusFound, location: offOrigin.URL + "/image", wantCategory: "request"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				switch request.URL.Path {
+				case "/photo":
+					writeBytes(t, writer, []byte("GIF89a"))
+				case "/api/external/upload":
+					writer.Header().Set("Content-Type", "application/json")
+					writeText(t, writer, `{"url":"/i/share-code"}`)
+				case "/i/share-code":
+					if testCase.location != "" {
+						writer.Header().Set("Location", testCase.location)
+					}
+					if testCase.status != 0 {
+						writer.WriteHeader(testCase.status)
+					}
+					if testCase.contentType != "" {
+						writer.Header().Set("Content-Type", testCase.contentType)
+					}
+				default:
+					writer.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			t.Cleanup(server.Close)
+			client := testClient(t, server)
+
+			prepared, err := client.Process(context.Background(), alib.Book{
+				Photos: []alib.Photo{{URL: "http://photo.test/photo"}},
+			})
+
+			require.Error(t, err)
+			require.Nil(t, prepared)
+			details := photoFailureDetailsFromError(err)
+			require.Equal(t, "slink_media", details.stage)
+			require.Equal(t, testCase.wantCategory, details.category)
+			require.Equal(t, testCase.wantStatus, details.status)
+		})
+	}
+}
+
+func TestProcess_honorsCancellationDuringSlinkMediaResolution(t *testing.T) {
+	started := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/photo":
+			writeBytes(t, writer, []byte("GIF89a"))
+		case "/api/external/upload":
+			writer.Header().Set("Content-Type", "application/json")
+			writeText(t, writer, `{"url":"/i/share-code"}`)
+		case "/i/share-code":
+			close(started)
+			<-request.Context().Done()
+		}
+	}))
+	t.Cleanup(server.Close)
+	client := testClient(t, server)
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := client.Process(ctx, alib.Book{Photos: []alib.Photo{{URL: "http://photo.test/photo"}}})
+		result <- err
+	}()
+	<-started
+	cancel()
+
+	require.ErrorIs(t, <-result, context.Canceled)
 }
 
 func TestProcess_marksNonImageAndPreservesSourceLink(t *testing.T) {
@@ -319,18 +447,34 @@ func TestProcess_returnsContextCancellation(t *testing.T) {
 
 func TestProcess_reusesPersistedCurrentProfileWithoutDownloading(t *testing.T) {
 	var downloads atomic.Int32
+	var mediaChecks atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodHead && request.URL.Path == "/i/old-code" {
+			mediaChecks.Add(1)
+			http.Redirect(writer, request, "/image/direct.png", http.StatusFound)
+			return
+		}
+		if request.Method == http.MethodHead && request.URL.Path == "/image/direct.png" {
+			mediaChecks.Add(1)
+			writer.Header().Set("Content-Type", "image/png")
+			return
+		}
+		if request.Method == http.MethodHead {
+			writer.Header().Set("Content-Type", "image/png")
+			return
+		}
 		downloads.Add(1)
 		writeText(t, writer, "bad")
 	}))
 	defer server.Close()
 	client := testClient(t, server)
 	prepared, err := client.Process(context.Background(), alib.Book{Photos: []alib.Photo{
-		{URL: "http://photo.test/photo", Caption: "fresh", SlinkURL: "https://slink.example/image", SlinkProfile: client.Profile()},
+		{URL: "http://photo.test/photo", Caption: "fresh", SlinkURL: server.URL + "/i/old-code", SlinkProfile: client.Profile()},
 	}})
 	require.NoError(t, err)
-	require.Equal(t, "https://slink.example/image", prepared.Book.Photos[0].SlinkURL)
+	require.Equal(t, server.URL+"/image/direct.png", prepared.Book.Photos[0].SlinkURL)
 	require.EqualValues(t, 0, downloads.Load())
+	require.EqualValues(t, 2, mediaChecks.Load())
 	require.NoError(t, prepared.Cleanup())
 }
 
@@ -526,6 +670,10 @@ func TestProcess_dialsTheValidatedAddress(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path == "/photo" {
 			writeBytes(t, writer, []byte("GIF89a"))
+			return
+		}
+		if request.Method == http.MethodHead {
+			writer.Header().Set("Content-Type", "image/gif")
 			return
 		}
 		writeText(t, writer, `{"url":"/published"}`)
@@ -733,6 +881,10 @@ func TestProcess_acceptsExactSlinkResponseLimitAndRejectsInvalidURLs(t *testing.
 					writeBytes(t, writer, []byte("GIF89a"))
 					return
 				}
+				if request.Method == http.MethodHead {
+					writer.Header().Set("Content-Type", "image/gif")
+					return
+				}
 				writeBytes(t, writer, testCase.response)
 			}))
 			defer server.Close()
@@ -772,6 +924,10 @@ func TestProcess_enforcesHTTPAndMetaRedirectBoundaries(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 				if request.URL.Path == "/api/external/upload" {
 					writeText(t, writer, `{"url":"/published"}`)
+					return
+				}
+				if request.Method == http.MethodHead {
+					writer.Header().Set("Content-Type", "image/gif")
 					return
 				}
 				index, err := strconv.Atoi(strings.TrimPrefix(request.URL.Path, "/"+testCase.kind+"/"))
@@ -815,6 +971,8 @@ func TestProcess_usesSlinkBasePathForUploadAndRelativeResponse(t *testing.T) {
 			writeBytes(t, writer, []byte("GIF89a"))
 		case "/base/api/external/upload":
 			writeText(t, writer, `{"url":"published/image"}`)
+		case "/base/published/image":
+			writer.Header().Set("Content-Type", "image/png")
 		default:
 			writer.WriteHeader(http.StatusNotFound)
 		}

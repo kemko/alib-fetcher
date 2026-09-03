@@ -259,6 +259,9 @@ func Test_run_endToEnd_isolatesSlinkSourceFailure(t *testing.T) {
 			writer.Header().Set("Content-Type", "application/json")
 			_, err = io.WriteString(writer, `{"url":"/published/good.png"}`)
 			assert.NoError(t, err)
+		case "/published/good.png":
+			assert.Equal(t, http.MethodHead, request.Method)
+			writer.Header().Set("Content-Type", "image/png")
 		default:
 			t.Errorf("unexpected Slink path %q", request.URL.Path)
 		}
@@ -338,7 +341,12 @@ func (transport rewriteHostTransport) RoundTrip(request *http.Request) (*http.Re
 	rewritten := request.Clone(request.Context())
 	rewritten.URL.Host = transport.target
 
-	return http.DefaultTransport.RoundTrip(rewritten)
+	response, err := http.DefaultTransport.RoundTrip(rewritten)
+	if response != nil && response.Request != nil {
+		response.Request = request
+	}
+
+	return response, err
 }
 
 func newIPv4TestServer(t *testing.T, handler http.Handler) *httptest.Server {

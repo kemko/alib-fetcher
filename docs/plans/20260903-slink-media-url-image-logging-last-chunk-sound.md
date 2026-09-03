@@ -64,15 +64,15 @@
 - Modify: `internal/slink/client.go`
 - Modify: `internal/slink/client_test.go`
 
-- [ ] Добавить тест, где upload возвращает `i/{code}`, HEAD с User-Agent `alib-fetcher/1.0` перенаправляется на `/image/{id}.png`, а итоговый `Photo.SlinkURL` содержит прямой URL.
-- [ ] После upload выполнять HEAD по возвращённому URL через копию Slink HTTP client, соблюдая `HTTP_TIMEOUT`.
-- [ ] Разрешать redirects только внутри настроенного Slink origin, валидировать HTTP(S), отсутствие userinfo, конечный 2xx status и `Content-Type: image/*`.
-- [ ] Сохранять конечный `response.Request.URL` как `Photo.SlinkURL`; короткий `i/…` URL не должен попадать в `tg-slideshow`.
-- [ ] Аналогично проверять сохранённые результаты активного profile. Старый `i/…` URL должен преобразоваться без повторного скачивания исходника и повторного upload; прямой URL проверяется на доступность.
-- [ ] Сохранить cache повторяющихся source URL внутри книги, чтобы download, upload и media resolution выполнялись один раз.
-- [ ] Классифицировать ошибки проверки как book-specific stage `slink_media`, чтобы недоступное изображение оставалось pending и не приводило к `digest.failed` от Telegram.
-- [ ] Добавить тесты direct URL, short redirect, HTML вместо изображения, 4xx/5xx, отсутствующего или off-origin `Location` и отмены context.
-- [ ] Выполнить `make test`; исправить все ошибки до Task 3.
+- [x] Добавить тест, где upload возвращает `i/{code}`, HEAD с User-Agent `alib-fetcher/1.0` перенаправляется на `/image/{id}.png`, а итоговый `Photo.SlinkURL` содержит прямой URL.
+- [x] После upload выполнять HEAD по возвращённому URL через копию Slink HTTP client, соблюдая `HTTP_TIMEOUT`.
+- [x] Разрешать redirects только внутри настроенного Slink origin, валидировать HTTP(S), отсутствие userinfo, конечный 2xx status и `Content-Type: image/*`.
+- [x] Сохранять конечный `response.Request.URL` как `Photo.SlinkURL`; короткий `i/…` URL не должен попадать в `tg-slideshow`.
+- [x] Аналогично проверять сохранённые результаты активного profile. Старый `i/…` URL должен преобразоваться без повторного скачивания исходника и повторного upload; прямой URL проверяется на доступность.
+- [x] Сохранить cache повторяющихся source URL внутри книги, чтобы download, upload и media resolution выполнялись один раз.
+- [x] Классифицировать ошибки проверки как book-specific stage `slink_media`, чтобы недоступное изображение оставалось pending и не приводило к `digest.failed` от Telegram.
+- [x] Добавить тесты direct URL, short redirect, HTML вместо изображения, 4xx/5xx, отсутствующего или off-origin `Location` и отмены context.
+- [x] Выполнить `make test`; исправить все ошибки до Task 3.
 
 ### Task 3: Добавить структурированные lifecycle-логи фотографий
 
