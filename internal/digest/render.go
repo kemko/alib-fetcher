@@ -19,6 +19,7 @@ const (
 	sectionBreak          = lineBreak + lineBreak
 	listingSeparator      = "<hr/>"
 	richMessageBlockLimit = 500
+	richMessageMediaLimit = 50
 )
 
 // ErrMessageTooLong indicates that one listing cannot fit into a message.
@@ -64,6 +65,7 @@ func render(books []alib.Book, options Options, skipOversized bool) ([]Chunk, []
 	skippedBuyURLs := make([]string, 0)
 	current := Chunk{Text: header, Books: make([]alib.Book, 0)}
 	currentBlocks := 0
+	currentMedia := 0
 	for _, book := range books {
 		item := renderBook(book, options)
 		itemLimit := options.Limit
@@ -87,15 +89,17 @@ func render(books []alib.Book, options Options, skipOversized bool) ([]Chunk, []
 		}
 
 		itemBlocks := richMessageBlocks(book, options)
+		itemMedia := richMessageMedia(book, options)
 		candidateBlocks := currentBlocks + itemBlocks
+		candidateMedia := currentMedia + itemMedia
 		if len(current.Books) > 0 {
 			candidateBlocks++
 		}
-		if candidateBlocks > richMessageBlockLimit ||
-			renderedRuneCount(current.Text+separator+item) > options.Limit {
+		if chunkExceedsLimits(candidateBlocks, candidateMedia, current.Text+separator+item, options.Limit) {
 			chunks = append(chunks, current)
 			current = Chunk{Books: make([]alib.Book, 0)}
 			currentBlocks = 0
+			currentMedia = 0
 			separator = ""
 		}
 
@@ -105,12 +109,17 @@ func render(books []alib.Book, options Options, skipOversized bool) ([]Chunk, []
 			currentBlocks++
 		}
 		currentBlocks += itemBlocks
+		currentMedia += itemMedia
 	}
 	if len(current.Books) == 0 {
 		return nil, skippedBuyURLs, nil
 	}
 
 	return append(chunks, current), skippedBuyURLs, nil
+}
+
+func chunkExceedsLimits(blocks, media int, text string, textLimit int) bool {
+	return blocks > richMessageBlockLimit || media > richMessageMediaLimit || renderedRuneCount(text) > textLimit
 }
 
 func truncateContent(book alib.Book, options Options) string {
@@ -199,7 +208,7 @@ func renderPhotos(photos []alib.Photo, slinkProfile string) ([]string, []alib.Ph
 	photoLinks := make([]string, 0, len(photos))
 	slideshowPhotos := make([]alib.Photo, 0, len(photos))
 	for _, photo := range photos {
-		if isPublishedPhoto(photo, slinkProfile) {
+		if isPublishedPhoto(photo, slinkProfile) && len(slideshowPhotos) < richMessageMediaLimit {
 			slideshowPhotos = append(slideshowPhotos, photo)
 			continue
 		}
@@ -251,16 +260,26 @@ func renderSlideshow(photos []alib.Photo) string {
 }
 
 func richMessageBlocks(book alib.Book, options Options) int {
-	blocks := 1
-	if options.SlinkProfile != "" {
-		for _, photo := range book.Photos {
-			if isPublishedPhoto(photo, options.SlinkProfile) {
-				return blocks + 1
+	media := richMessageMedia(book, options)
+	if media == 0 {
+		return 1
+	}
+
+	return media + 3
+}
+
+func richMessageMedia(book alib.Book, options Options) int {
+	media := 0
+	for _, photo := range book.Photos {
+		if isPublishedPhoto(photo, options.SlinkProfile) {
+			media++
+			if media == richMessageMediaLimit {
+				return media
 			}
 		}
 	}
 
-	return blocks
+	return media
 }
 
 func renderMultilineText(value string) string {

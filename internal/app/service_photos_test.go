@@ -11,12 +11,16 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/kemko/alib-fetcher/internal/alib"
 	"github.com/kemko/alib-fetcher/internal/app"
 	"github.com/kemko/alib-fetcher/internal/slink"
+	"github.com/kemko/alib-fetcher/internal/store"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -223,10 +227,10 @@ func Test_Service_integratesPhotoPreparationAndSlideshow(t *testing.T) {
 		time.Second,
 		logger,
 		slink.Options{
-			HTTPClient: &http.Client{Transport: rewriteTransport{target: server.URL}},
 			LookupIP: func(context.Context, string) ([]net.IP, error) {
 				return []net.IP{net.ParseIP("93.184.216.34")}, nil
 			},
+			DialContext: serverDialContext(server),
 		},
 	)
 	require.NoError(t, err)
@@ -261,6 +265,125 @@ func Test_Service_integratesPhotoPreparationAndSlideshow(t *testing.T) {
 	require.Contains(t, sender.messages[0], `Смотрите: <a href="http://photo.test/document">Документ</a>`)
 	require.NotContains(t, sender.messages[0], "http://photo.test/meta")
 	require.NotContains(t, logs.String(), "integration-api-key")
+}
+
+func Test_Service_integratesParsedPhotosWithPersistentStore(t *testing.T) {
+	// Given
+	temporaryRoot := t.TempDir()
+	t.Setenv("TMPDIR", temporaryRoot)
+	var uploads atomic.Int32
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.URL.Path == "/foto.php4" && request.URL.Query().Get("kind") == "meta":
+			writer.Header().Set("Content-Type", "text/html")
+			_, err := io.WriteString(writer, `<meta http-equiv="refresh" content="0;url=/image">`)
+			assert.NoError(t, err)
+		case request.URL.Path == "/foto.php4" && request.URL.Query().Get("kind") == "document":
+			_, err := io.WriteString(writer, "not an image")
+			assert.NoError(t, err)
+		case request.URL.Path == "/foto.php4" && request.URL.Query().Get("kind") == "failure":
+			writer.WriteHeader(http.StatusBadGateway)
+		case request.URL.Path == "/image":
+			_, err := writer.Write([]byte("\x89PNG\r\n\x1a\n"))
+			assert.NoError(t, err)
+		case request.URL.Path == "/base/api/external/upload":
+			uploads.Add(1)
+			assert.Equal(t, "Bearer persistent-api-key", request.Header.Get("Authorization"))
+			file, header, err := request.FormFile("image")
+			if !assert.NoError(t, err) {
+				return
+			}
+			assert.Equal(t, "image/png", header.Header.Get("Content-Type"))
+			assert.NoError(t, file.Close())
+			assert.Equal(t, "integration-tag", request.FormValue("tagIds"))
+			_, err = io.WriteString(writer, `{"url":"published/image"}`)
+			assert.NoError(t, err)
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client, err := slink.NewClientWithOptions(
+		server.URL+"/base",
+		"persistent-api-key",
+		"integration-tag",
+		time.Second,
+		logger,
+		slink.Options{
+			LookupIP: func(context.Context, string) ([]net.IP, error) {
+				return []net.IP{net.ParseIP("93.184.216.34")}, nil
+			},
+			DialContext: serverDialContext(server),
+		},
+	)
+	require.NoError(t, err)
+	pageURL, err := url.Parse("http://photo.test/list")
+	require.NoError(t, err)
+	books, err := alib.Parse(strings.NewReader(`<p><b>Книга.</b> М., 2026 г.<br>
+Цена: 100 руб. <a href="/book"><b>Купить</b></a><br>
+Смотрите: <a href="/foto.php4?kind=meta">Обложка</a> -
+<a href="/foto.php4?kind=document">Документ</a> -
+<a href="/foto.php4?kind=failure">Сбой</a></p>`), pageURL, "text/html")
+	require.NoError(t, err)
+	require.Len(t, books, 1)
+	now := time.Date(2026, time.September, 3, 12, 0, 0, 0, time.UTC)
+	statePath := filepath.Join(t.TempDir(), "state.db")
+	firstState, err := store.Open(statePath, now)
+	require.NoError(t, err)
+	deliveryErr := errors.New("telegram unavailable")
+	firstSender := &fakeSender{err: deliveryErr, failAt: 1, afterSend: func() {
+		requireTemporaryRootEmpty(t, temporaryRoot)
+	}}
+	firstService := app.NewService(app.Dependencies{
+		Fetcher:        fakeFetcher{books: books},
+		State:          firstState,
+		Sender:         firstSender,
+		PhotoProcessor: client,
+		MessageLimit:   4096,
+		Now:            func() time.Time { return now },
+	})
+
+	firstResult, firstErr := firstService.Run(context.Background())
+
+	require.ErrorIs(t, firstErr, deliveryErr)
+	require.Equal(t, app.Result{Fetched: 1, New: 1}, firstResult)
+	require.NoError(t, firstState.Close())
+	secondState, err := store.Open(statePath, now)
+	require.NoError(t, err)
+	secondSender := &fakeSender{afterSend: func() {
+		requireTemporaryRootEmpty(t, temporaryRoot)
+	}}
+	secondService := app.NewService(app.Dependencies{
+		Fetcher:        fakeFetcher{books: books},
+		State:          secondState,
+		Sender:         secondSender,
+		PhotoProcessor: client,
+		MessageLimit:   4096,
+		Now:            func() time.Time { return now.Add(time.Minute) },
+	})
+
+	secondResult, secondErr := secondService.Run(context.Background())
+
+	require.NoError(t, secondErr)
+	require.Equal(t, app.Result{Fetched: 1, Sent: 1}, secondResult)
+	require.NoError(t, secondState.Close())
+	require.EqualValues(t, 1, uploads.Load())
+	require.Len(t, secondSender.messages, 1)
+	require.Contains(t, secondSender.messages[0], `<tg-slideshow><img src="`+server.URL+
+		`/base/published/image"/><figcaption>Обложка</figcaption></tg-slideshow>`)
+	require.Contains(t, secondSender.messages[0], `Смотрите: <a href="http://photo.test/foto.php4?kind=document">Документ</a> - `+
+		`<a href="http://photo.test/foto.php4?kind=failure">Сбой</a>`)
+	require.Contains(t, logs.String(), `"msg":"slink.photo_failed"`)
+	require.NotContains(t, logs.String(), "persistent-api-key")
+}
+
+func requireTemporaryRootEmpty(t *testing.T, temporaryRoot string) {
+	t.Helper()
+	entries, err := os.ReadDir(temporaryRoot)
+	require.NoError(t, err)
+	require.Empty(t, entries)
 }
 
 type photoState struct {
@@ -300,10 +423,10 @@ func newTrackingPhotoProcessor(t *testing.T, server *httptest.Server, events *[]
 		time.Second,
 		logger,
 		slink.Options{
-			HTTPClient: &http.Client{Transport: rewriteTransport{target: server.URL}},
 			LookupIP: func(context.Context, string) ([]net.IP, error) {
 				return []net.IP{net.ParseIP("93.184.216.34")}, nil
 			},
+			DialContext: serverDialContext(server),
 		},
 	)
 	require.NoError(t, err)
@@ -349,25 +472,8 @@ func photoServer(events *[]string) *httptest.Server {
 	}))
 }
 
-type rewriteTransport struct {
-	target string
-}
-
-func (transport rewriteTransport) RoundTrip(request *http.Request) (*http.Response, error) {
-	if request.URL.Host != "photo.test" {
-		return http.DefaultTransport.RoundTrip(request)
+func serverDialContext(server *httptest.Server) func(context.Context, string, string) (net.Conn, error) {
+	return func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, server.Listener.Addr().String())
 	}
-	target, err := url.Parse(transport.target)
-	if err != nil {
-		return nil, err
-	}
-	cloned := request.Clone(request.Context())
-	cloned.URL.Scheme = target.Scheme
-	cloned.URL.Host = target.Host
-	response, err := http.DefaultTransport.RoundTrip(cloned)
-	if response != nil {
-		response.Request = request
-	}
-
-	return response, err
 }

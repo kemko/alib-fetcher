@@ -803,14 +803,74 @@ func Test_Render_splits_mixed_listings_at_rich_message_block_limit(t *testing.T)
 
 	// Then
 	require.NoError(t, err)
-	require.Len(t, chunks, 1)
-	require.Len(t, chunks[0].Books, 250)
-	require.Contains(t, chunks[0].Text, "<tg-slideshow>")
+	require.Len(t, chunks, 2)
+	require.Len(t, chunks[0].Books, 249)
+	require.Len(t, chunks[1].Books, 1)
+	require.NotContains(t, chunks[0].Text, "<tg-slideshow>")
+	require.Contains(t, chunks[1].Text, "<tg-slideshow>")
 
 	books = append(books, alib.Book{Title: "После границы", BuyURL: "https://example.com/after"})
 	chunks, err = digest.Render(books, digest.Options{Limit: 32000, SlinkProfile: profile})
 	require.NoError(t, err)
 	require.Len(t, chunks, 2)
-	require.Len(t, chunks[0].Books, 250)
+	require.Len(t, chunks[0].Books, 249)
+	require.Len(t, chunks[1].Books, 2)
+}
+
+func Test_Render_splits_before_rich_message_media_limit(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	profile := "slink:active"
+	books := []alib.Book{
+		{Title: "Первая", BuyURL: "https://example.com/1", Photos: publishedPhotos(profile, 30)},
+		{Title: "Вторая", BuyURL: "https://example.com/2", Photos: publishedPhotos(profile, 21)},
+	}
+
+	// When
+	chunks, err := digest.Render(books, digest.Options{Limit: 32000, SlinkProfile: profile})
+
+	// Then
+	require.NoError(t, err)
+	require.Len(t, chunks, 2)
+	require.Len(t, chunks[0].Books, 1)
 	require.Len(t, chunks[1].Books, 1)
+	require.Equal(t, 30, strings.Count(chunks[0].Text, "<img "))
+	require.Equal(t, 21, strings.Count(chunks[1].Text, "<img "))
+}
+
+func Test_Render_keepsPhotosBeyondSingleSlideshowLimitAsSourceLinks(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	profile := "slink:active"
+	book := alib.Book{
+		Title:  "Книга",
+		BuyURL: "https://example.com/book",
+		Photos: publishedPhotos(profile, 51),
+	}
+
+	// When
+	chunks, err := digest.Render([]alib.Book{book}, digest.Options{Limit: 32000, SlinkProfile: profile})
+
+	// Then
+	require.NoError(t, err)
+	require.Len(t, chunks, 1)
+	require.Equal(t, 50, strings.Count(chunks[0].Text, "<img "))
+	require.Contains(t, chunks[0].Text, `Смотрите: <a href="https://source.example/50">Фото 50</a>`)
+	require.NotContains(t, chunks[0].Text, `<img src="https://slink.example/50"/>`)
+}
+
+func publishedPhotos(profile string, count int) []alib.Photo {
+	photos := make([]alib.Photo, count)
+	for index := range photos {
+		photos[index] = alib.Photo{
+			URL:          fmt.Sprintf("https://source.example/%d", index),
+			Caption:      fmt.Sprintf("Фото %d", index),
+			SlinkURL:     fmt.Sprintf("https://slink.example/%d", index),
+			SlinkProfile: profile,
+		}
+	}
+
+	return photos
 }

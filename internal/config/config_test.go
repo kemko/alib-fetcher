@@ -583,6 +583,11 @@ func Test_Load_accepts_cron_descriptor(t *testing.T) {
 
 func setEnvironment(t *testing.T, values map[string]string) {
 	t.Helper()
+	for _, key := range []string{"SLINK_URL", "SLINK_API_KEY", "SLINK_TAG_ID"} {
+		if _, configured := values[key]; !configured {
+			t.Setenv(key, "")
+		}
+	}
 	for key, value := range values {
 		t.Setenv(key, value)
 	}

@@ -21,17 +21,14 @@ type Book struct {
 	PublicationYear int     `json:"publication_year,omitempty"`
 }
 
-// PhotoLink is a source photo link and its optional Slink processing result.
-type PhotoLink struct {
+// Photo is a source photo link and its optional Slink processing result.
+type Photo struct {
 	URL          string `json:"url"`
 	Caption      string `json:"caption,omitempty"`
 	SlinkURL     string `json:"slink_url,omitempty"`
 	SlinkProfile string `json:"slink_profile,omitempty"`
 	NonImage     bool   `json:"non_image,omitempty"`
 }
-
-// Photo is the short name for PhotoLink.
-type Photo = PhotoLink
 
 type legacyBookJSON struct {
 	TextBeforeSeller *string `json:"text_before_seller"`
@@ -42,34 +39,27 @@ type legacyBookJSON struct {
 // UnmarshalJSON decodes semantic books and converts persisted legacy text fragments.
 func (b *Book) UnmarshalJSON(data []byte) error {
 	type semanticBookJSON Book
-
-	var semantic semanticBookJSON
-	if err := json.Unmarshal(data, &semantic); err != nil {
-		return err
-	}
-	var legacy legacyBookJSON
-	if err := json.Unmarshal(data, &legacy); err != nil {
-		return err
-	}
-	var legacyPhotosJSON struct {
+	var decoded struct {
+		legacyBookJSON
 		PhotoURLs []string `json:"photo_urls"`
+		semanticBookJSON
 	}
-	if err := json.Unmarshal(data, &legacyPhotosJSON); err != nil {
+	if err := json.Unmarshal(data, &decoded); err != nil {
 		return err
 	}
 
-	*b = Book(semantic)
-	if len(b.Photos) == 0 && legacyPhotosJSON.PhotoURLs != nil {
-		b.Photos = legacyPhotos(legacyPhotosJSON.PhotoURLs)
+	*b = Book(decoded.semanticBookJSON)
+	if len(b.Photos) == 0 && decoded.PhotoURLs != nil {
+		b.Photos = legacyPhotos(decoded.PhotoURLs)
 	}
-	if legacy.TextBeforeSeller == nil && legacy.TextBeforeBuy == nil && legacy.TextAfterBuy == nil {
+	if decoded.TextBeforeSeller == nil && decoded.TextBeforeBuy == nil && decoded.TextAfterBuy == nil {
 		return nil
 	}
 
 	b.convertLegacyFragments(
-		legacyString(legacy.TextBeforeSeller),
-		legacyString(legacy.TextBeforeBuy),
-		legacyString(legacy.TextAfterBuy),
+		legacyString(decoded.TextBeforeSeller),
+		legacyString(decoded.TextBeforeBuy),
+		legacyString(decoded.TextAfterBuy),
 	)
 
 	return nil

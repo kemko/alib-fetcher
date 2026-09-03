@@ -15,11 +15,11 @@ import (
 	"mime/multipart"
 	"net"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/net/html"
@@ -39,47 +39,45 @@ const (
 
 // Options configures the HTTP and DNS dependencies of Client.
 type Options struct {
-	HTTPClient *http.Client
-	LookupIP   func(context.Context, string) ([]net.IP, error)
+	HTTPClient  *http.Client
+	LookupIP    func(context.Context, string) ([]net.IP, error)
+	DialContext func(context.Context, string, string) (net.Conn, error)
 }
 
 // PreparedBook contains a book with successful Slink processing results.
-//
-//nolint:govet // fieldalignment: book payload and cleanup closures form one lifecycle result.
 type PreparedBook struct {
+	temporaryDirectory string
 	Book               alib.Book
-	cleanup            func() error
-	temporaryDirectory func() string
 }
 
 // Cleanup removes the temporary files for the book. It is safe to call more than once.
 func (p *PreparedBook) Cleanup() error {
-	if p == nil || p.cleanup == nil {
+	if p == nil || p.temporaryDirectory == "" {
 		return nil
 	}
 
-	return p.cleanup()
+	return os.RemoveAll(p.temporaryDirectory)
 }
 
 // TemporaryDirectory returns the book's temporary directory for lifecycle coordination.
 func (p *PreparedBook) TemporaryDirectory() string {
-	if p == nil || p.temporaryDirectory == nil {
+	if p == nil {
 		return ""
 	}
 
-	return p.temporaryDirectory()
+	return p.temporaryDirectory
 }
 
 // Client downloads photo files and uploads images to Slink.
 type Client struct {
-	baseURL  *url.URL
-	http     *http.Client
-	lookupIP func(context.Context, string) ([]net.IP, error)
-	logger   *slog.Logger
-	apiKey   string
-	tagID    string
-	profile  string
-	timeout  time.Duration
+	baseURL *url.URL
+	http    *http.Client
+	source  *http.Client
+	logger  *slog.Logger
+	apiKey  string
+	tagID   string
+	profile string
+	timeout time.Duration
 }
 
 // NewClient creates a Slink photo processor.
@@ -124,19 +122,31 @@ func NewClientWithOptions(
 	if lookupIP == nil {
 		lookupIP = defaultLookupIP
 	}
+	dialContext := options.DialContext
+	if dialContext == nil {
+		dialer := &net.Dialer{}
+		dialContext = dialer.DialContext
+	}
+	defaultTransport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return nil, errors.New("create slink client: default HTTP transport is unavailable")
+	}
+	sourceTransport := defaultTransport.Clone()
+	sourceTransport.Proxy = nil
+	sourceTransport.DialContext = secureDialContext(lookupIP, dialContext, timeout)
 
 	profileHash := sha256.Sum256([]byte(baseURL.String() + "\x00" + tagID))
 	client := &Client{
-		baseURL:  baseURL,
-		apiKey:   apiKey,
-		tagID:    tagID,
-		profile:  "slink:" + hex.EncodeToString(profileHash[:8]),
-		timeout:  timeout,
-		http:     httpClient,
-		lookupIP: lookupIP,
-		logger:   logger,
+		baseURL: baseURL,
+		apiKey:  apiKey,
+		tagID:   tagID,
+		profile: "slink:" + hex.EncodeToString(profileHash[:8]),
+		timeout: timeout,
+		http:    httpClient,
+		source:  &http.Client{Transport: sourceTransport, Timeout: timeout},
+		logger:  logger,
 	}
-	client.http.CheckRedirect = client.checkRedirect
+	client.source.CheckRedirect = client.checkRedirect
 
 	return client, nil
 }
@@ -146,8 +156,8 @@ func (c *Client) Profile() string {
 	return c.profile
 }
 
-// Prepare downloads and publishes a book's photos in source order.
-func (c *Client) Prepare(ctx context.Context, book alib.Book) (*PreparedBook, error) {
+// Process downloads and publishes a book's photos in source order.
+func (c *Client) Process(ctx context.Context, book alib.Book) (*PreparedBook, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -160,25 +170,12 @@ func (c *Client) Prepare(ctx context.Context, book alib.Book) (*PreparedBook, er
 	if err != nil {
 		return nil, fmt.Errorf("create temporary photo directory: %w", err)
 	}
-	var cleanupOnce sync.Once
-	var cleanupErr error
-	prepared.temporaryDirectory = func() string { return directory }
-	prepared.cleanup = func() error {
-		cleanupOnce.Do(func() {
-			cleanupErr = os.RemoveAll(directory)
-		})
-		return cleanupErr
-	}
+	prepared.temporaryDirectory = directory
 	if prepareErr := c.preparePhotos(ctx, prepared); prepareErr != nil {
 		return nil, errors.Join(prepareErr, prepared.Cleanup())
 	}
 
 	return prepared, nil
-}
-
-// Process is an alias for Prepare for photo processor callers.
-func (c *Client) Process(ctx context.Context, book alib.Book) (*PreparedBook, error) {
-	return c.Prepare(ctx, book)
 }
 
 func (c *Client) preparePhotos(ctx context.Context, prepared *PreparedBook) error {
@@ -272,17 +269,13 @@ func (c *Client) download(ctx context.Context, directory, rawURL string) (downlo
 	if err != nil {
 		return downloadedFile{}, nil, err
 	}
-	if validationErr := c.validateSourceURL(ctx, parsedURL); validationErr != nil {
-		return downloadedFile{}, nil, validationErr
-	}
-
 	requestCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	request, err := http.NewRequestWithContext(requestCtx, http.MethodGet, parsedURL.String(), nil)
 	if err != nil {
 		return downloadedFile{}, nil, fmt.Errorf("create photo request: %w", err)
 	}
-	response, err := c.http.Do(request)
+	response, err := c.source.Do(request)
 	if err != nil {
 		return downloadedFile{}, nil, contextError(err)
 	}
@@ -306,10 +299,12 @@ func (c *Client) download(ctx context.Context, directory, rawURL string) (downlo
 }
 
 func (c *Client) checkRedirect(request *http.Request, via []*http.Request) error {
-	if len(via) >= maxHTTPRedirects {
+	if len(via) > maxHTTPRedirects {
 		return errors.New("photo HTTP redirect limit exceeded")
 	}
-	return c.validateSourceURL(request.Context(), request.URL)
+	_, err := parseSourceURL(request.URL.String())
+
+	return err
 }
 
 type savedFile struct {
@@ -323,8 +318,14 @@ func saveDownloadedFile(directory string, body io.Reader) (saved savedFile, retu
 		return savedFile{}, fmt.Errorf("create temporary photo file: %w", err)
 	}
 	path := file.Name()
+	closed := false
 	success := false
 	defer func() {
+		if !closed {
+			if closeErr := file.Close(); closeErr != nil {
+				returnErr = errors.Join(returnErr, fmt.Errorf("close temporary photo: %w", closeErr))
+			}
+		}
 		if !success {
 			if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 				returnErr = errors.Join(returnErr, fmt.Errorf("remove temporary photo: %w", removeErr))
@@ -343,7 +344,9 @@ func saveDownloadedFile(directory string, body io.Reader) (saved savedFile, retu
 	if _, writeErr := file.Write(data); writeErr != nil {
 		return savedFile{}, fmt.Errorf("save temporary photo: %w", writeErr)
 	}
-	if closeErr := file.Close(); closeErr != nil {
+	closeErr := file.Close()
+	closed = true
+	if closeErr != nil {
 		return savedFile{}, fmt.Errorf("close temporary photo: %w", closeErr)
 	}
 	success = true
@@ -358,7 +361,7 @@ func (c *Client) publishImage(ctx context.Context, path, contentType string) (ph
 	if err != nil {
 		return photoResult{}, err
 	}
-	endpoint := c.baseURL.ResolveReference(&url.URL{Path: "/api/external/upload"})
+	endpoint := c.baseURL.ResolveReference(&url.URL{Path: "api/external/upload"})
 	request, err := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint.String(), body)
 	if err != nil {
 		return photoResult{}, fmt.Errorf("create Slink upload request: %w", err)
@@ -413,7 +416,14 @@ func multipartBody(path, contentType, tagID string) (io.Reader, int64, string, e
 
 	var body bytes.Buffer
 	multipartWriter := multipart.NewWriter(&body)
-	filePart, err := multipartWriter.CreateFormFile("image", "image"+extensionForType(contentType))
+	disposition := mime.FormatMediaType("form-data", map[string]string{
+		"name":     "image",
+		"filename": "image" + extensionForType(contentType),
+	})
+	filePart, err := multipartWriter.CreatePart(textproto.MIMEHeader{
+		"Content-Disposition": {disposition},
+		"Content-Type":        {contentType},
+	})
 	if err != nil {
 		return nil, 0, "", fmt.Errorf("create Slink image field: %w", err)
 	}
@@ -491,6 +501,10 @@ func parseRefreshContent(content string) (string, error) {
 }
 
 func (c *Client) resolveSlinkURL(rawURL string) (string, error) {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return "", errors.New("slink response URL is required")
+	}
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
 		return "", fmt.Errorf("parse slink image URL: %w", err)
@@ -503,31 +517,45 @@ func (c *Client) resolveSlinkURL(rawURL string) (string, error) {
 	return resolved.String(), nil
 }
 
-func (c *Client) validateSourceURL(ctx context.Context, parsedURL *url.URL) error {
-	if validationErr := validateHTTPURL(parsedURL); validationErr != nil {
-		return validationErr
-	}
-	host := parsedURL.Hostname()
-	if ip := net.ParseIP(host); ip != nil {
-		if restrictedIP(ip) {
-			return errors.New("photo URL points to a restricted address")
+func secureDialContext(
+	lookupIP func(context.Context, string) ([]net.IP, error),
+	dialContext func(context.Context, string, string) (net.Conn, error),
+	timeout time.Duration,
+) func(context.Context, string, string) (net.Conn, error) {
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		dialCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		host, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, fmt.Errorf("parse photo address: %w", err)
 		}
-		return nil
-	}
-	ips, err := c.lookupIP(ctx, host)
-	if err != nil {
-		return fmt.Errorf("resolve photo host: %w", err)
-	}
-	if len(ips) == 0 {
-		return errors.New("photo host has no addresses")
-	}
-	for _, ip := range ips {
-		if restrictedIP(ip) {
-			return errors.New("photo URL points to a restricted address")
+		ips := []net.IP{net.ParseIP(host)}
+		if ips[0] == nil {
+			ips, err = lookupIP(dialCtx, host)
+			if err != nil {
+				return nil, fmt.Errorf("resolve photo host: %w", err)
+			}
 		}
-	}
+		if len(ips) == 0 {
+			return nil, errors.New("photo host has no addresses")
+		}
+		for _, ip := range ips {
+			if ip == nil || restrictedIP(ip) {
+				return nil, errors.New("photo URL points to a restricted address")
+			}
+		}
 
-	return nil
+		var dialErrors []error
+		for _, ip := range ips {
+			connection, dialErr := dialContext(dialCtx, network, net.JoinHostPort(ip.String(), port))
+			if dialErr == nil {
+				return connection, nil
+			}
+			dialErrors = append(dialErrors, dialErr)
+		}
+
+		return nil, fmt.Errorf("dial photo host: %w", errors.Join(dialErrors...))
+	}
 }
 
 func restrictedIP(ip net.IP) bool {
