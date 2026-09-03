@@ -291,18 +291,18 @@ func (s *Service) preparePendingBook(
 		failedURLs[book.BuyURL] = struct{}{}
 		return alib.Book{}, false, nil
 	}
+	if !reflect.DeepEqual(book, preparedBook) {
+		if saveErr := s.dependencies.State.SavePrepared(ctx, preparedBook); saveErr != nil {
+			return alib.Book{}, false, fmt.Errorf(
+				"save prepared book %q: %w", book.BuyURL, errors.Join(saveErr, cleanup()))
+		}
+	}
 	if !renderable(preparedBook, options) {
 		if cleanupErr := cleanup(); cleanupErr != nil && ctx.Err() != nil {
 			return alib.Book{}, false, fmt.Errorf("cleanup prepared book %q: %w", book.BuyURL, cleanupErr)
 		}
 		failedURLs[book.BuyURL] = struct{}{}
 		return alib.Book{}, false, nil
-	}
-	if !reflect.DeepEqual(book, preparedBook) {
-		if saveErr := s.dependencies.State.SavePrepared(ctx, preparedBook); saveErr != nil {
-			return alib.Book{}, false, fmt.Errorf(
-				"save prepared book %q: %w", book.BuyURL, errors.Join(saveErr, cleanup()))
-		}
 	}
 	if cleanupErr := cleanup(); cleanupErr != nil {
 		if ctx.Err() != nil {

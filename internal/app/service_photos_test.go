@@ -80,6 +80,46 @@ func Test_Service_savesPreparedBookBeforeCleanupAndRendering(t *testing.T) {
 	require.Equal(t, []string{"fetch", "record", "pending", "prepare", "upload", "save:" + book.BuyURL, "send", "mark:" + book.BuyURL}, events)
 }
 
+func Test_Service_persistsPreparedOversizedPendingBookBeforeSkipping(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	events := make([]string, 0)
+	server := photoServer(&events)
+	defer server.Close()
+	processor := newTrackingPhotoProcessor(t, server, &events)
+	now := time.Date(2026, time.September, 3, 12, 0, 0, 0, time.UTC)
+	book := alib.Book{
+		Title:  strings.Repeat("Очень длинная книга ", 20),
+		BuyURL: "https://example.com/book",
+		Photos: []alib.Photo{{URL: "http://photo.test/photo", Caption: "Обложка"}},
+	}
+	state, err := store.Open(filepath.Join(t.TempDir(), "state.db"), now)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, state.Close()) })
+	_, err = state.RecordDiscovered(context.Background(), []alib.Book{book}, now)
+	require.NoError(t, err)
+	service := app.NewService(app.Dependencies{
+		Fetcher:        fakeFetcher{},
+		State:          state,
+		Sender:         &fakeSender{},
+		PhotoProcessor: processor,
+		MessageLimit:   120,
+		Now:            func() time.Time { return now },
+	})
+
+	// When
+	firstResult, firstErr := service.Run(context.Background())
+	secondResult, secondErr := service.Run(context.Background())
+
+	// Then
+	require.NoError(t, firstErr)
+	require.NoError(t, secondErr)
+	require.Equal(t, app.Result{Failed: 1}, firstResult)
+	require.Equal(t, app.Result{Failed: 1}, secondResult)
+	require.Equal(t, []string{"prepare", "upload", "prepare"}, events)
+}
+
 func Test_Service_cleansPreparedFilesWhenStateSaveFails(t *testing.T) {
 	t.Parallel()
 
