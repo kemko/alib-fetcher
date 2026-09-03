@@ -137,6 +137,7 @@ func prepareDiscoveredRecord(
 	if err != nil {
 		return bookRecord{}, false, err
 	}
+	record.Book = alib.MergePhotoResults(book, existing.Book)
 	record.Sent = existing.Sent
 	record.SentAt = existing.SentAt
 	record.QueueOrder = existing.QueueOrder
@@ -148,6 +149,40 @@ func prepareDiscoveredRecord(
 	record.QueueOrder = queueOrder
 
 	return record, false, err
+}
+
+// SavePrepared updates a pending book without changing its delivery metadata.
+func (s *Store) SavePrepared(ctx context.Context, book alib.Book) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("save prepared book: %w", err)
+	}
+
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		bucket := tx.Bucket(sentBucket)
+		key := []byte(book.BuyURL)
+		value := bucket.Get(key)
+		if value == nil {
+			return fmt.Errorf("missing book record %q", book.BuyURL)
+		}
+		record, decodeErr := decodeRecord(key, value)
+		if decodeErr != nil {
+			return decodeErr
+		}
+		if record.Sent {
+			return fmt.Errorf("book record %q is already sent", book.BuyURL)
+		}
+		record.Book = book
+		return putRecord(bucket, key, record)
+	})
+	if err != nil {
+		return fmt.Errorf("save prepared book: %w", err)
+	}
+
+	return nil
 }
 
 func nextQueueOrder(bucket *bolt.Bucket) (uint64, error) {

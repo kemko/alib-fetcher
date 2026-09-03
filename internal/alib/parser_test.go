@@ -50,10 +50,10 @@ func Test_Parse_returns_semantic_unique_books_from_windows1251_page(t *testing.T
 			Price:           "3 900 руб.",
 			Condition:       "Состояние: Отличное.\nКомплект полный.",
 			BuyURL:          "https://www.alib.ru/book-1.html",
-			PhotoURLs: []string{
-				"https://www.alib.ru/foto.php4?id=1",
-				"https://www.alib.ru/foto.php4?id=2",
-				"https://www.alib.ru/foto.php4?id=1",
+			Photos: []alib.Photo{
+				{URL: "https://www.alib.ru/foto.php4?id=1", Caption: "фото"},
+				{URL: "https://www.alib.ru/foto.php4?id=2", Caption: "фото"},
+				{URL: "https://www.alib.ru/foto.php4?id=1", Caption: "фото"},
 			},
 		},
 		{
@@ -65,7 +65,7 @@ func Test_Parse_returns_semantic_unique_books_from_windows1251_page(t *testing.T
 			BuyURL:          "https://www.alib.ru/book-2.html",
 		},
 	}, books)
-	require.Empty(t, books[1].PhotoURLs)
+	require.Empty(t, books[1].Photos)
 }
 
 func Test_Parse_extracts_last_bibliographic_year_and_ignores_content_year(t *testing.T) {
@@ -86,6 +86,29 @@ func Test_Parse_extracts_last_bibliographic_year_and_ignores_content_year(t *tes
 	require.Len(t, books, 1)
 	require.Equal(t, 2026, books[0].PublicationYear)
 	require.Equal(t, "События происходят в 2030 г.", books[0].Content)
+}
+
+func Test_Parse_preserves_photo_captions_order_and_repeats(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	page := `<p><b>Книга.</b> М., 2026 г.<br>
+	Цена: 100 руб. <a href="/book.html"><b>Купить</b></a><br>
+	Смотрите: <a href="/foto.php4?id=1"> Обложка </a> - <a href="foto.php4?id=2"><span> </span></a> -
+	<a href="/foto.php4?id=1">Обложка</a></p>`
+	baseURL, err := url.Parse("https://www.alib.ru/tramka.phtml?tnew=7")
+	require.NoError(t, err)
+
+	// When
+	books, err := alib.Parse(bytes.NewBufferString(page), baseURL, "text/html")
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, []alib.Photo{
+		{URL: "https://www.alib.ru/foto.php4?id=1", Caption: "Обложка"},
+		{URL: "https://www.alib.ru/foto.php4?id=2", Caption: "фото"},
+		{URL: "https://www.alib.ru/foto.php4?id=1", Caption: "Обложка"},
+	}, books[0].Photos)
 }
 
 func Test_Parse_does_not_extract_year_outside_bibliography(t *testing.T) {
@@ -126,7 +149,7 @@ func Test_Parse_excludes_anchor_only_photo_section(t *testing.T) {
 	require.Len(t, books, 1)
 	require.Equal(t, "Описание.", books[0].Content)
 	require.Equal(t, "Состояние: Хорошее.", books[0].Condition)
-	require.Equal(t, []string{"https://www.alib.ru/foto.php4?id=1"}, books[0].PhotoURLs)
+	require.Equal(t, []alib.Photo{{URL: "https://www.alib.ru/foto.php4?id=1", Caption: "фото"}}, books[0].Photos)
 }
 
 func Test_Parse_extracts_bibliography_when_seller_is_on_title_line(t *testing.T) {

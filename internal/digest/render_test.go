@@ -34,9 +34,9 @@ func Test_Render_formats_structured_listing_and_escapes_HTML(t *testing.T) {
 		Price:           "3 900 руб.",
 		Condition:       "Состояние: Отличное.\nКомплект <полный>.",
 		BuyURL:          "https://example.com/book?a=1&b=2",
-		PhotoURLs: []string{
-			"https://example.com/photo?id=1&size=large",
-			"https://example.com/photo?id=2",
+		Photos: []alib.Photo{
+			{URL: "https://example.com/photo?id=1&size=large", Caption: "фото"},
+			{URL: "https://example.com/photo?id=2", Caption: "фото"},
 		},
 	}
 	options := digest.Options{
@@ -647,7 +647,7 @@ func Test_Render_parses_and_sends_belyaev_listing_with_long_photo_urls(t *testin
 	require.Len(t, books, 1)
 	book := books[0]
 	require.Equal(t, "https://www.alib.ru/book-belyaev.html", book.BuyURL)
-	require.Len(t, book.PhotoURLs, 16)
+	require.Len(t, book.Photos, 16)
 	require.Equal(t, "Полное описание книги Беляева: издание включает лучшие произведения автора, подробные сведения о составе, состоянии и особенностях экземпляра.", book.Content)
 
 	// When
@@ -668,9 +668,209 @@ func Test_Render_parses_and_sends_belyaev_listing_with_long_photo_urls(t *testin
 		require.Contains(t, chunks[0].Text, book.Price)
 		require.Contains(t, chunks[0].Text, book.Condition)
 		require.Contains(t, chunks[0].Text, html.EscapeString(book.BuyURL))
-		for _, photoURL := range book.PhotoURLs {
-			require.Contains(t, chunks[0].Text, html.EscapeString(photoURL))
+		for _, photo := range book.Photos {
+			require.Contains(t, chunks[0].Text, html.EscapeString(photo.URL))
 		}
 		require.Equal(t, 16, strings.Count(chunks[0].Text, ">фото</a>"))
 	}
+}
+
+func Test_Render_active_slink_profile_renders_partial_slideshow_and_source_links(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	profile := "slink:active"
+	book := alib.Book{
+		Title:  "Книга",
+		BuyURL: "https://example.com/book",
+		Photos: []alib.Photo{
+			{URL: "https://example.com/source-1", Caption: "Обложка", SlinkURL: "https://slink.example/image-1", SlinkProfile: profile},
+			{URL: "https://example.com/source-2", Caption: "Документ", NonImage: true, SlinkProfile: profile},
+			{URL: "https://example.com/source-3", Caption: "Сбой"},
+			{URL: "https://example.com/source-4", Caption: "Другой профиль", SlinkURL: "https://other.example/image", SlinkProfile: "slink:other"},
+			{URL: "https://example.com/source-1", Caption: "Повтор", SlinkURL: "https://slink.example/image-1", SlinkProfile: profile},
+		},
+	}
+
+	// When
+	chunks, err := digest.Render([]alib.Book{book}, digest.Options{Limit: 4096, SlinkProfile: profile})
+
+	// Then
+	require.NoError(t, err)
+	require.Len(t, chunks, 1)
+	require.Equal(t, 1, strings.Count(chunks[0].Text, "<tg-slideshow>"))
+	require.Contains(t, chunks[0].Text, `<tg-slideshow><img src="https://slink.example/image-1"/><img src="https://slink.example/image-1"/><figcaption>Обложка — Повтор</figcaption></tg-slideshow>`)
+	require.Contains(t, chunks[0].Text, `Смотрите: <a href="https://example.com/source-2">Документ</a> - <a href="https://example.com/source-3">Сбой</a> - <a href="https://example.com/source-4">Другой профиль</a>`)
+	require.NotContains(t, chunks[0].Text, "source-1")
+	require.NotContains(t, chunks[0].Text, "https://other.example/image")
+}
+
+func Test_Render_disabled_slink_keeps_all_photo_links_and_captions(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	book := alib.Book{
+		Title:  "Книга",
+		BuyURL: "https://example.com/book",
+		Photos: []alib.Photo{
+			{URL: "https://example.com/photo-1", Caption: "Обложка", SlinkURL: "https://slink.example/image-1", SlinkProfile: "slink:active"},
+			{URL: "https://example.com/photo-2", Caption: "Фото & <2>"},
+		},
+	}
+
+	// When
+	chunks, err := digest.Render([]alib.Book{book}, digest.Options{Limit: 4096})
+
+	// Then
+	require.NoError(t, err)
+	require.Len(t, chunks, 1)
+	require.NotContains(t, chunks[0].Text, "<tg-slideshow>")
+	require.Contains(t, chunks[0].Text, `Смотрите: <a href="https://example.com/photo-1">Обложка</a> - <a href="https://example.com/photo-2">Фото &amp; &lt;2&gt;</a>`)
+}
+
+func Test_Render_slideshow_escapes_urls_and_omits_empty_caption(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	profile := "slink:active"
+	book := alib.Book{
+		Title:  "Книга",
+		BuyURL: "https://example.com/book",
+		Photos: []alib.Photo{
+			{Caption: " ", SlinkURL: "https://slink.example/image?a=1&b=2", SlinkProfile: profile},
+			{Caption: "Обложка & <1>", SlinkURL: "https://slink.example/image?x=1&y=2", SlinkProfile: profile},
+			{Caption: "Обложка & <1>", SlinkURL: "https://slink.example/image?x=3&y=4", SlinkProfile: profile},
+		},
+	}
+
+	// When
+	chunks, err := digest.Render([]alib.Book{book}, digest.Options{Limit: 4096, SlinkProfile: profile})
+
+	// Then
+	require.NoError(t, err)
+	require.Len(t, chunks, 1)
+	require.Contains(t, chunks[0].Text, `<tg-slideshow><img src="https://slink.example/image?a=1&amp;b=2"/><img src="https://slink.example/image?x=1&amp;y=2"/><img src="https://slink.example/image?x=3&amp;y=4"/><figcaption>Обложка &amp; &lt;1&gt;</figcaption></tg-slideshow>`)
+	require.NotContains(t, chunks[0].Text, "<figcaption></figcaption>")
+}
+
+func Test_Render_slideshow_counts_caption_in_content_truncation(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	profile := "slink:active"
+	book := alib.Book{
+		Title:   "Книга",
+		Content: "начало " + strings.Repeat("длинное описание ", 20),
+		BuyURL:  "https://example.com/book",
+		Photos:  []alib.Photo{{Caption: "Подпись", SlinkURL: "https://slink.example/image", SlinkProfile: profile}},
+	}
+	candidate := book
+	candidate.Content = "начало…"
+	candidateChunks, err := digest.Render([]alib.Book{candidate}, digest.Options{Limit: 4096, SlinkProfile: profile})
+	require.NoError(t, err)
+	listing := strings.TrimPrefix(candidateChunks[0].Text, `<b>Новые книги на Alib.ru</b><br/><br/>`)
+	messageLimit := displayedRuneCount(t, listing) + 1
+
+	// When
+	chunks, err := digest.Render([]alib.Book{book}, digest.Options{Limit: messageLimit, SlinkProfile: profile})
+
+	// Then
+	require.NoError(t, err)
+	require.Len(t, chunks, 2)
+	require.Equal(t, messageLimit-1, displayedRuneCount(t, chunks[1].Text))
+	require.Contains(t, chunks[1].Text, "начало…")
+	require.Contains(t, chunks[1].Text, `<figcaption>Подпись</figcaption>`)
+	require.NotContains(t, chunks[1].Text, "длинное описание")
+}
+
+func Test_Render_splits_mixed_listings_at_rich_message_block_limit(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	profile := "slink:active"
+	books := make([]alib.Book, 0, 251)
+	for index := range 249 {
+		books = append(books, alib.Book{Title: "К", BuyURL: fmt.Sprintf("https://example.com/%d", index)})
+	}
+	books = append(books, alib.Book{
+		Title:  "Слайдшоу",
+		BuyURL: "https://example.com/slideshow",
+		Photos: []alib.Photo{{Caption: "Обложка", SlinkURL: "https://slink.example/image", SlinkProfile: profile}},
+	})
+
+	// When
+	chunks, err := digest.Render(books, digest.Options{Limit: 32000, SlinkProfile: profile})
+
+	// Then
+	require.NoError(t, err)
+	require.Len(t, chunks, 2)
+	require.Len(t, chunks[0].Books, 249)
+	require.Len(t, chunks[1].Books, 1)
+	require.NotContains(t, chunks[0].Text, "<tg-slideshow>")
+	require.Contains(t, chunks[1].Text, "<tg-slideshow>")
+
+	books = append(books, alib.Book{Title: "После границы", BuyURL: "https://example.com/after"})
+	chunks, err = digest.Render(books, digest.Options{Limit: 32000, SlinkProfile: profile})
+	require.NoError(t, err)
+	require.Len(t, chunks, 2)
+	require.Len(t, chunks[0].Books, 249)
+	require.Len(t, chunks[1].Books, 2)
+}
+
+func Test_Render_splits_before_rich_message_media_limit(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	profile := "slink:active"
+	books := []alib.Book{
+		{Title: "Первая", BuyURL: "https://example.com/1", Photos: publishedPhotos(profile, 30)},
+		{Title: "Вторая", BuyURL: "https://example.com/2", Photos: publishedPhotos(profile, 21)},
+	}
+
+	// When
+	chunks, err := digest.Render(books, digest.Options{Limit: 32000, SlinkProfile: profile})
+
+	// Then
+	require.NoError(t, err)
+	require.Len(t, chunks, 2)
+	require.Len(t, chunks[0].Books, 1)
+	require.Len(t, chunks[1].Books, 1)
+	require.Equal(t, 30, strings.Count(chunks[0].Text, "<img "))
+	require.Equal(t, 21, strings.Count(chunks[1].Text, "<img "))
+}
+
+func Test_Render_keepsPhotosBeyondSingleSlideshowLimitAsSourceLinks(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	profile := "slink:active"
+	book := alib.Book{
+		Title:  "Книга",
+		BuyURL: "https://example.com/book",
+		Photos: publishedPhotos(profile, 51),
+	}
+
+	// When
+	chunks, err := digest.Render([]alib.Book{book}, digest.Options{Limit: 32000, SlinkProfile: profile})
+
+	// Then
+	require.NoError(t, err)
+	require.Len(t, chunks, 1)
+	require.Equal(t, 50, strings.Count(chunks[0].Text, "<img "))
+	require.Contains(t, chunks[0].Text, `Смотрите: <a href="https://source.example/50">Фото 50</a>`)
+	require.NotContains(t, chunks[0].Text, `<img src="https://slink.example/50"/>`)
+}
+
+func publishedPhotos(profile string, count int) []alib.Photo {
+	photos := make([]alib.Photo, count)
+	for index := range photos {
+		photos[index] = alib.Photo{
+			URL:          fmt.Sprintf("https://source.example/%d", index),
+			Caption:      fmt.Sprintf("Фото %d", index),
+			SlinkURL:     fmt.Sprintf("https://slink.example/%d", index),
+			SlinkProfile: profile,
+		}
+	}
+
+	return photos
 }

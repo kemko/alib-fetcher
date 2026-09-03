@@ -5,12 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/kemko/alib-fetcher/internal/alib"
 	"github.com/kemko/alib-fetcher/internal/digest"
+	"github.com/kemko/alib-fetcher/internal/slink"
 )
 
 // Fetcher obtains the latest source listings.
@@ -23,7 +25,14 @@ type State interface {
 	Prune(context.Context, time.Time) (int, error)
 	RecordDiscovered(context.Context, []alib.Book, time.Time) (int, error)
 	Pending(context.Context) ([]alib.Book, error)
+	SavePrepared(context.Context, alib.Book) error
 	MarkSent(context.Context, []alib.Book, time.Time) error
+}
+
+// PhotoProcessor prepares a book's source photos for digest rendering.
+type PhotoProcessor interface {
+	Process(context.Context, alib.Book) (*slink.PreparedBook, error)
+	Profile() string
 }
 
 // Sender delivers one rendered message.
@@ -42,6 +51,7 @@ type Dependencies struct {
 	State          State
 	Sender         Sender
 	FreshBooks     FreshBooksPolicy
+	PhotoProcessor PhotoProcessor
 	Location       *time.Location
 	Now            func() time.Time
 	Wait           func(context.Context, time.Duration) error
@@ -101,36 +111,93 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 	}
 
 	pending = sortPending(pending)
+	if prepareErr := s.preparePhotos(ctx, pending, &renderOptions); prepareErr != nil {
+		return result, prepareErr
+	}
 
-	chunks, skippedBuyURLs, err := digest.RenderSendable(pending, renderOptions)
+	sent, err := s.renderAndSend(ctx, pending, renderOptions, cycleTime)
+	result.Sent = sent
 	if err != nil {
-		return result, fmt.Errorf("render digest: %w", err)
+		return result, err
+	}
+
+	return result, nil
+}
+
+func (s *Service) renderAndSend(
+	ctx context.Context,
+	pending []alib.Book,
+	options digest.Options,
+	cycleTime time.Time,
+) (int, error) {
+	chunks, skippedBuyURLs, err := digest.RenderSendable(pending, options)
+	if err != nil {
+		return 0, fmt.Errorf("render digest: %w", err)
 	}
 	if len(chunks) > 0 && s.dependencies.BeforeDelivery != nil {
 		if hookErr := s.dependencies.BeforeDelivery(ctx); hookErr != nil {
-			return result, fmt.Errorf("prepare digest delivery: %w", hookErr)
+			return 0, fmt.Errorf("prepare digest delivery: %w", hookErr)
 		}
 	}
 	ackCtx := context.WithoutCancel(ctx)
+	sent := 0
 	for index, chunk := range chunks {
 		silent := index > 0
 		attachRefresh := index == len(chunks)-1
 		if sendErr := s.send(ctx, chunk.Text, silent, attachRefresh); sendErr != nil {
-			return result, fmt.Errorf("send digest: %w", sendErr)
+			return sent, fmt.Errorf("send digest: %w", sendErr)
 		}
 		if len(chunk.Books) == 0 {
 			continue
 		}
 		if markErr := s.dependencies.State.MarkSent(ackCtx, chunk.Books, cycleTime); markErr != nil {
-			return result, fmt.Errorf("record delivered listings: %w", markErr)
+			return sent, fmt.Errorf("record delivered listings: %w", markErr)
 		}
-		result.Sent += len(chunk.Books)
+		sent += len(chunk.Books)
 	}
 	if len(skippedBuyURLs) > 0 {
-		return result, fmt.Errorf("render digest: %w: %s", digest.ErrMessageTooLong, strings.Join(skippedBuyURLs, ", "))
+		return sent, fmt.Errorf("render digest: %w: %s", digest.ErrMessageTooLong, strings.Join(skippedBuyURLs, ", "))
 	}
 
-	return result, nil
+	return sent, nil
+}
+
+func (s *Service) preparePhotos(ctx context.Context, pending []alib.Book, options *digest.Options) error {
+	if s.dependencies.PhotoProcessor == nil {
+		return nil
+	}
+	options.SlinkProfile = s.dependencies.PhotoProcessor.Profile()
+	for index := range pending {
+		book := pending[index]
+		if len(book.Photos) == 0 {
+			continue
+		}
+
+		prepared, err := s.dependencies.PhotoProcessor.Process(ctx, book)
+		if err != nil {
+			if prepared != nil {
+				err = errors.Join(err, prepared.Cleanup())
+			}
+
+			return fmt.Errorf("prepare photos for %q: %w", book.BuyURL, err)
+		}
+		if prepared == nil {
+			return fmt.Errorf("prepare photos for %q: processor returned no book", book.BuyURL)
+		}
+
+		preparedBook := prepared.Book
+		if !reflect.DeepEqual(book, preparedBook) {
+			if saveErr := s.dependencies.State.SavePrepared(ctx, preparedBook); saveErr != nil {
+				return fmt.Errorf("save prepared book %q: %w", book.BuyURL, errors.Join(saveErr, prepared.Cleanup()))
+			}
+		}
+		if cleanupErr := prepared.Cleanup(); cleanupErr != nil {
+			return fmt.Errorf("cleanup prepared photos for %q: %w", book.BuyURL, cleanupErr)
+		}
+		pending[index] = preparedBook
+	}
+
+	return nil
 }
 
 func sortPending(pending []alib.Book) []alib.Book {

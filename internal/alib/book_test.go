@@ -31,7 +31,7 @@ func Test_Book_marshals_semantic_JSON_schema(t *testing.T) {
 		"condition": "Состояние: Отличное.\nКомплект полный.",
 		"buy_url": "https://www.alib.ru/book.html",
 		"publication_year": 2026,
-		"photo_urls": ["https://www.alib.ru/foto.php4?id=1"]
+		"photos": [{"url": "https://www.alib.ru/foto.php4?id=1", "caption": "фото"}]
 	}`, string(encoded))
 	require.NotContains(t, string(encoded), "text_before_seller")
 	require.NotContains(t, string(encoded), "text_before_buy")
@@ -60,8 +60,54 @@ func Test_Book_unmarshals_legacy_fragments_into_semantic_fields(t *testing.T) {
 	// Then
 	require.NoError(t, err)
 	expected := semanticBook("https://www.alib.ru/book.html")
-	expected.PhotoURLs = nil
+	expected.Photos = nil
 	require.Equal(t, expected, book)
+}
+
+func Test_Book_unmarshals_legacy_photo_urls_into_semantic_photos(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	legacy := []byte(`{
+		"title": "Книга.",
+		"buy_url": "https://www.alib.ru/book.html",
+		"photo_urls": ["https://www.alib.ru/foto.php4?id=1", "https://www.alib.ru/foto.php4?id=1"]
+	}`)
+
+	// When
+	var book alib.Book
+	err := json.Unmarshal(legacy, &book)
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, []alib.Photo{
+		{URL: "https://www.alib.ru/foto.php4?id=1", Caption: "фото"},
+		{URL: "https://www.alib.ru/foto.php4?id=1", Caption: "фото"},
+	}, book.Photos)
+}
+
+func Test_Book_rewrites_legacy_photo_urls_as_new_schema(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	legacy := []byte(`{"title":"Книга.","buy_url":"https://www.alib.ru/book.html","photo_urls":["https://www.alib.ru/foto.php4?id=1"]}`)
+
+	// When
+	var book alib.Book
+	err := json.Unmarshal(legacy, &book)
+	encoded, marshalErr := json.Marshal(book)
+
+	// Then
+	require.NoError(t, err)
+	require.NoError(t, marshalErr)
+	require.JSONEq(t, `{
+		"title": "Книга.",
+		"seller": "",
+		"seller_url": "",
+		"buy_url": "https://www.alib.ru/book.html",
+		"photos": [{"url": "https://www.alib.ru/foto.php4?id=1", "caption": "фото"}]
+	}`, string(encoded))
+	require.NotContains(t, string(encoded), "photo_urls")
 }
 
 func Test_Book_unmarshals_legacy_bibliography_with_same_line_seller_preamble(t *testing.T) {
@@ -148,7 +194,7 @@ func Test_Book_unmarshals_legacy_listing_without_seller(t *testing.T) {
 	require.Equal(t, "500 руб.", book.Price)
 	require.Equal(t, "Состояние: Хорошее.", book.Condition)
 	require.Equal(t, "https://www.alib.ru/book-without-seller.html", book.BuyURL)
-	require.Empty(t, book.PhotoURLs)
+	require.Empty(t, book.Photos)
 }
 
 func semanticBook(buyURL string) alib.Book {
@@ -163,6 +209,6 @@ func semanticBook(buyURL string) alib.Book {
 		Price:           "3 900 руб.",
 		Condition:       "Состояние: Отличное.\nКомплект полный.",
 		BuyURL:          buyURL,
-		PhotoURLs:       []string{"https://www.alib.ru/foto.php4?id=1"},
+		Photos:          []alib.Photo{{URL: "https://www.alib.ru/foto.php4?id=1", Caption: "фото"}},
 	}
 }

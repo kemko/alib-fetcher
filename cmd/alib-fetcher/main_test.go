@@ -169,6 +169,44 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 	}
 }
 
+func Test_run_enablesSlinkPhotoProcessorFromEnvironment(t *testing.T) {
+	// Given
+	useOnceMode(t)
+	alibServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, err := io.WriteString(writer, `<p><b>Книга.</b> М., 2026 г.<br>
+Цена: 100 руб. <a href="/book"><b>Купить</b></a><br>
+Смотрите: <a href="http://127.0.0.1/foto.php4">Обложка</a></p>`)
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(alibServer.Close)
+	telegramRequests := make(chan telegramRequest, 1)
+	telegramServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		telegramRequests <- telegramRequest{Message: decodeTelegramMessage(t, request), Path: request.URL.Path}
+		_, err := io.WriteString(writer, `{"ok":true,"result":{}}`)
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(telegramServer.Close)
+	setRunEnvironment(t, alibServer.URL, telegramServer.URL, filepath.Join(t.TempDir(), "state.db"))
+	t.Setenv("SLINK_URL", "https://slink.example")
+	t.Setenv("SLINK_API_KEY", "main-wiring-secret")
+	t.Setenv("SLINK_TAG_ID", "550e8400-e29b-41d4-a716-446655440000")
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+
+	// When
+	err := run(logger)
+
+	// Then
+	require.NoError(t, err)
+	require.Len(t, telegramRequests, 1)
+	message := (<-telegramRequests).Message.RichMessage.HTML
+	require.Contains(t, message, `<a href="http://127.0.0.1/foto.php4">Обложка</a>`)
+	require.NotContains(t, message, "<tg-slideshow>")
+	require.Contains(t, logs.String(), `"msg":"slink.photo_failed"`)
+	require.NotContains(t, logs.String(), "main-wiring-secret")
+}
+
 func Test_run_rejects_non_positive_forget_latest(t *testing.T) {
 	for _, value := range []string{"0", "-1"} {
 		t.Run(value, func(t *testing.T) {
@@ -641,6 +679,9 @@ func setEnvironmentAbsentDigestConfiguration(t *testing.T) {
 		"RUN_ON_STARTUP",
 		"FRESH_BOOKS",
 		"ALIB_REQUEST_INTERVAL",
+		"SLINK_URL",
+		"SLINK_API_KEY",
+		"SLINK_TAG_ID",
 	} {
 		unsetEnvironment(t, key)
 	}
@@ -693,6 +734,9 @@ func setRunEnvironment(t *testing.T, alibURL, telegramAPIBase, statePath string)
 	t.Setenv("HTTP_TIMEOUT", "2s")
 	t.Setenv("ALIB_REQUEST_INTERVAL", "0s")
 	t.Setenv("MESSAGE_LIMIT", "4000")
+	t.Setenv("SLINK_URL", "")
+	t.Setenv("SLINK_API_KEY", "")
+	t.Setenv("SLINK_TAG_ID", "")
 }
 
 func unsetEnvironment(t *testing.T, key string) {

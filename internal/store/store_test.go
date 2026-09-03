@@ -81,7 +81,7 @@ func Test_Store_persists_stable_json_schema(t *testing.T) {
 			"condition": "Condition: Full",
 			"buy_url": "https://example.com/schema",
 			"publication_year": 2026,
-			"photo_urls": ["https://example.com/photo"]
+			"photos": [{"url": "https://example.com/photo", "caption": "фото"}]
 			},
 			"observed_at": %d,
 			"queue_order": 1,
@@ -123,6 +123,75 @@ func Test_Store_updates_sent_book_metadata_without_requeueing(t *testing.T) {
 	require.NotZero(t, record.SentAt)
 	require.True(t, decodeStoredTime(record.SentAt).Equal(sentAt.UTC()))
 	require.True(t, decodeStoredTime(record.ObservedAt).Equal(rediscoveredAt.UTC()))
+}
+
+func Test_Store_rediscovery_preserves_photo_results_and_fresh_captions(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	path := filepath.Join(t.TempDir(), "state.db")
+	observedAt := time.Date(2026, time.August, 5, 12, 0, 0, 0, time.UTC)
+	db, err := store.Open(path, observedAt)
+	require.NoError(t, err)
+	original := fullBook("https://example.com/photo-results")
+	original.Photos = []alib.Photo{
+		{URL: "https://example.com/photo-1", Caption: "Old caption", SlinkURL: "https://slink/1", SlinkProfile: "profile", NonImage: true},
+		{URL: "https://example.com/photo-1", Caption: "Old repeat", SlinkURL: "https://slink/1"},
+	}
+	updated := original
+	updated.Title = "Fresh title"
+	updated.Photos = []alib.Photo{
+		{URL: "https://example.com/photo-1", Caption: "Fresh caption"},
+		{URL: "https://example.com/photo-1", Caption: "Fresh repeat"},
+	}
+	recordDiscovered(t, db, []alib.Book{original}, observedAt)
+
+	// When
+	created, err := db.RecordDiscovered(context.Background(), []alib.Book{updated}, observedAt.Add(time.Hour))
+	pending, pendingErr := db.Pending(context.Background())
+	require.NoError(t, db.Close())
+
+	// Then
+	require.NoError(t, err)
+	require.NoError(t, pendingErr)
+	require.Zero(t, created)
+	require.Equal(t, updated.Title, pending[0].Title)
+	require.Equal(t, updated.Photos[0].Caption, pending[0].Photos[0].Caption)
+	require.Equal(t, updated.Photos[1].Caption, pending[0].Photos[1].Caption)
+	require.Equal(t, original.Photos[0].SlinkURL, pending[0].Photos[0].SlinkURL)
+	require.Equal(t, original.Photos[0].SlinkProfile, pending[0].Photos[0].SlinkProfile)
+	require.True(t, pending[0].Photos[0].NonImage)
+	require.Equal(t, original.Photos[0].SlinkURL, pending[0].Photos[1].SlinkURL)
+	require.Equal(t, "Fresh caption", pending[0].Photos[0].Caption)
+	require.Equal(t, "Fresh repeat", pending[0].Photos[1].Caption)
+}
+
+func Test_Store_save_prepared_preserves_delivery_metadata(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	path := filepath.Join(t.TempDir(), "state.db")
+	observedAt := time.Date(2026, time.August, 5, 12, 0, 0, 0, time.UTC)
+	db, err := store.Open(path, observedAt)
+	require.NoError(t, err)
+	original := fullBook("https://example.com/prepared")
+	recordDiscovered(t, db, []alib.Book{original}, observedAt)
+	prepared := original
+	prepared.Title = "Prepared title"
+	prepared.Photos = []alib.Photo{{URL: "https://example.com/photo", Caption: "Photo", SlinkURL: "https://slink/photo"}}
+
+	// When
+	err = db.SavePrepared(context.Background(), prepared)
+	require.NoError(t, db.Close())
+	record := readStoredRecord(t, path, original.BuyURL)
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, prepared, record.Book)
+	require.Equal(t, observedAt.UnixNano(), record.ObservedAt)
+	require.Equal(t, uint64(1), record.QueueOrder)
+	require.False(t, record.Sent)
+	require.Zero(t, record.SentAt)
 }
 
 func Test_Store_returns_pending_books_from_previous_failed_cycle(t *testing.T) {
@@ -526,7 +595,7 @@ func Test_Open_ignores_legacy_has_photos_without_fabricating_photo_url(t *testin
 	stored := readStoredRecord(t, path, buyURL)
 
 	// Then
-	require.Empty(t, stored.Book.PhotoURLs)
+	require.Empty(t, stored.Book.Photos)
 	require.Equal(t, record, readRawRecord(t, path, buyURL))
 }
 
@@ -582,7 +651,7 @@ func Test_Store_loads_legacy_pending_record_and_rewrites_it_only_on_mutating_wri
 		Price:           "250 rub.",
 		Condition:       "Состояние: Legacy condition",
 		BuyURL:          buyURL,
-		PhotoURLs:       []string{"https://example.com/legacy-photo"},
+		Photos:          []alib.Photo{{URL: "https://example.com/legacy-photo", Caption: "фото"}},
 	}
 	require.Equal(t, []alib.Book{expectedPending}, pending)
 	require.Equal(t, []byte(legacyRecord), rawAfterOpen)
@@ -683,7 +752,7 @@ func Test_Open_migrates_legacy_timestamp_marker_to_sent_record(t *testing.T) {
 	require.Equal(t, alib.Book{BuyURL: buyURL}, record.Book)
 	require.Empty(t, record.Book.Title)
 	require.Empty(t, record.Book.Seller)
-	require.Empty(t, record.Book.PhotoURLs)
+	require.Empty(t, record.Book.Photos)
 	require.True(t, record.Sent)
 	require.True(t, decodeStoredTime(record.SentAt).Equal(migratedAt.UTC()))
 }
@@ -719,7 +788,7 @@ func Test_Open_migrates_unknown_legacy_marker_without_immediate_pruning(t *testi
 	require.Equal(t, book, record.Book)
 	require.Empty(t, record.Book.Title)
 	require.Empty(t, record.Book.Seller)
-	require.Empty(t, record.Book.PhotoURLs)
+	require.Empty(t, record.Book.Photos)
 	require.True(t, record.Sent)
 	require.NotZero(t, record.SentAt)
 	require.True(t, decodeStoredTime(record.SentAt).Equal(migratedAt.UTC()))
@@ -768,7 +837,7 @@ func fullBook(buyURL string) alib.Book {
 		Price:           "100 rub.",
 		Condition:       "Condition: Full",
 		BuyURL:          buyURL,
-		PhotoURLs:       []string{"https://example.com/photo"},
+		Photos:          []alib.Photo{{URL: "https://example.com/photo", Caption: "фото"}},
 	}
 }
 

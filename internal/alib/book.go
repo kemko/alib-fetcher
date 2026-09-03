@@ -8,17 +8,26 @@ import (
 
 // Book is one sale listing from Alib.ru.
 type Book struct {
-	Title           string   `json:"title"`
-	Bibliography    string   `json:"bibliography,omitempty"`
-	Content         string   `json:"content,omitempty"`
-	Seller          string   `json:"seller"`
-	SellerURL       string   `json:"seller_url"`
-	Location        string   `json:"location,omitempty"`
-	Price           string   `json:"price,omitempty"`
-	Condition       string   `json:"condition,omitempty"`
-	BuyURL          string   `json:"buy_url"`
-	PhotoURLs       []string `json:"photo_urls,omitempty"`
-	PublicationYear int      `json:"publication_year,omitempty"`
+	Title           string  `json:"title"`
+	Bibliography    string  `json:"bibliography,omitempty"`
+	Content         string  `json:"content,omitempty"`
+	Seller          string  `json:"seller"`
+	SellerURL       string  `json:"seller_url"`
+	Location        string  `json:"location,omitempty"`
+	Price           string  `json:"price,omitempty"`
+	Condition       string  `json:"condition,omitempty"`
+	BuyURL          string  `json:"buy_url"`
+	Photos          []Photo `json:"photos,omitempty"`
+	PublicationYear int     `json:"publication_year,omitempty"`
+}
+
+// Photo is a source photo link and its optional Slink processing result.
+type Photo struct {
+	URL          string `json:"url"`
+	Caption      string `json:"caption,omitempty"`
+	SlinkURL     string `json:"slink_url,omitempty"`
+	SlinkProfile string `json:"slink_profile,omitempty"`
+	NonImage     bool   `json:"non_image,omitempty"`
 }
 
 type legacyBookJSON struct {
@@ -30,16 +39,19 @@ type legacyBookJSON struct {
 // UnmarshalJSON decodes semantic books and converts persisted legacy text fragments.
 func (b *Book) UnmarshalJSON(data []byte) error {
 	type semanticBookJSON Book
-
-	decoded := struct {
+	var decoded struct {
 		legacyBookJSON
+		PhotoURLs []string `json:"photo_urls"`
 		semanticBookJSON
-	}{}
+	}
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return err
 	}
 
 	*b = Book(decoded.semanticBookJSON)
+	if len(b.Photos) == 0 && decoded.PhotoURLs != nil {
+		b.Photos = legacyPhotos(decoded.PhotoURLs)
+	}
 	if decoded.TextBeforeSeller == nil && decoded.TextBeforeBuy == nil && decoded.TextAfterBuy == nil {
 		return nil
 	}
@@ -51,6 +63,46 @@ func (b *Book) UnmarshalJSON(data []byte) error {
 	)
 
 	return nil
+}
+
+func legacyPhotos(urls []string) []Photo {
+	photos := make([]Photo, 0, len(urls))
+	for _, photoURL := range urls {
+		photos = append(photos, Photo{URL: photoURL, Caption: "фото"})
+	}
+
+	return photos
+}
+
+// MergePhotoResults carries processing results from matching source links to a fresh book.
+func MergePhotoResults(book, previous Book) Book {
+	photos := append([]Photo(nil), book.Photos...)
+	previousByURL := make(map[string]Photo)
+	for _, previousPhoto := range previous.Photos {
+		if previousPhoto.URL == "" {
+			continue
+		}
+		storedPhoto, found := previousByURL[previousPhoto.URL]
+		if !found || !hasPhotoResult(storedPhoto) && hasPhotoResult(previousPhoto) {
+			previousByURL[previousPhoto.URL] = previousPhoto
+		}
+	}
+	for photoIndex := range photos {
+		previousPhoto, found := previousByURL[photos[photoIndex].URL]
+		if !found {
+			continue
+		}
+		photos[photoIndex].SlinkURL = previousPhoto.SlinkURL
+		photos[photoIndex].SlinkProfile = previousPhoto.SlinkProfile
+		photos[photoIndex].NonImage = previousPhoto.NonImage
+	}
+	book.Photos = photos
+
+	return book
+}
+
+func hasPhotoResult(photo Photo) bool {
+	return photo.SlinkURL != "" || photo.SlinkProfile != "" || photo.NonImage
 }
 
 func (b *Book) convertLegacyFragments(textBeforeSeller, textBeforeBuy, textAfterBuy string) {

@@ -23,10 +23,17 @@ embedded bbolt database, which also stores the pending send queue.
 | `TELEGRAM_API_BASE` | no | `https://api.telegram.org` | Bot API base URL; custom/local servers require Bot API 10.1+ |
 | `HTTP_TIMEOUT` | no | `30s` | Positive Go duration applied to each external request |
 | `MESSAGE_LIMIT` | no | `32000` | Displayed Rich Message text rune limit, allowed range `64..32768` |
+| `SLINK_URL` | no | empty | HTTP(S) Slink base URL; empty disables image publishing |
+| `SLINK_API_KEY` | no | empty | Slink API key; required with the other Slink variables |
+| `SLINK_TAG_ID` | no | empty | UUID of the Slink `alib` tag; required with the other Slink variables |
 
 Configuration is validated before process startup. Invalid chat IDs, including
 plain text without `@`, an empty `@` username, whitespace, and numeric overflow,
 fail fast with an error naming `TELEGRAM_CHAT_ID`.
+Slink is disabled when all three `SLINK_*` variables are empty. A partial
+configuration fails fast naming the missing variable. `SLINK_URL` must be an
+HTTP(S) base URL without userinfo, query, or fragment, and `SLINK_TAG_ID` must
+be a UUID. API keys are never included in errors or logs.
 `ALIB_URL` accepts one URL or a comma-separated list. Surrounding whitespace is
 trimmed, URL order is preserved, and literal commas must be percent-encoded as
 `%2C`. URL userinfo is rejected. For example:
@@ -77,7 +84,7 @@ freshness markers.
 Each digest first records every fetched listing in the state database as a
 pending record with the full semantic Alib payload: title, bibliography,
 publication year, content, seller name and URL, location, price, condition and
-other details, purchase URL, and ordered photo URLs. The parser derives these fields
+other details, purchase URL, and ordered photo URLs with normalized captions. The parser derives these fields
 from DOM nodes and logical `<br>`-delimited lines; it does not parse HTML with
 regular expressions. Existing records keep their sent status while refreshing
 the parsed payload from the latest source pages. The first successful run records
@@ -100,8 +107,9 @@ formatting tags and URL attribute values do not count, while encoded text and
 listing's mandatory displayed fields plus minimal content still do not fit,
 `digest.ErrMessageTooLong` is returned; other renderable pending listings are
 still sent while that listing remains pending.
-Chunks also split at 250 listings to stay within Telegram's 500-block Rich
-Message limit.
+Chunks also split before Telegram's limits of 500 blocks, including nested
+slideshow images, or 50 media attachments. Ordinary chunks contain at most 250
+listings.
 Telegram operations use the pinned
 [`github.com/go-telegram/bot`](https://github.com/go-telegram/bot) v1.23.0 SDK.
 Each Telegram Rich Message is sent through its `SendRichMessage` method with
@@ -116,12 +124,13 @@ Each listing inside that HTML is structured as:
 2. content in its own section, when present;
 3. seller as `Продавец: <a href="...">Name</a>, Location.`, then price,
    condition/other details, and photo links when present on separate lines;
-4. a final `Купить` link in its own section.
+4. an optional Slink slideshow;
+5. a final `Купить` link in its own section.
 
 When photos are available, the source photo-link section is rendered as
-`Смотрите: <a href="...">фото</a> - <a href="...">фото</a>` in source order,
-including repeated links. When an announcement has no photos, the photo line is
-omitted completely.
+`Смотрите: <a href="...">Обложка</a> - <a href="...">фото</a>` in source order,
+including repeated links. Captions come from the source anchor; an empty caption
+falls back to `фото`. When an announcement has no photos, the photo line is omitted.
 When seller URL is absent, seller name is rendered as plain text. Missing
 optional fields do not create empty sections. Dynamic text and URLs are
 HTML-escaped. Every encoded line break uses `<br/>`; sections use `<br/><br/>`
@@ -132,11 +141,34 @@ sections between `main` and the final `Купить` section. When both are abse
 the layout is exactly `main → <br/><br/> → Купить`. Adjacent listings in one
 Rich Message are separated by `<hr/>`; no divider appears before the first
 listing or after the last. A digest uses multiple Telegram messages when
-pending content exceeds `MESSAGE_LIMIT` or 250 listings; the heading appears
-only in the first message.
+pending content exceeds `MESSAGE_LIMIT`, 500 blocks, or 50 media attachments;
+the heading appears only in the first message.
 If the heading and first pending listing cannot fit together but the listing
 fits alone, the first message contains only the heading and the listing follows
 in a headerless message.
+
+When Slink is enabled, each source photo is downloaded through HTTP(S), including
+limited HTTP redirects and HTML `META refresh` redirects. Downloads are limited
+to 15 MiB. Every initial or redirected target must omit userinfo and resolve only
+to public addresses; loopback, private, link-local, multicast, and unspecified
+addresses are rejected before dialing. Images are uploaded sequentially to Slink
+with the `alib` tag;
+individual download, type-detection, redirect, or upload failures leave the
+original link in `Смотрите` and do not block the book. Successful image URLs are
+rendered before the purchase section as a Telegram `<tg-slideshow>` containing
+`<img src="..."/>` elements and one `<figcaption>` with unique source captions.
+The source order and repeated links are preserved. A slideshow contains at most
+50 images; further successful images remain source links. The operator must
+create the `alib` tag, use its UUID in `SLINK_TAG_ID`, create an API key, and
+enable `Auto-publish API uploads` for that Slink user.
+
+Photo files are stored in a separate temporary directory per book. The directory
+remains available while the prepared result is saved to bbolt, then is removed
+before rendering or Telegram delivery. Failed preparation or state writes also
+clean up the directory; successful Slink URLs are persisted so later digests do
+not upload the same source URL again while `SLINK_URL` and `SLINK_TAG_ID` remain
+unchanged. Changing either value reprocesses pending photos; rotating only the API
+key does not.
 The first message uses the normal notification sound; all later messages are
 silent. Whenever a digest sends at least one message, the final message
 includes an inline `Обновить` button.
@@ -224,8 +256,10 @@ readable: a narrow JSON compatibility decoder converts those fragments to the
 semantic `Book` model in memory. Opening the database does not rewrite valid
 legacy structured records. A structured legacy `has_photos` field is ignored
 because it contains no recoverable photo URLs; its photo line stays
-absent until rediscovery supplies URLs. The next mutating write, including
-rediscovery or a successful-delivery acknowledgement, writes the current schema.
+absent until rediscovery supplies URLs. Legacy `photo_urls` arrays decode as
+photo records with caption `фото`. Opening the database does not rewrite them;
+the next mutating write, including rediscovery or successful-delivery
+acknowledgement, stores the current `photos` schema.
 Values that look like structured JSON records must decode successfully, and their stored purchase
 URL must match the bbolt key. A malformed or mismatched structured record makes
 state opening fail transactionally: it is not treated as a legacy marker, and no
@@ -247,10 +281,13 @@ the distroless `nonroot` user. Keep the state directory on a named volume:
 docker run -d --name alib-fetcher \
   --read-only \
   --mount type=volume,src=alib-fetcher-state,dst=/var/lib/alib-fetcher \
+  --tmpfs /tmp:rw,noexec,nosuid,nodev,mode=1777 \
   -e TELEGRAM_BOT_TOKEN=... \
   -e TELEGRAM_CHAT_ID=... \
   ghcr.io/<owner>/<repository>:latest
 ```
+
+The `/tmp` mount is required only when Slink is enabled. Compose includes it.
 
 Alternatively, start the service with the Compose v3.8 configuration:
 
