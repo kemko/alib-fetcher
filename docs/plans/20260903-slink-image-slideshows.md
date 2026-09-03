@@ -209,19 +209,19 @@ bbolt.
 
 ### Task 6: Verify acceptance criteria
 
-- [ ] Запустить `make fmt`.
-- [ ] Запустить `make verify`: format check, полный lint, race/shuffle tests и build должны пройти.
-- [ ] Запустить `make coverage`; общее statement coverage должно быть не ниже 80%.
-- [ ] Повторно запустить `docker compose config`.
-- [ ] Проверить автоматическими тестами, что без Slink вывод не меняется, а с Slink
+- [x] Запустить `make fmt`.
+- [x] Запустить `make verify`: format check, полный lint, race/shuffle tests и build должны пройти.
+- [x] Запустить `make coverage`; общее statement coverage должно быть не ниже 80%.
+- [x] Повторно запустить `docker compose config`.
+- [x] Проверить автоматическими тестами, что без Slink вывод не меняется, а с Slink
   успешные изображения попадают в slideshow, не-изображения и сбои остаются в `Смотрите`.
-- [ ] Проверить автоматическими тестами, что повторный digest использует сохранённые
+- [x] Проверить автоматическими тестами, что повторный digest использует сохранённые
   Slink URL и не выполняет повторную загрузку.
-- [ ] Проверить автоматическими тестами, что файлы книги существуют при записи
+- [x] Проверить автоматическими тестами, что файлы книги существуют при записи
   результата в bbolt и удалены до render/send, включая пути ошибок и отмены.
-- [ ] Проверить task-only diff и отсутствие токенов, временных файлов, баз данных и
+- [x] Проверить task-only diff и отсутствие токенов, временных файлов, баз данных и
   бинарников.
-- [ ] Создать Conventional Commit `feat: add Slink image slideshows`.
+- [x] Создать Conventional Commit `feat: add Slink image slideshows`.
 
 ## Post-Completion
 
