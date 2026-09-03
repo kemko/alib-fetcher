@@ -28,8 +28,9 @@ var errResponseTooLarge = fmt.Errorf("alib response exceeds %d bytes", maxPageRe
 
 // FetchResult contains successfully fetched books and failed listing identities.
 type FetchResult struct {
-	Books         []Book
-	FailedBuyURLs []string
+	Books                []Book
+	FailedBuyURLs        []string
+	UnidentifiedFailures int
 }
 
 // Client fetches book listings from configured Alib.ru pages.
@@ -97,7 +98,7 @@ func (c *Client) FetchWithResult(ctx context.Context) (FetchResult, error) {
 	if err != nil {
 		return FetchResult{}, err
 	}
-	books, failed, parsedPages, parseErrors, err := c.parsePages(ctx, downloaded)
+	books, failed, unidentifiedFailures, parsedPages, parseErrors, err := c.parsePages(ctx, downloaded)
 	if err != nil {
 		return FetchResult{}, err
 	}
@@ -106,7 +107,11 @@ func (c *Client) FetchWithResult(ctx context.Context) (FetchResult, error) {
 		return FetchResult{}, errors.Join(pageErrors...)
 	}
 
-	return FetchResult{Books: books, FailedBuyURLs: failed}, nil
+	return FetchResult{
+		Books:                books,
+		FailedBuyURLs:        failed,
+		UnidentifiedFailures: unidentifiedFailures,
+	}, nil
 }
 
 func (c *Client) downloadPages(ctx context.Context) ([]downloadedPage, []error, error) {
@@ -140,20 +145,21 @@ func (c *Client) downloadPages(ctx context.Context) ([]downloadedPage, []error, 
 func (c *Client) parsePages(
 	ctx context.Context,
 	pages []downloadedPage,
-) ([]Book, []string, int, []error, error) {
+) ([]Book, []string, int, int, []error, error) {
 	books := make([]Book, 0)
 	failed := make(map[string]struct{})
 	pageErrors := make([]error, 0, len(pages))
 	parsedPages := 0
+	unidentifiedFailures := 0
 	seen := make(map[string]struct{})
 	failedOrder := make([]string, 0)
 	for _, page := range pages {
 		if err := ctx.Err(); err != nil {
-			return nil, nil, 0, nil, err
+			return nil, nil, 0, 0, nil, err
 		}
 		pageResult, err := ParseWithResult(bytes.NewReader(page.body), page.endpoint, page.contentType)
 		if contextErr := ctx.Err(); contextErr != nil {
-			return nil, nil, 0, nil, contextErr
+			return nil, nil, 0, 0, nil, contextErr
 		}
 		if err != nil {
 			pageURL := page.endpoint.String()
@@ -166,10 +172,11 @@ func (c *Client) parsePages(
 		c.logger.InfoContext(ctx, "alib.page_parsed",
 			slog.Int(logKeyIndex, page.index), slog.String(logKeyURL, page.endpoint.String()),
 			slog.Int(logKeyBooks, len(pageResult.Books)))
+		unidentifiedFailures += pageResult.UnidentifiedFailures
 		mergePageResult(&books, failed, seen, &failedOrder, pageResult)
 	}
 
-	return books, remainingFailures(failedOrder, failed), parsedPages, pageErrors, nil
+	return books, remainingFailures(failedOrder, failed), unidentifiedFailures, parsedPages, pageErrors, nil
 }
 
 func mergePageResult(

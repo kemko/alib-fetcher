@@ -411,6 +411,25 @@ func Test_ParseWithResult_keeps_valid_listings_when_one_announcement_is_malforme
 	}}, result.Books)
 }
 
+func Test_ParseWithResult_counts_malformed_announcement_without_buy_url_on_mixed_page(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	page := `<p><b>Сбойное объявление.</b> М., 2026 г. <a><b>Купить</b></a></p>` +
+		`<p><b>Рабочая книга.</b> М., 2025 г. <a href="/valid.html"><b>Купить</b></a></p>`
+	baseURL, err := url.Parse("https://www.alib.ru/tramka.phtml?tnew=7")
+	require.NoError(t, err)
+
+	// When
+	result, err := alib.ParseWithResult(bytes.NewBufferString(page), baseURL, "text/html")
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, 1, result.UnidentifiedFailures)
+	require.Empty(t, result.FailedBuyURLs)
+	require.Len(t, result.Books, 1)
+}
+
 func Test_ParseWithResult_deduplicates_failed_announcements(t *testing.T) {
 	t.Parallel()
 

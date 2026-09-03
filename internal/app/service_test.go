@@ -25,8 +25,9 @@ func Test_Service_reports_fetch_listing_errors(t *testing.T) {
 	book := alib.Book{Title: "Рабочая книга", BuyURL: "https://example.com/book"}
 	service := app.NewService(app.Dependencies{
 		Fetcher: fakeFetcher{
-			books:         []alib.Book{book},
-			failedBuyURLs: []string{"https://example.com/failed-1", "https://example.com/failed-2"},
+			books:                []alib.Book{book},
+			failedBuyURLs:        []string{"https://example.com/failed-1", "https://example.com/failed-2"},
+			unidentifiedFailures: 1,
 		},
 		State:        &fakeState{pending: []alib.Book{book}, recordedNew: 1},
 		Sender:       &fakeSender{},
@@ -39,7 +40,7 @@ func Test_Service_reports_fetch_listing_errors(t *testing.T) {
 
 	// Then
 	require.NoError(t, err)
-	require.Equal(t, 2, result.Failed)
+	require.Equal(t, 3, result.Failed)
 	require.Equal(t, 1, result.Sent)
 }
 
@@ -1218,9 +1219,10 @@ func Test_Service_prunes_state_at_start_of_cycle(t *testing.T) {
 }
 
 type fakeFetcher struct {
-	events        *[]string
-	books         []alib.Book
-	failedBuyURLs []string
+	events               *[]string
+	books                []alib.Book
+	failedBuyURLs        []string
+	unidentifiedFailures int
 }
 
 type selectivePhotoProcessor struct {
@@ -1256,7 +1258,11 @@ func (f fakeFetcher) FetchWithResult(context.Context) (alib.FetchResult, error) 
 	if f.events != nil {
 		*f.events = append(*f.events, "fetch")
 	}
-	return alib.FetchResult{Books: f.books, FailedBuyURLs: f.failedBuyURLs}, nil
+	return alib.FetchResult{
+		Books:                f.books,
+		FailedBuyURLs:        f.failedBuyURLs,
+		UnidentifiedFailures: f.unidentifiedFailures,
+	}, nil
 }
 
 type fakeState struct {

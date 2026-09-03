@@ -24,8 +24,9 @@ var ErrNoBooks = errors.New("page contains no book listings")
 
 // ParseResult contains successfully parsed books and failed listing identities.
 type ParseResult struct {
-	Books         []Book
-	FailedBuyURLs []string
+	Books                []Book
+	FailedBuyURLs        []string
+	UnidentifiedFailures int
 }
 
 type listingPart struct {
@@ -73,18 +74,18 @@ func ParseWithResult(reader io.Reader, baseURL *url.URL, contentType string) (Pa
 		failed:      make(map[string]struct{}),
 		failedOrder: make([]string, 0),
 	}
-	unresolvedCandidate := false
+	unidentifiedFailures := 0
 	for node := range document.Descendants() {
 		if node.Type != html.ElementNode || node.Data != "p" {
 			continue
 		}
 		if collectListing(&state, node, baseURL) {
-			unresolvedCandidate = true
+			unidentifiedFailures++
 		}
 	}
 
 	if len(state.books) == 0 {
-		if unresolvedCandidate ||
+		if unidentifiedFailures > 0 ||
 			(len(state.seen) == 0 && len(state.failed) == 0 && !isEmptySearchResultsPage(document)) {
 			return ParseResult{}, ErrNoBooks
 		}
@@ -92,7 +93,11 @@ func ParseWithResult(reader io.Reader, baseURL *url.URL, contentType string) (Pa
 
 	failedBuyURLs := remainingFailures(state.failedOrder, state.failed)
 
-	return ParseResult{Books: state.books, FailedBuyURLs: failedBuyURLs}, nil
+	return ParseResult{
+		Books:                state.books,
+		FailedBuyURLs:        failedBuyURLs,
+		UnidentifiedFailures: unidentifiedFailures,
+	}, nil
 }
 
 type parseState struct {

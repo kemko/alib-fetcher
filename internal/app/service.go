@@ -101,7 +101,8 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 	for _, buyURL := range fetchResult.FailedBuyURLs {
 		failedURLs[buyURL] = struct{}{}
 	}
-	result.Failed = len(failedURLs)
+	unidentifiedFailures := fetchResult.UnidentifiedFailures
+	result.Failed = unidentifiedFailures + len(failedURLs)
 	if s.dependencies.PhotoProcessor != nil {
 		renderOptions.SlinkProfile = s.dependencies.PhotoProcessor.Profile()
 	}
@@ -117,7 +118,7 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 		failedURLs,
 		renderOptions,
 	)
-	result.Failed = len(failedURLs)
+	result.Failed = unidentifiedFailures + len(failedURLs)
 	if err != nil {
 		return result, err
 	}
@@ -135,7 +136,7 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 	}
 	pending = sortPending(pending)
 	pending, err = s.preparePending(ctx, pending, preparedBooksByURL, failedURLs, &renderOptions)
-	result.Failed = len(failedURLs)
+	result.Failed = unidentifiedFailures + len(failedURLs)
 	if err != nil {
 		return result, err
 	}

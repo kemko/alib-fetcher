@@ -347,6 +347,29 @@ func Test_ClientWithResult_returns_deduplicated_failed_buy_urls(t *testing.T) {
 	require.Equal(t, server.URL+"/good.html", result.Books[0].BuyURL)
 }
 
+func Test_ClientWithResult_returns_unidentified_failures_from_mixed_page(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, err := writer.Write([]byte(`<p><b>Сбойное объявление.</b> М., 2026 г. <a><b>Купить</b></a></p>` +
+			listingPage("Рабочая книга", "/good.html", "100 руб.")))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+	client, err := alib.NewClient(server.URL, time.Second, 0, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+
+	// When
+	result, err := client.FetchWithResult(context.Background())
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, 1, result.UnidentifiedFailures)
+	require.Len(t, result.Books, 1)
+}
+
 func Test_Client_logs_full_URL_for_download_failure(t *testing.T) {
 	t.Parallel()
 
