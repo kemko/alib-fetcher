@@ -11,9 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/kemko/alib-fetcher/internal/alib"
 	"github.com/kemko/alib-fetcher/internal/app"
-	"github.com/stretchr/testify/require"
 )
 
 func Test_digestRunner_skips_scheduled_digest_when_another_digest_is_running(t *testing.T) {

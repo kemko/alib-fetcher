@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"github.com/go-telegram/bot/models"
 
 	"github.com/kemko/alib-fetcher/internal/alib"
+	"github.com/kemko/alib-fetcher/internal/slink"
 	"github.com/kemko/alib-fetcher/internal/store"
 	"github.com/kemko/alib-fetcher/internal/telegram"
 
@@ -203,6 +205,152 @@ func Test_run_isolatesSlinkPhotoProcessorFailure(t *testing.T) {
 	require.Contains(t, request.Message.RichMessage.HTML, "Не удалось обработать книг: 1")
 	require.Contains(t, logs.String(), `"msg":"slink.photo_failed"`)
 	require.NotContains(t, logs.String(), "sk_main-wiring-secret")
+}
+
+func Test_run_endToEnd_isolatesSlinkSourceFailure(t *testing.T) {
+	// Given
+	useOnceMode(t)
+	const (
+		apiKey = "sk_acceptance-secret"
+		tagID  = "550e8400-e29b-41d4-a716-446655440000"
+	)
+
+	alibServer := newIPv4TestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, err := fmt.Fprintf(writer, `<p><b>Успешная.</b> М., 2026 г.<br>
+Цена: 100 руб. <a href="/good-buy"><b>Купить</b></a><br>
+Смотрите: <a href="http://slink.test/foto.php4?kind=good">Обложка</a></p>
+<p><b>Сбойная.</b> М., 2026 г.<br>
+Цена: 200 руб. <a href="/bad-buy"><b>Купить</b></a><br>
+Смотрите: <a href="http://slink.test/foto.php4?kind=bad">Обложка</a></p>`)
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(alibServer.Close)
+
+	slinkServer := newIPv4TestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/foto.php4":
+			if request.URL.Query().Get("kind") == "bad" {
+				writer.WriteHeader(http.StatusForbidden)
+				return
+			}
+			assert.Equal(t, http.MethodGet, request.Method)
+			assert.Equal(t, "alib-fetcher/1.0", request.Header.Get("User-Agent"))
+			assert.Equal(t, alibServer.URL+"/good-buy", request.Header.Get("Referer"))
+			writer.Header().Set("Content-Type", "image/png")
+			_, err := writer.Write([]byte("\x89PNG\r\n\x1a\nimage"))
+			assert.NoError(t, err)
+		case "/bad-photo":
+			writer.WriteHeader(http.StatusForbidden)
+		case "/api/external/upload":
+			assert.Equal(t, http.MethodPost, request.Method)
+			assert.Equal(t, "Bearer "+apiKey, request.Header.Get("Authorization"))
+			assert.Equal(t, "http://slink.test", request.Header.Get("Origin"))
+			assert.Equal(t, "alib-fetcher/1.0", request.Header.Get("User-Agent"))
+			if !assert.NoError(t, request.ParseMultipartForm(1<<20)) {
+				return
+			}
+			file, _, err := request.FormFile("image")
+			if !assert.NoError(t, err) {
+				return
+			}
+			assert.NoError(t, file.Close())
+			assert.Equal(t, tagID, request.FormValue("tagIds[]"))
+			writer.Header().Set("Content-Type", "application/json")
+			_, err = io.WriteString(writer, `{"url":"/published/good.png"}`)
+			assert.NoError(t, err)
+		default:
+			t.Errorf("unexpected Slink path %q", request.URL.Path)
+		}
+	}))
+	t.Cleanup(slinkServer.Close)
+
+	telegramRequests := make(chan telegramRequest, 1)
+	telegramServer := newIPv4TestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		telegramRequests <- telegramRequest{Message: decodeTelegramMessage(t, request), Path: request.URL.Path}
+		_, err := io.WriteString(writer, `{"ok":true,"result":{}}`)
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(telegramServer.Close)
+
+	statePath := filepath.Join(t.TempDir(), "state.db")
+	setRunEnvironment(t, alibServer.URL, telegramServer.URL, statePath)
+	t.Setenv("SLINK_URL", "http://slink.test")
+	t.Setenv("SLINK_API_KEY", apiKey)
+	t.Setenv("SLINK_TAG_ID", tagID)
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+
+	newSlinkClient := func(rawURL, key, tag string, timeout time.Duration, clientLogger *slog.Logger) (*slink.Client, error) {
+		dialer := &net.Dialer{}
+		return slink.NewClientWithOptions(rawURL, key, tag, timeout, clientLogger, slink.Options{
+			HTTPClient: &http.Client{Transport: rewriteHostTransport{target: slinkServer.Listener.Addr().String()}},
+			LookupIP: func(context.Context, string) ([]net.IP, error) {
+				return []net.IP{net.ParseIP("93.184.216.34")}, nil
+			},
+			DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+				return dialer.DialContext(ctx, network, slinkServer.Listener.Addr().String())
+			},
+		})
+	}
+
+	// When
+	err := runWithSlinkFactory(logger, newSlinkClient)
+
+	// Then
+	require.NoError(t, err)
+	require.Len(t, telegramRequests, 1)
+	message := (<-telegramRequests).Message
+	require.Contains(t, message.RichMessage.HTML, "Успешная.")
+	require.Contains(t, message.RichMessage.HTML, "http://slink.test/published/good.png")
+	require.NotContains(t, message.RichMessage.HTML, "Сбойная.")
+	require.Contains(t, message.RichMessage.HTML, "Не удалось обработать книг: 1")
+	requireRefreshButton(t, message)
+
+	state, err := store.Open(statePath, time.Now())
+	require.NoError(t, err)
+	existing, err := state.Existing(context.Background(), []alib.Book{
+		{BuyURL: alibServer.URL + "/good-buy"},
+		{BuyURL: alibServer.URL + "/bad-buy"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []bool{true, false}, existing)
+	pending, err := state.Pending(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, pending)
+	require.NoError(t, state.Close())
+
+	logOutput := logs.String()
+	require.Contains(t, logOutput, `"msg":"slink.photo_failed"`)
+	require.Contains(t, logOutput, `"stage":"source_download"`)
+	require.Contains(t, logOutput, `"http_status":403`)
+	require.Contains(t, logOutput, `"msg":"digest.completed"`)
+	require.Contains(t, logOutput, `"failed":1`)
+	require.NotContains(t, logOutput, apiKey)
+	require.NotContains(t, logOutput, "kind=bad")
+}
+
+type rewriteHostTransport struct {
+	target string
+}
+
+func (transport rewriteHostTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	rewritten := request.Clone(request.Context())
+	rewritten.URL.Host = transport.target
+
+	return http.DefaultTransport.RoundTrip(rewritten)
+}
+
+func newIPv4TestServer(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
+	var listenConfig net.ListenConfig
+	listener, err := listenConfig.Listen(context.Background(), "tcp4", "127.0.0.1:0")
+	require.NoError(t, err)
+	server := httptest.NewUnstartedServer(handler)
+	server.Listener = listener
+	server.Start()
+
+	return server
 }
 
 func Test_run_rejects_non_positive_forget_latest(t *testing.T) {

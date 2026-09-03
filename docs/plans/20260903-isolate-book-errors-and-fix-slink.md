@@ -158,12 +158,12 @@ Refresh callback подтверждается сразу текстом `Фор�
 - Modify: `README.md`
 - Modify: `AGENTS.md`
 
-- [ ] Добавить end-to-end regression test: одна новая книга успешно проходит Slink и Telegram, другая получает 403/502 на source или upload, не записывается в БД и учитывается в секции ошибок последней части дайджеста.
-- [ ] Обновить runtime flow, invariants, формат digest, `Result`/logging и семантику немедленного refresh-answer.
-- [ ] Описать требования Slink: ключ `sk_...`, тег того же владельца, включённый external-upload auto-publish и использование `HTTP_TIMEOUT` только для отдельных запросов.
-- [ ] Выполнить `make verify`, включая format check, linter, race-enabled tests и build.
-- [ ] Выполнить `make coverage` и подтвердить итоговое покрытие не ниже 80%.
-- [ ] Проверить отсутствие ключей, полных error bodies и иных секретов в тестовых и рабочих логах.
+- [x] Добавить end-to-end regression test: одна новая книга успешно проходит Slink и Telegram, другая получает 403/502 на source или upload, не записывается в БД и учитывается в секции ошибок последней части дайджеста.
+- [x] Обновить runtime flow, invariants, формат digest, `Result`/logging и семантику немедленного refresh-answer.
+- [x] Описать требования Slink: ключ `sk_...`, тег того же владельца, включённый external-upload auto-publish и использование `HTTP_TIMEOUT` только для отдельных запросов.
+- [x] Выполнить `make verify`, включая format check, linter, race-enabled tests и build.
+- [x] Выполнить `make coverage` и подтвердить итоговое покрытие не ниже 80%.
+- [x] Проверить отсутствие ключей, полных error bodies и иных секретов в тестовых и рабочих логах.
 
 ## Post-Completion
 

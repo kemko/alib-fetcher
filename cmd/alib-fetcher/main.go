@@ -32,6 +32,13 @@ func main() {
 }
 
 func run(logger *slog.Logger) error {
+	return runWithSlinkFactory(logger, slink.NewClient)
+}
+
+func runWithSlinkFactory(
+	logger *slog.Logger,
+	newSlinkClient func(string, string, string, time.Duration, *slog.Logger) (*slink.Client, error),
+) error {
 	once := flag.Bool("once", false, "fetch and send one digest, then exit")
 	var forgetLatest forgetLatestOption
 	flag.Var(&forgetLatest, "forget-latest", "delete the latest state records, then exit")
@@ -78,7 +85,7 @@ func run(logger *slog.Logger) error {
 	}
 	var photoProcessor app.PhotoProcessor
 	if settings.SlinkURL != "" {
-		photoProcessor, err = slink.NewClient(
+		photoProcessor, err = newSlinkClient(
 			settings.SlinkURL,
 			settings.SlinkAPIKey,
 			settings.SlinkTagID,

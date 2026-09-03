@@ -24,8 +24,8 @@ embedded bbolt database, which also stores the pending send queue.
 | `HTTP_TIMEOUT` | no | `30s` | Positive Go duration applied to each external request |
 | `MESSAGE_LIMIT` | no | `32000` | Displayed Rich Message text rune limit, allowed range `64..32768` |
 | `SLINK_URL` | no | empty | HTTP(S) Slink base URL; empty disables image publishing |
-| `SLINK_API_KEY` | no | empty | Slink API key; required with the other Slink variables |
-| `SLINK_TAG_ID` | no | empty | UUID of the Slink `alib` tag; required with the other Slink variables |
+| `SLINK_API_KEY` | no | empty | Slink API key beginning with `sk_`; required with the other Slink variables |
+| `SLINK_TAG_ID` | no | empty | UUID of the Slink `alib` tag owned by the API-key account; required with the other Slink variables |
 
 Configuration is validated before process startup. Invalid chat IDs, including
 plain text without `@`, an empty `@` username, whitespace, and numeric overflow,
@@ -81,14 +81,21 @@ The parser recognizes the last four-digit year in the bibliography followed by
 `г` or `г.`. Years found only in content or other listing sections do not affect
 freshness markers.
 
-Each digest first records every fetched listing in the state database as a
-pending record with the full semantic Alib payload: title, bibliography,
+Each digest first checks fetched listing identities against the state database,
+then prepares new listings before recording them as pending records. Only fully
+prepared and renderable books are recorded. A book-specific parse, photo,
+preparation, cleanup, or rendering failure excludes that book from the current
+digest; a new failed book is not written to state and is retried on the next
+cycle. Such failures are counted once per book.
+
+Recorded listings contain the full semantic Alib payload: title, bibliography,
 publication year, content, seller name and URL, location, price, condition and
 other details, purchase URL, and ordered photo URLs with normalized captions. The parser derives these fields
 from DOM nodes and logical `<br>`-delimited lines; it does not parse HTML with
 regular expressions. Existing records keep their sent status while refreshing
-the parsed payload from the latest source pages. The first successful run records
-every listing currently present on those pages as pending and sends them.
+the parsed payload from the latest source pages. The first successful run sends
+every listing that can be prepared and rendered; failed listings remain
+undelivered for rediscovery.
 
 `Store.Pending` returns every pending record in first-discovery order, not only
 books found in the current fetch result. Before rendering, the service puts
@@ -146,15 +153,22 @@ the heading appears only in the first message.
 If the heading and first pending listing cannot fit together but the listing
 fits alone, the first message contains only the heading and the listing follows
 in a headerless message.
+When book-specific failures occurred, the final message adds
+`Не удалось обработать книг: N` after an `<hr/>`; the count includes listings
+skipped because of `digest.ErrMessageTooLong`.
 
 When Slink is enabled, each source photo is downloaded through HTTP(S), including
 limited HTTP redirects and HTML `META refresh` redirects. Downloads are limited
 to 15 MiB. Every initial or redirected target must omit userinfo and resolve only
 to public addresses; loopback, private, link-local, multicast, and unspecified
 addresses are rejected before dialing. Images are uploaded sequentially to Slink
-with the `alib` tag;
-individual download, type-detection, redirect, or upload failures leave the
-original link in `Смотрите` and do not block the book. Successful image URLs are
+with the `alib` tag. The API key must start with `sk_`, and the tag must belong
+to the same Slink account. Uploads use `POST /api/external/upload` with Bearer
+authentication, multipart `image` and `tagIds[]` fields, and require Slink
+external-upload auto-publish for returned links to be public. A download,
+redirect, type-detection, or upload failure is isolated to that book: a new
+book is not recorded, an existing pending book stays pending, and the book is
+retried on the next cycle. Successful image URLs are
 rendered before the purchase section as a Telegram `<tg-slideshow>` containing
 `<img src="..."/>` elements and one `<figcaption>` with unique source captions.
 The source order and repeated links are preserved. A slideshow contains at most
@@ -177,13 +191,13 @@ out-of-schedule digest. If that refresh sends new notifications, the clicked
 message's old button is removed before the first new message is sent, and the
 last new message receives a fresh `Обновить` button. If the refresh finds no
 sendable books, the old button stays in place.
-The callback stays in Telegram's loading state until the refresh digest
-finishes. A successful refresh with no newly discovered records shows the
-`Новых книг нет` toast; a successful refresh with new records ends loading
-with no text; a failed refresh shows `Ошибка обновления`, while details remain
-in the service log. Refresh digests are canceled after 10 seconds so Telegram
-can receive the final callback answer before the query expires; a timeout is a
-failed refresh. Toast display duration is controlled by the Telegram client;
+The callback is answered immediately with `Формирование дайджеста запущено`
+after the refresh runner lock is acquired; the digest continues in the
+background on the service lifetime context. A successful refresh with no newly
+discovered records has a `Новых книг нет` toast; successful refreshes with new
+records have no final callback answer; errors are reported in the service log.
+`HTTP_TIMEOUT` applies to each external request, not to the whole refresh
+digest. Toast display duration is controlled by the Telegram client;
 the Bot API cannot guarantee an exact duration.
 
 When Telegram returns a flood-control `retry_after`, the service waits for the
