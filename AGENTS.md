@@ -265,10 +265,14 @@ displayed fields plus minimal content still cannot fit, the listing returns
 
 When Slink is enabled, source photos are downloaded sequentially through limited
 HTTP and HTML META refresh redirects into one system-temp directory per book.
-Targets must use HTTP(S), omit userinfo, and resolve only to public addresses at
-every connection; loopback, private, link-local, multicast, and unspecified
-addresses are rejected before dialing. Downloads are capped at 15 MiB and Slink
-responses at 1 MiB. Image type is detected from content. Uploads use `POST
+Targets must use HTTP(S) and omit userinfo. Before every connection, every
+address returned for the target by DNS is checked; the connection is rejected if
+any address belongs to at least one range in the pinned `iplib/iana.Registry`.
+This applies to the initial URL, HTTP redirects, and META refresh redirects.
+Addresses outside that registry are not blocked by additional address-range
+rules. The registry data is bundled with the pinned iplib version, is not fetched
+at runtime, and changes only when that dependency is updated. Downloads are capped
+at 15 MiB and Slink responses at 1 MiB. Image type is detected from content. Uploads use `POST
 /api/external/upload` with multipart field `image`, repeated `tagIds[]`, Bearer
 authentication, and an `Origin` derived from `SLINK_URL`. The API key must use
 the `sk_` prefix, the tag must belong to that key's owner, and Slink
