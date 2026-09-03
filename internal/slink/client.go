@@ -15,6 +15,7 @@ import (
 	"mime/multipart"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/textproto"
 	"net/url"
 	"os"
@@ -36,6 +37,28 @@ const (
 	logKeyErrorType   = "error_type"
 	logKeyIndex       = "index"
 )
+
+var nonPublicPrefixes = [...]netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("192.88.99.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("::/96"),
+	netip.MustParsePrefix("64:ff9b::/96"),
+	netip.MustParsePrefix("64:ff9b:1::/48"),
+	netip.MustParsePrefix("100::/64"),
+	netip.MustParsePrefix("100:0:0:1::/64"),
+	netip.MustParsePrefix("2001::/23"),
+	netip.MustParsePrefix("2001:db8::/32"),
+	netip.MustParsePrefix("2002::/16"),
+	netip.MustParsePrefix("3fff::/20"),
+	netip.MustParsePrefix("5f00::/16"),
+}
 
 // Options configures the HTTP and DNS dependencies of Client.
 type Options struct {
@@ -430,7 +453,7 @@ func multipartBody(path, contentType, tagID string) (io.Reader, int64, string, e
 	if _, writeErr := filePart.Write(data); writeErr != nil {
 		return nil, 0, "", fmt.Errorf("write Slink image field: %w", writeErr)
 	}
-	if writeErr := multipartWriter.WriteField("tagIds", tagID); writeErr != nil {
+	if writeErr := multipartWriter.WriteField("tagIds[]", tagID); writeErr != nil {
 		return nil, 0, "", fmt.Errorf("write Slink tag field: %w", writeErr)
 	}
 	if multipartCloseErr := multipartWriter.Close(); multipartCloseErr != nil {
@@ -559,8 +582,21 @@ func secureDialContext(
 }
 
 func restrictedIP(ip net.IP) bool {
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsMulticast() || ip.IsUnspecified()
+	address, valid := netip.AddrFromSlice(ip)
+	if !valid {
+		return true
+	}
+	address = address.Unmap()
+	if !address.IsGlobalUnicast() || address.IsPrivate() {
+		return true
+	}
+	for _, prefix := range nonPublicPrefixes {
+		if prefix.Contains(address) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func parseBaseURL(raw string) (*url.URL, error) {

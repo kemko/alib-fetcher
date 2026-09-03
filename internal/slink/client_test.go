@@ -38,7 +38,8 @@ func TestProcess_uploadsImageWithAuthAndTagAndCleansFiles(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		assert.Equal(t, []string{"tag-id"}, request.MultipartForm.Value["tagIds"])
+		assert.Equal(t, []string{"tag-id"}, request.MultipartForm.Value["tagIds[]"])
+		assert.NotContains(t, request.MultipartForm.Value, "tagIds")
 		file, header, err := request.FormFile("image")
 		if err != nil {
 			t.Error(err)
@@ -265,11 +266,19 @@ func TestProcess_rejectsRestrictedSourceAddressesBeforeDial(t *testing.T) {
 		{name: "literal loopback", rawURL: "http://127.0.0.1/photo"},
 		{name: "literal private", rawURL: "http://10.0.0.1/photo"},
 		{name: "literal link local", rawURL: "http://169.254.169.254/photo"},
+		{name: "literal shared", rawURL: "http://100.100.100.200/photo"},
+		{name: "literal documentation", rawURL: "http://203.0.113.10/photo"},
+		{name: "literal benchmarking", rawURL: "http://198.18.0.1/photo"},
+		{name: "literal reserved", rawURL: "http://240.0.0.1/photo"},
+		{name: "literal IPv6 documentation", rawURL: "http://[2001:db8::1]/photo"},
+		{name: "literal IPv6 translation", rawURL: "http://[64:ff9b::a9fe:a9fe]/photo"},
 		{name: "literal multicast", rawURL: "http://224.0.0.1/photo"},
 		{name: "literal unspecified", rawURL: "http://0.0.0.0/photo"},
 		{name: "DNS loopback", rawURL: "http://photo.test/photo", resolved: net.ParseIP("127.0.0.1")},
 		{name: "DNS private", rawURL: "http://photo.test/photo", resolved: net.ParseIP("192.168.1.1")},
 		{name: "DNS link local", rawURL: "http://photo.test/photo", resolved: net.ParseIP("169.254.1.1")},
+		{name: "DNS shared", rawURL: "http://photo.test/photo", resolved: net.ParseIP("100.100.100.200")},
+		{name: "DNS documentation", rawURL: "http://photo.test/photo", resolved: net.ParseIP("203.0.113.10")},
 		{name: "DNS multicast", rawURL: "http://photo.test/photo", resolved: net.ParseIP("224.0.0.1")},
 		{name: "DNS unspecified", rawURL: "http://photo.test/photo", resolved: net.ParseIP("0.0.0.0")},
 	}
@@ -351,7 +360,7 @@ func TestProcess_dialsTheValidatedAddress(t *testing.T) {
 		slog.New(slog.DiscardHandler),
 		Options{
 			LookupIP: func(context.Context, string) ([]net.IP, error) {
-				return []net.IP{net.ParseIP("203.0.113.10")}, nil
+				return []net.IP{net.ParseIP("8.8.8.8")}, nil
 			},
 			DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
 				dialedAddress = address
@@ -366,7 +375,7 @@ func TestProcess_dialsTheValidatedAddress(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	require.Equal(t, "203.0.113.10:80", dialedAddress)
+	require.Equal(t, "8.8.8.8:80", dialedAddress)
 	require.NotEmpty(t, prepared.Book.Photos[0].SlinkURL)
 	require.NoError(t, prepared.Cleanup())
 }
@@ -616,7 +625,7 @@ func TestProcess_usesSlinkBasePathForUploadAndRelativeResponse(t *testing.T) {
 		slog.New(slog.DiscardHandler),
 		Options{
 			LookupIP: func(context.Context, string) ([]net.IP, error) {
-				return []net.IP{net.ParseIP("203.0.113.10")}, nil
+				return []net.IP{net.ParseIP("8.8.8.8")}, nil
 			},
 			DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
 				return (&net.Dialer{}).DialContext(ctx, network, target)
@@ -658,7 +667,7 @@ func testClient(t *testing.T, server *httptest.Server) *Client {
 		slog.New(slog.DiscardHandler),
 		Options{
 			LookupIP: func(context.Context, string) ([]net.IP, error) {
-				return []net.IP{net.ParseIP("203.0.113.10")}, nil
+				return []net.IP{net.ParseIP("8.8.8.8")}, nil
 			},
 			DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
 				return (&net.Dialer{}).DialContext(ctx, network, target)

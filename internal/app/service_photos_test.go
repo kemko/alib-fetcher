@@ -211,7 +211,7 @@ func Test_Service_integratesPhotoPreparationAndSlideshow(t *testing.T) {
 			if err := request.ParseMultipartForm(1 << 20); !assert.NoError(t, err) {
 				return
 			}
-			assert.Equal(t, []string{"integration-tag"}, request.MultipartForm.Value["tagIds"])
+			assert.Equal(t, []string{"integration-tag"}, request.MultipartForm.Value["tagIds[]"])
 			writer.Header().Set("Content-Type", "application/json")
 			_, err := io.WriteString(writer, `{"url":"/published/image"}`)
 			assert.NoError(t, err)
@@ -297,7 +297,7 @@ func Test_Service_integratesParsedPhotosWithPersistentStore(t *testing.T) {
 			}
 			assert.Equal(t, "image/png", header.Header.Get("Content-Type"))
 			assert.NoError(t, file.Close())
-			assert.Equal(t, "integration-tag", request.FormValue("tagIds"))
+			assert.Equal(t, []string{"integration-tag"}, request.MultipartForm.Value["tagIds[]"])
 			_, err = io.WriteString(writer, `{"url":"published/image"}`)
 			assert.NoError(t, err)
 		default:
