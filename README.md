@@ -165,9 +165,11 @@ to 15 MiB. Before every connection, every address returned for the target by DNS
 is checked; the connection is rejected if any address belongs to at least one
 range in the pinned `iplib/iana.Registry`. This rule applies to the initial URL,
 HTTP redirects, and `META refresh` redirects. Addresses outside that registry
-are not blocked by additional address-range rules. Images are uploaded
-sequentially to Slink with the `alib` tag. The API key must start with `sk_`,
-and the tag must belong to the same Slink account. Uploads use
+are not blocked by additional address-range rules. The registry data is bundled
+with the pinned iplib version, is not fetched at runtime, and changes only when
+that dependency is updated. Images are uploaded sequentially to Slink with the
+`alib` tag. The API key must start with `sk_`, and the tag must belong to the
+same Slink account. Uploads use
 `POST /api/external/upload` with Bearer
 authentication, multipart `image` and `tagIds[]` fields, and require Slink
 external-upload auto-publish for returned links to be public. A download,
