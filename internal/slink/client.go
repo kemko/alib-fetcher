@@ -25,6 +25,7 @@ import (
 	"golang.org/x/net/html"
 
 	"github.com/c-robinson/iplib/v2/iana"
+
 	"github.com/kemko/alib-fetcher/internal/alib"
 )
 
