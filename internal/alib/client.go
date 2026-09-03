@@ -26,6 +26,12 @@ var ErrUnexpectedStatus = errors.New("alib returned an unexpected status")
 
 var errResponseTooLarge = fmt.Errorf("alib response exceeds %d bytes", maxPageResponseBytes)
 
+// FetchResult contains successfully fetched books and failed listing identities.
+type FetchResult struct {
+	Books  []Book
+	Failed int
+}
+
 // Client fetches book listings from configured Alib.ru pages.
 type Client struct {
 	httpClient      *http.Client
@@ -87,6 +93,16 @@ func NewClient(rawURLs string, timeout, requestInterval time.Duration, logger *s
 
 // Fetch downloads all configured pages and then parses successful responses in order.
 func (c *Client) Fetch(ctx context.Context) ([]Book, error) {
+	result, err := c.FetchWithResult(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return result.Books, nil
+}
+
+// FetchWithResult downloads all configured pages and returns partial listing failures.
+func (c *Client) FetchWithResult(ctx context.Context) (FetchResult, error) {
 	downloaded := make([]downloadedPage, 0, len(c.endpoints))
 	pageErrors := make([]error, 0, len(c.endpoints))
 
@@ -94,7 +110,7 @@ func (c *Client) Fetch(ctx context.Context) ([]Book, error) {
 		page, err := c.downloadPage(ctx, index, endpoint)
 		if err != nil {
 			if ctx.Err() != nil {
-				return nil, ctx.Err()
+				return FetchResult{}, ctx.Err()
 			}
 
 			pageURL := endpoint.String()
@@ -117,21 +133,22 @@ func (c *Client) Fetch(ctx context.Context) ([]Book, error) {
 			break
 		}
 		if waitErr := wait(ctx, c.requestInterval); waitErr != nil {
-			return nil, waitErr
+			return FetchResult{}, waitErr
 		}
 	}
 
 	books := make([]Book, 0)
 	seen := make(map[string]struct{})
+	failed := make(map[string]struct{})
 	parsedPages := 0
 	for _, page := range downloaded {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return FetchResult{}, err
 		}
 
-		pageBooks, err := Parse(bytes.NewReader(page.body), page.endpoint, page.contentType)
+		pageResult, err := ParseWithResult(bytes.NewReader(page.body), page.endpoint, page.contentType)
 		if contextErr := ctx.Err(); contextErr != nil {
-			return nil, contextErr
+			return FetchResult{}, contextErr
 		}
 		if err != nil {
 			pageURL := page.endpoint.String()
@@ -149,9 +166,16 @@ func (c *Client) Fetch(ctx context.Context) ([]Book, error) {
 		c.logger.InfoContext(ctx, "alib.page_parsed",
 			slog.Int(logKeyIndex, page.index),
 			slog.String(logKeyURL, page.endpoint.String()),
-			slog.Int(logKeyBooks, len(pageBooks)),
+			slog.Int(logKeyBooks, len(pageResult.Books)),
 		)
-		for _, book := range pageBooks {
+		for _, buyURL := range pageResult.FailedBuyURLs {
+			if _, succeeded := seen[buyURL]; succeeded {
+				continue
+			}
+			failed[buyURL] = struct{}{}
+		}
+		for _, book := range pageResult.Books {
+			delete(failed, book.BuyURL)
 			if _, exists := seen[book.BuyURL]; exists {
 				continue
 			}
@@ -161,14 +185,14 @@ func (c *Client) Fetch(ctx context.Context) ([]Book, error) {
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return FetchResult{}, err
 	}
 
 	if parsedPages == 0 {
-		return nil, errors.Join(pageErrors...)
+		return FetchResult{}, errors.Join(pageErrors...)
 	}
 
-	return books, nil
+	return FetchResult{Books: books, Failed: len(failed)}, nil
 }
 
 func (c *Client) downloadPage(ctx context.Context, index int, endpoint *url.URL) (downloadedPage, error) {

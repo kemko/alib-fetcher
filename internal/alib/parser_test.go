@@ -385,3 +385,68 @@ func Test_Parse_rejects_page_with_buy_link_without_href(t *testing.T) {
 	require.ErrorIs(t, err, alib.ErrNoBooks)
 	require.Empty(t, books)
 }
+
+func Test_ParseWithResult_keeps_valid_listings_when_one_announcement_is_malformed(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	page := `<p>Обычный текст с <b>выделением</b>, но это не объявление.</p>` +
+		`<p><a href="/bs.php4?bs=Seller">BS - Seller</a><br>
+<b>Сбойное объявление.</b> М., 2026 г. <a href="/broken.html"><b>Купить</b></a></p>` +
+		`<p><b>Рабочая книга.</b> М., 2025 г. <a href="/valid.html"><b>Купить</b></a></p>`
+	baseURL, err := url.Parse("https://www.alib.ru/tramka.phtml?tnew=7")
+	require.NoError(t, err)
+
+	// When
+	result, err := alib.ParseWithResult(bytes.NewBufferString(page), baseURL, "text/html")
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, []string{"https://www.alib.ru/broken.html"}, result.FailedBuyURLs)
+	require.Equal(t, []alib.Book{{
+		Title:           "Рабочая книга.",
+		Bibliography:    "М., 2025 г.",
+		PublicationYear: 2025,
+		BuyURL:          "https://www.alib.ru/valid.html",
+	}}, result.Books)
+}
+
+func Test_ParseWithResult_deduplicates_failed_announcements(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	page := `<p><a href="/bs.php4?bs=Seller">BS - Seller</a><br>
+<b>Сбойное объявление.</b> М., 2026 г. <a href="/broken.html"><b>Купить</b></a></p>` +
+		`<p><a href="/bs.php4?bs=Seller">BS - Seller</a><br>
+<b>Дубликат сбойного объявления.</b> М., 2026 г. <a href="/broken.html"><b>Купить</b></a></p>`
+	baseURL, err := url.Parse("https://www.alib.ru/tramka.phtml?tnew=7")
+	require.NoError(t, err)
+
+	// When
+	result, err := alib.ParseWithResult(bytes.NewBufferString(page), baseURL, "text/html")
+
+	// Then
+	require.NoError(t, err)
+	require.Empty(t, result.Books)
+	require.Equal(t, []string{"https://www.alib.ru/broken.html"}, result.FailedBuyURLs)
+}
+
+func Test_ParseWithResult_ignores_failure_when_duplicate_is_parsed_successfully(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	page := `<p><a href="/bs.php4?bs=Seller">BS - Seller</a><br>
+<b>Сначала сбойное объявление.</b> М., 2026 г. <a href="/book.html"><b>Купить</b></a></p>` +
+		`<p><b>Успешное объявление.</b> М., 2026 г. <a href="/book.html"><b>Купить</b></a></p>`
+	baseURL, err := url.Parse("https://www.alib.ru/tramka.phtml?tnew=7")
+	require.NoError(t, err)
+
+	// When
+	result, err := alib.ParseWithResult(bytes.NewBufferString(page), baseURL, "text/html")
+
+	// Then
+	require.NoError(t, err)
+	require.Empty(t, result.FailedBuyURLs)
+	require.Len(t, result.Books, 1)
+	require.Equal(t, "Успешное объявление.", result.Books[0].Title)
+}

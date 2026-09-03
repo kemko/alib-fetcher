@@ -20,6 +20,10 @@ type Fetcher interface {
 	Fetch(context.Context) ([]alib.Book, error)
 }
 
+type detailedFetcher interface {
+	FetchWithResult(context.Context) (alib.FetchResult, error)
+}
+
 // State tracks discovered listings and their delivery status.
 type State interface {
 	Prune(context.Context, time.Time) (int, error)
@@ -65,6 +69,7 @@ type Result struct {
 	New     int
 	Sent    int
 	Pruned  int
+	Failed  int
 }
 
 // Service coordinates fetching, deduplication, delivery, and acknowledgement.
@@ -90,11 +95,12 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 	}
 	result := Result{Pruned: pruned}
 
-	books, err := s.dependencies.Fetcher.Fetch(ctx)
+	books, failed, err := s.fetch(ctx)
 	if err != nil {
 		return result, fmt.Errorf("fetch listings: %w", err)
 	}
 	result.Fetched = len(books)
+	result.Failed = failed
 
 	created, err := s.dependencies.State.RecordDiscovered(ctx, books, cycleTime)
 	if err != nil {
@@ -122,6 +128,16 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 	}
 
 	return result, nil
+}
+
+func (s *Service) fetch(ctx context.Context) ([]alib.Book, int, error) {
+	if fetcher, ok := s.dependencies.Fetcher.(detailedFetcher); ok {
+		result, err := fetcher.FetchWithResult(ctx)
+		return result.Books, result.Failed, err
+	}
+
+	books, err := s.dependencies.Fetcher.Fetch(ctx)
+	return books, 0, err
 }
 
 func (s *Service) renderAndSend(

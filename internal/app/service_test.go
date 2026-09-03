@@ -17,6 +17,28 @@ import (
 	xhtml "golang.org/x/net/html"
 )
 
+func Test_Service_reports_fetch_listing_errors(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	book := alib.Book{Title: "Рабочая книга", BuyURL: "https://example.com/book"}
+	service := app.NewService(app.Dependencies{
+		Fetcher:      fakeFetcher{books: []alib.Book{book}, failed: 2},
+		State:        &fakeState{pending: []alib.Book{book}, recordedNew: 1},
+		Sender:       &fakeSender{},
+		MessageLimit: 4096,
+		Now:          time.Now,
+	})
+
+	// When
+	result, err := service.Run(context.Background())
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, 2, result.Failed)
+	require.Equal(t, 1, result.Sent)
+}
+
 func Test_Service_marks_each_chunk_only_after_delivery(t *testing.T) {
 	t.Parallel()
 
@@ -877,6 +899,7 @@ func Test_Service_prunes_state_at_start_of_cycle(t *testing.T) {
 type fakeFetcher struct {
 	events *[]string
 	books  []alib.Book
+	failed int
 }
 
 func (f fakeFetcher) Fetch(context.Context) ([]alib.Book, error) {
@@ -884,6 +907,13 @@ func (f fakeFetcher) Fetch(context.Context) ([]alib.Book, error) {
 		*f.events = append(*f.events, "fetch")
 	}
 	return f.books, nil
+}
+
+func (f fakeFetcher) FetchWithResult(context.Context) (alib.FetchResult, error) {
+	if f.events != nil {
+		*f.events = append(*f.events, "fetch")
+	}
+	return alib.FetchResult{Books: f.books, Failed: f.failed}, nil
 }
 
 type fakeState struct {

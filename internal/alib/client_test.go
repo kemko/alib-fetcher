@@ -288,6 +288,34 @@ func Test_Client_fetches_urls_in_order_and_deduplicates_by_buy_url(t *testing.T)
 	}, books)
 }
 
+func Test_ClientWithResult_deduplicates_failure_after_success_on_later_page(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if request.URL.Path == "/first" {
+			_, err := writer.Write([]byte(`<p><a href="/bs.php4?bs=Seller">BS - Seller</a><br>
+<b>Сбойное объявление.</b> М., 2026 г. <a href="/book.html"><b>Купить</b></a></p>`))
+			assert.NoError(t, err)
+			return
+		}
+		_, err := writer.Write([]byte(listingPage("Успешное объявление", "/book.html", "100 руб.")))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+	client, err := alib.NewClient(server.URL+"/first,"+server.URL+"/second", time.Second, 0, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+
+	// When
+	result, err := client.FetchWithResult(context.Background())
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, 1, len(result.Books))
+	require.Zero(t, result.Failed)
+}
+
 func Test_Client_logs_full_URL_for_download_failure(t *testing.T) {
 	t.Parallel()
 
