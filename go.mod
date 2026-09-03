@@ -3,6 +3,7 @@ module github.com/kemko/alib-fetcher
 go 1.26.5
 
 require (
+	github.com/c-robinson/iplib/v2 v2.0.5
 	github.com/go-telegram/bot v1.23.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/stretchr/testify v1.11.1
@@ -16,4 +17,5 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
+	lukechampine.com/uint128 v1.3.0 // indirect
 )

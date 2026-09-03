@@ -334,34 +334,17 @@ func TestProcess_reusesPersistedCurrentProfileWithoutDownloading(t *testing.T) {
 	require.NoError(t, prepared.Cleanup())
 }
 
-func TestProcess_rejectsRestrictedSourceAddressesBeforeDial(t *testing.T) {
+func TestProcess_rejectsIANAReservedSourceAddressesBeforeDial(t *testing.T) {
 	testCases := []struct {
 		name     string
 		rawURL   string
 		resolved net.IP
 	}{
-		{name: "literal loopback", rawURL: "http://127.0.0.1/photo"},
-		{name: "literal private", rawURL: "http://10.0.0.1/photo"},
-		{name: "literal link local", rawURL: "http://169.254.169.254/photo"},
-		{name: "literal shared", rawURL: "http://100.100.100.200/photo"},
-		{name: "literal documentation", rawURL: "http://203.0.113.10/photo"},
-		{name: "literal benchmarking", rawURL: "http://198.18.0.1/photo"},
-		{name: "literal reserved", rawURL: "http://240.0.0.1/photo"},
+		{name: "literal IPv4 loopback", rawURL: "http://127.0.0.1/photo"},
 		{name: "literal IPv6 documentation", rawURL: "http://[2001:db8::1]/photo"},
-		{name: "literal IPv6 translation", rawURL: "http://[64:ff9b::a9fe:a9fe]/photo"},
-		{name: "literal IPv6 site local", rawURL: "http://[fec0::1]/photo"},
-		{name: "literal IPv6 unallocated", rawURL: "http://[4000::1]/photo"},
-		{name: "literal multicast", rawURL: "http://224.0.0.1/photo"},
-		{name: "literal unspecified", rawURL: "http://0.0.0.0/photo"},
-		{name: "DNS loopback", rawURL: "http://photo.test/photo", resolved: net.ParseIP("127.0.0.1")},
-		{name: "DNS private", rawURL: "http://photo.test/photo", resolved: net.ParseIP("192.168.1.1")},
-		{name: "DNS link local", rawURL: "http://photo.test/photo", resolved: net.ParseIP("169.254.1.1")},
-		{name: "DNS shared", rawURL: "http://photo.test/photo", resolved: net.ParseIP("100.100.100.200")},
-		{name: "DNS documentation", rawURL: "http://photo.test/photo", resolved: net.ParseIP("203.0.113.10")},
-		{name: "DNS IPv6 site local", rawURL: "http://photo.test/photo", resolved: net.ParseIP("fec0::1")},
-		{name: "DNS IPv6 unallocated", rawURL: "http://photo.test/photo", resolved: net.ParseIP("4000::1")},
-		{name: "DNS multicast", rawURL: "http://photo.test/photo", resolved: net.ParseIP("224.0.0.1")},
-		{name: "DNS unspecified", rawURL: "http://photo.test/photo", resolved: net.ParseIP("0.0.0.0")},
+		{name: "literal globally reachable IANA address", rawURL: "http://192.0.0.9/photo"},
+		{name: "DNS IPv4 loopback", rawURL: "http://photo.test/photo", resolved: net.ParseIP("127.0.0.1")},
+		{name: "DNS IPv6 documentation", rawURL: "http://photo.test/photo", resolved: net.ParseIP("2001:db8::1")},
 	}
 
 	for _, testCase := range testCases {
@@ -392,6 +375,117 @@ func TestProcess_rejectsRestrictedSourceAddressesBeforeDial(t *testing.T) {
 			require.Error(t, err)
 			require.Nil(t, prepared)
 			require.Zero(t, dialCount.Load())
+		})
+	}
+}
+
+func TestProcess_rejectsMixedDNSAddressesBeforeDial(t *testing.T) {
+	var dialCount atomic.Int32
+	client, err := NewClientWithOptions(
+		"https://slink.example",
+		"sk_key",
+		"tag",
+		time.Second,
+		slog.New(slog.DiscardHandler),
+		Options{
+			LookupIP: func(context.Context, string) ([]net.IP, error) {
+				return []net.IP{net.ParseIP("8.8.8.8"), net.ParseIP("192.0.0.9")}, nil
+			},
+			DialContext: func(context.Context, string, string) (net.Conn, error) {
+				dialCount.Add(1)
+				return nil, errors.New("unexpected dial")
+			},
+		},
+	)
+	require.NoError(t, err)
+
+	prepared, err := client.Process(context.Background(), alib.Book{
+		Photos: []alib.Photo{{URL: "http://photo.test/photo"}},
+	})
+
+	require.Error(t, err)
+	require.Nil(t, prepared)
+	require.Zero(t, dialCount.Load())
+}
+
+func TestProcess_rejectsNilAndEmptyDNSResultsBeforeDial(t *testing.T) {
+	testCases := map[string][]net.IP{
+		"nil result":   nil,
+		"nil address":  {nil},
+		"empty result": {},
+	}
+	for name, resolved := range testCases {
+		t.Run(name, func(t *testing.T) {
+			var dialCount atomic.Int32
+			client, err := NewClientWithOptions(
+				"https://slink.example",
+				"sk_key",
+				"tag",
+				time.Second,
+				slog.New(slog.DiscardHandler),
+				Options{
+					LookupIP: func(context.Context, string) ([]net.IP, error) {
+						return resolved, nil
+					},
+					DialContext: func(context.Context, string, string) (net.Conn, error) {
+						dialCount.Add(1)
+						return nil, errors.New("unexpected dial")
+					},
+				},
+			)
+			require.NoError(t, err)
+
+			prepared, err := client.Process(context.Background(), alib.Book{
+				Photos: []alib.Photo{{URL: "http://photo.test/photo"}},
+			})
+
+			require.Error(t, err)
+			require.Nil(t, prepared)
+			require.Zero(t, dialCount.Load())
+		})
+	}
+}
+
+func TestProcess_acceptsAddressesOutsideIANARegistryBeforeDial(t *testing.T) {
+	testCases := []struct {
+		name     string
+		rawURL   string
+		resolved net.IP
+	}{
+		{name: "literal multicast", rawURL: "http://224.0.0.1/photo"},
+		{name: "literal IPv6 outside former public range", rawURL: "http://[4000::1]/photo"},
+		{name: "DNS multicast", rawURL: "http://photo.test/photo", resolved: net.ParseIP("224.0.0.1")},
+		{name: "DNS IPv6 outside former public range", rawURL: "http://photo.test/photo", resolved: net.ParseIP("4000::1")},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			var dialCount atomic.Int32
+			client, err := NewClientWithOptions(
+				"https://slink.example",
+				"sk_key",
+				"tag",
+				time.Second,
+				slog.New(slog.DiscardHandler),
+				Options{
+					LookupIP: func(context.Context, string) ([]net.IP, error) {
+						return []net.IP{testCase.resolved}, nil
+					},
+					DialContext: func(context.Context, string, string) (net.Conn, error) {
+						dialCount.Add(1)
+						return nil, errors.New("expected dial failure")
+					},
+				},
+			)
+			require.NoError(t, err)
+
+			prepared, err := client.Process(context.Background(), alib.Book{
+				Photos: []alib.Photo{{URL: testCase.rawURL}},
+			})
+
+			require.Error(t, err)
+			require.Nil(t, prepared)
+			require.Positive(t, dialCount.Load())
 		})
 	}
 }
