@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unicode/utf8"
 
 	"github.com/kemko/alib-fetcher/internal/alib"
 	"github.com/kemko/alib-fetcher/internal/app"
@@ -15,6 +14,7 @@ import (
 	"github.com/kemko/alib-fetcher/internal/store"
 
 	"github.com/stretchr/testify/require"
+	xhtml "golang.org/x/net/html"
 )
 
 func Test_Service_marks_each_chunk_only_after_delivery(t *testing.T) {
@@ -33,7 +33,7 @@ func Test_Service_marks_each_chunk_only_after_delivery(t *testing.T) {
 		Fetcher:      fakeFetcher{books: books},
 		State:        state,
 		Sender:       sender,
-		MessageLimit: 150,
+		MessageLimit: 55,
 		Now:          func() time.Time { return now },
 	})
 
@@ -180,8 +180,8 @@ func Test_Service_sends_only_first_chunk_with_sound(t *testing.T) {
 	now := time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC)
 	books := []alib.Book{
 		{Title: "Первая", BuyURL: "https://example.com/1"},
-		{Title: "Вторая", BuyURL: "https://example.com/2"},
-		{Title: "Третья", BuyURL: "https://example.com/3"},
+		{Title: strings.Repeat("Вторая ", 5), BuyURL: "https://example.com/2"},
+		{Title: strings.Repeat("Третья ", 5), BuyURL: "https://example.com/3"},
 	}
 	state := &fakeState{pending: books, recordedNew: len(books)}
 	sender := &fakeSender{}
@@ -189,7 +189,7 @@ func Test_Service_sends_only_first_chunk_with_sound(t *testing.T) {
 		Fetcher:      fakeFetcher{books: books},
 		State:        state,
 		Sender:       sender,
-		MessageLimit: 130,
+		MessageLimit: 60,
 		Now:          func() time.Time { return now },
 	})
 
@@ -243,10 +243,9 @@ func Test_Service_sorts_pending_books_by_publication_year_before_chunking(t *tes
 		books[0], books[5], books[13], books[4], books[12], books[2], books[7], books[9],
 		books[1], books[3], books[6], books[8], books[11], books[14], books[10],
 	}
-	messageLimit := 130
+	messageLimit := 60
 	expectedChunks, err := digest.Render(expectedOrder, digest.Options{LocalTime: now, Limit: messageLimit})
 	require.NoError(t, err)
-	require.Len(t, expectedChunks, len(expectedOrder))
 	state := &fakeState{pending: books, recordedNew: len(books)}
 	sender := &fakeSender{}
 	service := app.NewService(app.Dependencies{
@@ -267,10 +266,10 @@ func Test_Service_sorts_pending_books_by_publication_year_before_chunking(t *tes
 	require.Equal(t, expectedOrder, state.marked)
 	require.Equal(t, now, state.markedAt)
 	require.Equal(t, expectedChunkTexts(expectedChunks), sender.messages)
-	require.Len(t, sender.silent, len(expectedOrder))
+	require.Len(t, sender.silent, len(expectedChunks))
 	require.False(t, sender.silent[0])
 	require.NotContains(t, sender.silent[1:], false)
-	require.Len(t, sender.attachRefresh, len(expectedOrder))
+	require.Len(t, sender.attachRefresh, len(expectedChunks))
 	require.NotContains(t, sender.attachRefresh[:len(sender.attachRefresh)-1], true)
 	require.True(t, sender.attachRefresh[len(sender.attachRefresh)-1])
 }
@@ -372,12 +371,37 @@ func headerlessOnlyLaterBookFixture(t *testing.T) ([]alib.Book, int) {
 	}
 	firstBookChunks, err := digest.Render(books[:1], digest.Options{Limit: 4096})
 	require.NoError(t, err)
-	messageLimit := utf8.RuneCountInString(firstBookChunks[0].Text)
+	messageLimit := displayedRuneCount(t, firstBookChunks[0].Text)
 	secondBookChunks, err := digest.Render(books[1:], digest.Options{Limit: 4096})
 	require.NoError(t, err)
-	require.Greater(t, utf8.RuneCountInString(secondBookChunks[0].Text), messageLimit)
+	require.Greater(t, displayedRuneCount(t, secondBookChunks[0].Text), messageLimit)
 
 	return books, messageLimit
+}
+
+func displayedRuneCount(t *testing.T, value string) int {
+	t.Helper()
+
+	document, err := xhtml.Parse(strings.NewReader(value))
+	require.NoError(t, err)
+
+	var count func(*xhtml.Node) int
+	count = func(node *xhtml.Node) int {
+		total := 0
+		if node.Type == xhtml.TextNode {
+			total += len([]rune(node.Data))
+		}
+		if node.Type == xhtml.ElementNode && node.Data == "br" {
+			total++
+		}
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			total += count(child)
+		}
+
+		return total
+	}
+
+	return count(document)
 }
 
 func Test_Service_runs_pre_delivery_hook_once_before_sending_and_marking(t *testing.T) {
@@ -454,8 +478,8 @@ func Test_Service_waits_and_retries_only_rate_limited_chunk(t *testing.T) {
 	now := time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC)
 	books := []alib.Book{
 		{Title: "Первая", BuyURL: "https://example.com/1"},
-		{Title: "Вторая", BuyURL: "https://example.com/2"},
-		{Title: "Третья", BuyURL: "https://example.com/3"},
+		{Title: strings.Repeat("Вторая ", 5), BuyURL: "https://example.com/2"},
+		{Title: strings.Repeat("Третья ", 5), BuyURL: "https://example.com/3"},
 	}
 	events := make([]string, 0)
 	state := &fakeState{pending: books, recordedNew: len(books), events: &events}
@@ -479,7 +503,7 @@ func Test_Service_waits_and_retries_only_rate_limited_chunk(t *testing.T) {
 
 			return nil
 		},
-		MessageLimit: 130,
+		MessageLimit: 60,
 	})
 
 	// When
@@ -708,7 +732,7 @@ func Test_Service_sends_renderable_pending_books_when_one_pending_book_is_too_lo
 	secondDeliverable := alib.Book{Title: "Обычная 2", BuyURL: "https://e/2"}
 	firstChunks, err := digest.Render([]alib.Book{firstDeliverable}, digest.Options{Limit: 4096})
 	require.NoError(t, err)
-	messageLimit := utf8.RuneCountInString(firstChunks[0].Text)
+	messageLimit := displayedRuneCount(t, firstChunks[0].Text)
 	state := &fakeState{pending: []alib.Book{oversized, firstDeliverable, secondDeliverable}}
 	sender := &fakeSender{}
 	hookCalls := 0

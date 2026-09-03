@@ -335,7 +335,7 @@ func Test_run_sends_only_first_wired_message_with_sound(t *testing.T) {
 	t.Setenv("TELEGRAM_API_BASE", telegramServer.URL)
 	t.Setenv("HTTP_TIMEOUT", "2s")
 	t.Setenv("ALIB_REQUEST_INTERVAL", "0s")
-	t.Setenv("MESSAGE_LIMIT", "150")
+	t.Setenv("MESSAGE_LIMIT", "64")
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
 

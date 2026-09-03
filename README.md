@@ -22,7 +22,7 @@ embedded bbolt database, which also stores the pending send queue.
 | `ALIB_REQUEST_INTERVAL` | no | `1s` | Non-negative Go duration between sequential Alib page requests; `0s` disables the delay |
 | `TELEGRAM_API_BASE` | no | `https://api.telegram.org` | Bot API base URL; custom/local servers require Bot API 10.1+ |
 | `HTTP_TIMEOUT` | no | `30s` | Positive Go duration applied to each external request |
-| `MESSAGE_LIMIT` | no | `4000` | Safe Telegram message size, max `4096` |
+| `MESSAGE_LIMIT` | no | `32000` | Displayed Rich Message text rune limit, allowed range `64..32768` |
 
 Configuration is validated before process startup. Invalid chat IDs, including
 plain text without `@`, an empty `@` username, whitespace, and numeric overflow,
@@ -91,12 +91,17 @@ same stable ordering for equal years. Books that could not be sent remain
 pending across later digest cycles. A chunk is acknowledged only after
 Telegram accepts it, and then its records become sent. Sent records older than
 14 days are removed once at the beginning of every digest cycle; pending
-records are not removed by retention pruning. Content that makes a listing too
-long is shortened with `…` before HTML escaping to the longest prefix that fits
-within `MESSAGE_LIMIT - 1` runes. If the listing's mandatory fields still do
-not fit after the shortest content, `digest.ErrMessageTooLong` is returned;
-other renderable pending listings are still sent while that listing remains
-pending.
+records are not removed by retention pruning. The `MESSAGE_LIMIT` counts
+Unicode runes in the displayed Rich Message text after parsing its HTML:
+formatting tags and URL attribute values do not count, while encoded text and
+`<br/>` line breaks do. Content that makes a listing too long is shortened with
+`…` before HTML escaping to the longest prefix that fits within
+`MESSAGE_LIMIT - 1` displayed runes; only `Content` is shortened. If the
+listing's mandatory displayed fields plus minimal content still do not fit,
+`digest.ErrMessageTooLong` is returned; other renderable pending listings are
+still sent while that listing remains pending.
+Chunks also split at 250 listings to stay within Telegram's 500-block Rich
+Message limit.
 Telegram operations use the pinned
 [`github.com/go-telegram/bot`](https://github.com/go-telegram/bot) v1.23.0 SDK.
 Each Telegram Rich Message is sent through its `SendRichMessage` method with
@@ -125,11 +130,10 @@ Telegram HTML contains no literal CR or LF characters. The heading has the same
 separator before the first listing. Content and details are independent optional
 sections between `main` and the final `Купить` section. When both are absent,
 the layout is exactly `main → <br/><br/> → Купить`. Adjacent listings in one
-Rich Message
-are separated by `<hr/>`; no divider appears before the first listing or after
-the last. A digest uses multiple Telegram messages only when pending content is
-split into chunks by `MESSAGE_LIMIT`; the heading appears only in the first
-message.
+Rich Message are separated by `<hr/>`; no divider appears before the first
+listing or after the last. A digest uses multiple Telegram messages when
+pending content exceeds `MESSAGE_LIMIT` or 250 listings; the heading appears
+only in the first message.
 If the heading and first pending listing cannot fit together but the listing
 fits alone, the first message contains only the heading and the listing follows
 in a headerless message.
