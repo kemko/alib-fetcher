@@ -574,6 +574,59 @@ func TestProcess_rejectsOversizedAndNonHTTPSlinkResponses(t *testing.T) {
 	}
 }
 
+func TestProcess_rejectsUnsafeUploadedSlinkURLsBeforeMediaRequest(t *testing.T) {
+	var logs bytes.Buffer
+	var mediaRequests atomic.Int32
+	var uploadURL string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/photo":
+			writeBytes(t, writer, []byte("GIF89a"))
+		case "/api/external/upload":
+			writer.Header().Set("Content-Type", "application/json")
+			writeText(t, writer, fmt.Sprintf(`{"url":%q}`, uploadURL))
+		default:
+			mediaRequests.Add(1)
+			writer.Header().Set("Content-Type", "image/gif")
+		}
+	}))
+	t.Cleanup(server.Close)
+	client, err := NewClientWithOptions(
+		server.URL,
+		"sk_url-secret",
+		"tag-id",
+		time.Second,
+		slog.New(slog.NewJSONHandler(&logs, nil)),
+		testOptions(server),
+	)
+	require.NoError(t, err)
+
+	testCases := map[string]string{
+		"off-origin URL":    "https://media.example/image.png",
+		"URL with userinfo": strings.Replace(server.URL, "://", "://user:password@", 1) + "/image.png",
+	}
+	for name, rawURL := range testCases {
+		t.Run(name, func(t *testing.T) {
+			uploadURL = rawURL
+			logs.Reset()
+			mediaRequests.Store(0)
+
+			prepared, processErr := client.Process(context.Background(), alib.Book{
+				Photos: []alib.Photo{{URL: "http://photo.test/photo"}},
+			})
+
+			require.Error(t, processErr)
+			require.Nil(t, prepared)
+			details := photoFailureDetailsFromError(processErr)
+			require.Equal(t, "slink_upload", details.stage)
+			require.Equal(t, "response_url", details.category)
+			require.Zero(t, mediaRequests.Load())
+			require.NotContains(t, logs.String(), rawURL)
+			require.NotContains(t, logs.String(), "password")
+		})
+	}
+}
+
 func TestProcess_returnsContextCancellation(t *testing.T) {
 	client, err := NewClientWithOptions(
 		"https://slink.example",
@@ -607,6 +660,11 @@ func TestProcess_reusesPersistedCurrentProfileWithoutDownloading(t *testing.T) {
 			writer.Header().Set("Content-Type", "image/png")
 			return
 		}
+		if request.Method == http.MethodHead && request.URL.Path == "/image/already-direct.png" {
+			mediaChecks.Add(1)
+			writer.Header().Set("Content-Type", "image/png")
+			return
+		}
 		if request.Method == http.MethodHead {
 			writer.Header().Set("Content-Type", "image/png")
 			return
@@ -618,11 +676,18 @@ func TestProcess_reusesPersistedCurrentProfileWithoutDownloading(t *testing.T) {
 	client := testClient(t, server)
 	prepared, err := client.Process(context.Background(), alib.Book{Photos: []alib.Photo{
 		{URL: "http://photo.test/photo", Caption: "fresh", SlinkURL: server.URL + "/i/old-code", SlinkProfile: client.Profile()},
+		{
+			URL:          "http://photo.test/direct",
+			Caption:      "direct",
+			SlinkURL:     server.URL + "/image/already-direct.png",
+			SlinkProfile: client.Profile(),
+		},
 	}})
 	require.NoError(t, err)
 	require.Equal(t, server.URL+"/image/direct.png", prepared.Book.Photos[0].SlinkURL)
+	require.Equal(t, server.URL+"/image/already-direct.png", prepared.Book.Photos[1].SlinkURL)
 	require.EqualValues(t, 0, downloads.Load())
-	require.EqualValues(t, 2, mediaChecks.Load())
+	require.EqualValues(t, 3, mediaChecks.Load())
 	require.NoError(t, prepared.Cleanup())
 }
 
@@ -969,6 +1034,44 @@ func TestProcess_honorsTimeoutDuringDNSLookup(t *testing.T) {
 	require.Less(t, time.Since(startedAt), time.Second)
 	require.Nil(t, prepared)
 	require.Contains(t, logs.String(), `"stage":"source_download"`)
+	require.Contains(t, logs.String(), `"error_category":"request"`)
+}
+
+func TestProcess_honorsTimeoutDuringSlinkMediaResolution(t *testing.T) {
+	var logs bytes.Buffer
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/photo":
+			writeBytes(t, writer, []byte("GIF89a"))
+		case "/api/external/upload":
+			writer.Header().Set("Content-Type", "application/json")
+			writeText(t, writer, `{"url":"/image/slow.png"}`)
+		case "/image/slow.png":
+			<-request.Context().Done()
+		}
+	}))
+	t.Cleanup(server.Close)
+	options := testOptions(server)
+	options.HTTPClient = &http.Client{}
+	client, err := NewClientWithOptions(
+		server.URL,
+		"sk_key",
+		"tag",
+		50*time.Millisecond,
+		slog.New(slog.NewJSONHandler(&logs, nil)),
+		options,
+	)
+	require.NoError(t, err)
+	startedAt := time.Now()
+
+	prepared, err := client.Process(context.Background(), alib.Book{
+		Photos: []alib.Photo{{URL: "http://photo.test/photo"}},
+	})
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(startedAt), time.Second)
+	require.Nil(t, prepared)
+	require.Contains(t, logs.String(), `"stage":"slink_media"`)
 	require.Contains(t, logs.String(), `"error_category":"request"`)
 }
 

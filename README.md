@@ -177,8 +177,10 @@ redirect, type-detection, or upload failure is isolated to that book: a new
 book is not recorded, an existing pending book stays pending, and the book is
 retried on the next cycle. Successful image URLs are
 resolved from the returned Slink share URL with a same-origin `HEAD` request;
-the final 2xx `image/*` URL is stored and sent to Telegram. Persisted share
-URLs are resolved again without downloading or uploading the source image.
+the final 2xx `image/*` URL is stored and sent to Telegram. Persisted Slink
+image URLs, including already-direct media URLs, are revalidated with the same
+checks without downloading or uploading the source image. A failed resolution
+or revalidation follows the same book-specific retry path.
 The resulting image URLs are
 rendered before the purchase section as a Telegram `<tg-slideshow>` containing
 `<img src="..."/>` elements and one `<figcaption>` with unique source captions.
@@ -274,7 +276,12 @@ another `getUpdates` poller for the same bot token, or refresh callbacks may be
 consumed outside this service.
 
 The process emits structured JSON logs and stops gracefully on `SIGINT` or
-`SIGTERM`.
+`SIGTERM`. Photo processing emits `slink.photo_started` with `buy_url`,
+zero-based `index`, and `total`. `slink.photo_completed` adds `outcome`
+(`uploaded`, `reused`, `duplicate`, or `source_link`) and `media_url` for an
+image. `slink.photo_failed` includes the photo identity, `stage`,
+`error_category`, and optional `http_status`. Source photo URLs, API keys,
+response bodies, and temporary paths are excluded.
 
 On first run after upgrading from older timestamp-marker releases, raw legacy
 state entries are migrated to JSON records. Structured records from releases

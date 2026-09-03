@@ -278,8 +278,10 @@ authentication, and an `Origin` derived from `SLINK_URL`. The API key must use
 the `sk_` prefix, the tag must belong to that key's owner, and Slink
 external-upload auto-publish must be enabled. The returned share URL is
 resolved with a same-origin `HEAD` request; only the final 2xx `image/*` URL is
-persisted and sent to Telegram. Persisted share URLs are resolved again without
-downloading or uploading the source image. Individual photo failures log a
+persisted and sent to Telegram. Persisted Slink image URLs, including direct
+media URLs, are revalidated with the same checks without downloading or
+uploading the source image. A failed resolution or revalidation isolates the
+book and leaves it pending. Individual photo failures log a
 safe stage/status/category and isolate the whole book; new failed books are not
 recorded and pending failed books remain pending. Context cancellation stops the digest.
 New prepared results are cleaned before their batch insert; changed pending
