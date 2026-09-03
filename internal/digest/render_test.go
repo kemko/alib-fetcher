@@ -441,11 +441,13 @@ func Test_RenderSendable_skips_oversized_listings_in_one_pass(t *testing.T) {
 	chunks, skippedBuyURLs, err := digest.RenderSendable(
 		[]alib.Book{first, oversized, second},
 		digest.Options{Limit: 60},
+		0,
 	)
 
 	// Then
 	require.NoError(t, err)
 	require.Equal(t, []string{oversized.BuyURL}, skippedBuyURLs)
+	require.NotContains(t, chunks[0].Text, "Не удалось обработать книг")
 	require.Equal(t, []digest.Chunk{
 		{
 			Text: `<b>Новые книги на Alib.ru</b><br/><br/>` +
@@ -458,7 +460,107 @@ func Test_RenderSendable_skips_oversized_listings_in_one_pass(t *testing.T) {
 				`<br/><br/><a href="https://example.com/2">Купить</a>`,
 			Books: []alib.Book{second},
 		},
+		{Text: "Не удалось обработать книг: 1", Books: []alib.Book{}},
 	}, chunks)
+}
+
+func Test_RenderSendable_appends_previous_and_oversized_failures(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	first := alib.Book{Title: "Первая", BuyURL: "https://example.com/1"}
+	oversized := alib.Book{
+		Title:  strings.Repeat("Очень длинная книга ", 500),
+		BuyURL: "https://example.com/oversized",
+	}
+	second := alib.Book{Title: "Вторая", BuyURL: "https://example.com/2"}
+
+	// When
+	chunks, skippedBuyURLs, err := digest.RenderSendable(
+		[]alib.Book{first, oversized, second},
+		digest.Options{Limit: 4096},
+		1,
+	)
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, []string{oversized.BuyURL}, skippedBuyURLs)
+	require.Len(t, chunks, 1)
+	require.Equal(t, []alib.Book{first, second}, chunks[0].Books)
+	require.Contains(t, chunks[0].Text, `<hr/>Не удалось обработать книг: 2`)
+}
+
+func Test_RenderSendable_renders_failure_summary_without_books(t *testing.T) {
+	t.Parallel()
+
+	// When
+	chunks, skippedBuyURLs, err := digest.RenderSendable(nil, digest.Options{Limit: 4096}, 3)
+
+	// Then
+	require.NoError(t, err)
+	require.Empty(t, skippedBuyURLs)
+	require.Equal(t, []digest.Chunk{{
+		Text:  `<b>Новые книги на Alib.ru</b><br/><br/>Не удалось обработать книг: 3`,
+		Books: []alib.Book{},
+	}}, chunks)
+}
+
+func Test_RenderSendable_omits_failure_summary_without_failures(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	book := alib.Book{Title: "Книга", BuyURL: "https://example.com/book"}
+
+	// When
+	chunks, skippedBuyURLs, err := digest.RenderSendable([]alib.Book{book}, digest.Options{Limit: 4096}, 0)
+
+	// Then
+	require.NoError(t, err)
+	require.Empty(t, skippedBuyURLs)
+	require.Len(t, chunks, 1)
+	require.NotContains(t, chunks[0].Text, "Не удалось обработать книг")
+}
+
+func Test_RenderSendable_splits_failure_summary_when_text_limit_is_reached(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	book := alib.Book{Title: "Книга", BuyURL: "https://example.com/book"}
+	unlimitedChunks, err := digest.Render([]alib.Book{book}, digest.Options{Limit: 4096})
+	require.NoError(t, err)
+	limit := displayedRuneCount(t, unlimitedChunks[0].Text)
+
+	// When
+	chunks, skippedBuyURLs, err := digest.RenderSendable([]alib.Book{book}, digest.Options{Limit: limit}, 1)
+
+	// Then
+	require.NoError(t, err)
+	require.Empty(t, skippedBuyURLs)
+	require.Equal(t, []digest.Chunk{
+		unlimitedChunks[0],
+		{Text: "Не удалось обработать книг: 1", Books: []alib.Book{}},
+	}, chunks)
+}
+
+func Test_RenderSendable_splits_failure_summary_at_block_limit(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	books := make([]alib.Book, 250)
+	for index := range books {
+		books[index] = alib.Book{Title: "К", BuyURL: fmt.Sprintf("https://example.com/%d", index)}
+	}
+
+	// When
+	chunks, skippedBuyURLs, err := digest.RenderSendable(books, digest.Options{Limit: 32000}, 1)
+
+	// Then
+	require.NoError(t, err)
+	require.Empty(t, skippedBuyURLs)
+	require.Len(t, chunks, 2)
+	require.Len(t, chunks[0].Books, 250)
+	require.Empty(t, chunks[1].Books)
+	require.Equal(t, "Не удалось обработать книг: 1", chunks[1].Text)
 }
 
 func Test_Render_preserves_content_at_or_below_item_limit(t *testing.T) {
@@ -524,6 +626,7 @@ func Test_Render_truncates_long_content_to_limit_minus_one(t *testing.T) {
 	sendableChunks, skippedBuyURLs, sendableErr := digest.RenderSendable(
 		[]alib.Book{book},
 		digest.Options{Limit: messageLimit},
+		0,
 	)
 
 	// Then

@@ -146,7 +146,7 @@ func (s *Service) renderAndSend(
 	options digest.Options,
 	cycleTime time.Time,
 ) (int, error) {
-	chunks, skippedBuyURLs, err := digest.RenderSendable(pending, options)
+	chunks, skippedBuyURLs, err := digest.RenderSendable(pending, options, 0)
 	if err != nil {
 		return 0, fmt.Errorf("render digest: %w", err)
 	}

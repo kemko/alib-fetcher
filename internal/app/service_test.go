@@ -778,11 +778,12 @@ func Test_Service_sends_renderable_pending_books_when_one_pending_book_is_too_lo
 	require.ErrorIs(t, err, digest.ErrMessageTooLong)
 	require.Equal(t, app.Result{Sent: 2}, result)
 	require.Equal(t, []alib.Book{firstDeliverable, secondDeliverable}, state.marked)
-	require.Len(t, sender.messages, 2)
+	require.Len(t, sender.messages, 3)
 	require.Contains(t, sender.messages[0], "Обычная")
 	require.NotContains(t, strings.Join(sender.messages, "\n"), "Очень длинная книга")
-	require.Equal(t, []bool{false, true}, sender.attachRefresh)
-	require.Equal(t, []bool{false, true}, sender.silent)
+	require.Contains(t, sender.messages[2], "Не удалось обработать книг: 1")
+	require.Equal(t, []bool{false, false, true}, sender.attachRefresh)
+	require.Equal(t, []bool{false, true, true}, sender.silent)
 	require.Equal(t, 1, hookCalls)
 }
 
@@ -818,7 +819,7 @@ func Test_Service_sends_and_marks_book_with_truncated_content(t *testing.T) {
 	require.NotContains(t, strings.Join(sender.messages, ""), strings.Repeat("длинное описание ", 20))
 }
 
-func Test_Service_does_not_run_pre_delivery_hook_when_no_chunks_are_renderable(t *testing.T) {
+func Test_Service_sends_failure_summary_when_no_books_are_renderable(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -845,8 +846,9 @@ func Test_Service_does_not_run_pre_delivery_hook_when_no_chunks_are_renderable(t
 	// Then
 	require.ErrorIs(t, err, digest.ErrMessageTooLong)
 	require.Empty(t, result.Sent)
-	require.Zero(t, hookCalls)
-	require.Empty(t, sender.messages)
+	require.Equal(t, 1, hookCalls)
+	require.Len(t, sender.messages, 1)
+	require.Contains(t, sender.messages[0], "Не удалось обработать книг: 1")
 	require.Empty(t, state.marked)
 }
 
