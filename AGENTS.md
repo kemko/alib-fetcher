@@ -64,8 +64,8 @@ Preserve these semantics:
   also contains books; with no renderable books, the digest contains the heading
   and summary, split if limits require. The count includes listings skipped by
   `digest.ErrMessageTooLong`.
-- When a digest has multiple chunks, the first uses the normal notification
-  sound and all later chunks are sent silently.
+- When a digest has multiple chunks, only the last uses the normal notification
+  sound and all earlier chunks are sent silently.
 - Every sent digest attaches the `Обновить` inline button only to the final
   Telegram chunk. A digest that sends no chunks does not create or move a
   refresh button.
@@ -276,7 +276,10 @@ at 15 MiB and Slink responses at 1 MiB. Image type is detected from content. Upl
 /api/external/upload` with multipart field `image`, repeated `tagIds[]`, Bearer
 authentication, and an `Origin` derived from `SLINK_URL`. The API key must use
 the `sk_` prefix, the tag must belong to that key's owner, and Slink
-external-upload auto-publish must be enabled. Individual photo failures log a
+external-upload auto-publish must be enabled. The returned share URL is
+resolved with a same-origin `HEAD` request; only the final 2xx `image/*` URL is
+persisted and sent to Telegram. Persisted share URLs are resolved again without
+downloading or uploading the source image. Individual photo failures log a
 safe stage/status/category and isolate the whole book; new failed books are not
 recorded and pending failed books remain pending. Context cancellation stops the digest.
 New prepared results are cleaned before their batch insert; changed pending
@@ -311,7 +314,8 @@ flood-control retry, chat filtering, refresh ordering, and runner-lock policy.
 Structured logs go to stdout. Stable event names are `scheduler.started`,
 `scheduler.stopped`, `digest.started`, `digest.completed`, `digest.failed`,
 `alib.page_downloaded`, `alib.page_download_failed`, `alib.page_parsed`,
-`alib.page_parse_failed`, `slink.photo_failed`, `slink.response_close_failed`,
+`alib.page_parse_failed`, `slink.photo_started`, `slink.photo_completed`,
+`slink.photo_failed`, `slink.response_close_failed`,
 `callback.poll_failed`, `callback.answer_failed`,
 `state.forget_latest.completed`, and `service.failed`; digest completion fields
 are `fetched`, `new`, `failed`, `pruned`, and `sent`, while forget-latest completion fields

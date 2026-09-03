@@ -99,14 +99,14 @@
 - Modify: `README.md`
 - Modify: `AGENTS.md`
 
-- [ ] Обновить fake Slink: upload возвращает short URL, HEAD раскрывает прямой media `Location`, прямой URL отвечает `image/*`.
-- [ ] Проверить, что state сохраняет прямой URL и повторный цикл не выполняет новый upload.
-- [ ] Добавить regression для pending записи со старым `i/…` URL: URL обновляется перед rendering и Telegram получает прямой `src`.
-- [ ] Проверить смешанный сценарий: недоступное media исключает только свою книгу, остальные книги и failure summary отправляются.
-- [ ] В main end-to-end тесте проверить прямой URL внутри `tg-slideshow`, lifecycle-логи и отсутствие short URL/API key.
-- [ ] Обновить `README.md`: только последний chunk звучит; Slink share URL разрешается и проверяется перед Telegram.
-- [ ] Обновить `AGENTS.md`: исправить sound invariant и перечислить новые стабильные Slink events.
-- [ ] Выполнить `make test`; исправить все ошибки до Task 5.
+- [x] Обновить fake Slink: upload возвращает short URL, HEAD раскрывает прямой media `Location`, прямой URL отвечает `image/*`.
+- [x] Проверить, что state сохраняет прямой URL и повторный цикл не выполняет новый upload.
+- [x] Добавить regression для pending записи со старым `i/…` URL: URL обновляется перед rendering и Telegram получает прямой `src`.
+- [x] Проверить смешанный сценарий: недоступное media исключает только свою книгу, остальные книги и failure summary отправляются.
+- [x] В main end-to-end тесте проверить прямой URL внутри `tg-slideshow`, lifecycle-логи и отсутствие short URL/API key.
+- [x] Обновить `README.md`: только последний chunk звучит; Slink share URL разрешается и проверяется перед Telegram.
+- [x] Обновить `AGENTS.md`: исправить sound invariant и перечислить новые стабильные Slink events.
+- [x] Выполнить `make test`; исправить все ошибки до Task 5.
 
 ### Task 5: Verify acceptance criteria
 

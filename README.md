@@ -176,6 +176,10 @@ external-upload auto-publish for returned links to be public. A download,
 redirect, type-detection, or upload failure is isolated to that book: a new
 book is not recorded, an existing pending book stays pending, and the book is
 retried on the next cycle. Successful image URLs are
+resolved from the returned Slink share URL with a same-origin `HEAD` request;
+the final 2xx `image/*` URL is stored and sent to Telegram. Persisted share
+URLs are resolved again without downloading or uploading the source image.
+The resulting image URLs are
 rendered before the purchase section as a Telegram `<tg-slideshow>` containing
 `<img src="..."/>` elements and one `<figcaption>` with unique source captions.
 The source order and repeated links are preserved. A slideshow contains at most
@@ -191,8 +195,8 @@ the directory; successful Slink URLs are persisted so later digests do not uploa
 the same source URL again while `SLINK_URL` and `SLINK_TAG_ID` remain unchanged.
 Changing either value reprocesses pending photos; rotating only the API key does
 not.
-The first message uses the normal notification sound; all later messages are
-silent. Whenever a digest sends at least one message, the final message
+Only the final message uses the normal notification sound; all earlier messages
+are silent. Whenever a digest sends at least one message, the final message
 includes an inline `Обновить` button.
 Pressing it asks a running service with the same bot token to start one
 out-of-schedule digest. If that refresh sends new notifications, the clicked
