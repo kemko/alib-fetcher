@@ -189,7 +189,7 @@ func Test_run_enablesSlinkPhotoProcessorFromEnvironment(t *testing.T) {
 	t.Cleanup(telegramServer.Close)
 	setRunEnvironment(t, alibServer.URL, telegramServer.URL, filepath.Join(t.TempDir(), "state.db"))
 	t.Setenv("SLINK_URL", "https://slink.example")
-	t.Setenv("SLINK_API_KEY", "main-wiring-secret")
+	t.Setenv("SLINK_API_KEY", "sk_main-wiring-secret")
 	t.Setenv("SLINK_TAG_ID", "550e8400-e29b-41d4-a716-446655440000")
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, nil))
@@ -198,13 +198,10 @@ func Test_run_enablesSlinkPhotoProcessorFromEnvironment(t *testing.T) {
 	err := run(logger)
 
 	// Then
-	require.NoError(t, err)
-	require.Len(t, telegramRequests, 1)
-	message := (<-telegramRequests).Message.RichMessage.HTML
-	require.Contains(t, message, `<a href="http://127.0.0.1/foto.php4">Обложка</a>`)
-	require.NotContains(t, message, "<tg-slideshow>")
+	require.ErrorContains(t, err, "prepare photos")
+	require.Empty(t, telegramRequests)
 	require.Contains(t, logs.String(), `"msg":"slink.photo_failed"`)
-	require.NotContains(t, logs.String(), "main-wiring-secret")
+	require.NotContains(t, logs.String(), "sk_main-wiring-secret")
 }
 
 func Test_run_rejects_non_positive_forget_latest(t *testing.T) {

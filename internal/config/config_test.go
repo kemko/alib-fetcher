@@ -287,7 +287,7 @@ func Test_Load_accepts_complete_Slink_configuration(t *testing.T) {
 		"TELEGRAM_BOT_TOKEN": "token",
 		"TELEGRAM_CHAT_ID":   "-100123",
 		"SLINK_URL":          "https://slink.example/base",
-		"SLINK_API_KEY":      "secret-api-key",
+		"SLINK_API_KEY":      "sk_secret-api-key",
 		"SLINK_TAG_ID":       "550e8400-e29b-41d4-a716-446655440000",
 	})
 
@@ -297,7 +297,7 @@ func Test_Load_accepts_complete_Slink_configuration(t *testing.T) {
 	// Then
 	require.NoError(t, err)
 	require.Equal(t, "https://slink.example/base", loaded.SlinkURL)
-	require.Equal(t, "secret-api-key", loaded.SlinkAPIKey)
+	require.Equal(t, "sk_secret-api-key", loaded.SlinkAPIKey)
 	require.Equal(t, "550e8400-e29b-41d4-a716-446655440000", loaded.SlinkTagID)
 }
 
@@ -379,6 +379,11 @@ func Test_Load_rejects_invalid_Slink_URL_or_tag_without_exposing_API_key(t *test
 			tag: "550e8400-e29b-41d4-a716-44665544000z",
 			key: "secret-tag-key",
 		},
+		"API key prefix": {
+			url: "https://slink.example",
+			tag: "550e8400-e29b-41d4-a716-446655440000",
+			key: "secret-api-key",
+		},
 	}
 
 	for name, testCase := range testCases {
@@ -401,6 +406,23 @@ func Test_Load_rejects_invalid_Slink_URL_or_tag_without_exposing_API_key(t *test
 			require.Empty(t, loaded)
 		})
 	}
+}
+
+func Test_Load_rejects_Slink_API_key_withoutRequiredPrefix(t *testing.T) {
+	setEnvironment(t, map[string]string{
+		"TELEGRAM_BOT_TOKEN": "token",
+		"TELEGRAM_CHAT_ID":   "-100123",
+		"SLINK_URL":          "https://slink.example",
+		"SLINK_API_KEY":      "secret-api-key",
+		"SLINK_TAG_ID":       "550e8400-e29b-41d4-a716-446655440000",
+	})
+
+	loaded, err := config.Load()
+
+	require.ErrorIs(t, err, config.ErrInvalid)
+	require.ErrorContains(t, err, "SLINK_API_KEY")
+	require.NotContains(t, err.Error(), "secret-api-key")
+	require.Empty(t, loaded)
 }
 
 func Test_Load_rejects_invalid_HTTP_timeout(t *testing.T) {
