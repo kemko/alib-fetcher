@@ -32,7 +32,7 @@ func Test_Client_fetches_and_parses_page(t *testing.T) {
 	require.NoError(t, err)
 
 	// When
-	books, err := client.Fetch(context.Background())
+	books, err := fetchBooks(client, context.Background())
 
 	// Then
 	require.NoError(t, err)
@@ -55,7 +55,7 @@ func Test_Client_rejects_non_success_status(t *testing.T) {
 	require.NoError(t, err)
 
 	// When
-	books, err := client.Fetch(context.Background())
+	books, err := fetchBooks(client, context.Background())
 
 	// Then
 	require.ErrorIs(t, err, alib.ErrUnexpectedStatus)
@@ -76,7 +76,7 @@ func Test_Client_returns_parse_error_for_structurally_changed_page(t *testing.T)
 	require.NoError(t, err)
 
 	// When
-	books, err := client.Fetch(context.Background())
+	books, err := fetchBooks(client, context.Background())
 
 	// Then
 	require.ErrorIs(t, err, alib.ErrNoBooks)
@@ -98,7 +98,7 @@ func Test_Client_returns_context_error_when_request_is_canceled(t *testing.T) {
 	cancel()
 
 	// When
-	books, err := client.Fetch(ctx)
+	books, err := fetchBooks(client, ctx)
 
 	// Then
 	require.ErrorIs(t, err, context.Canceled)
@@ -125,7 +125,7 @@ func Test_Client_returns_context_error_when_canceled_after_download(t *testing.T
 	require.NoError(t, err)
 
 	// When
-	books, err := client.Fetch(ctx)
+	books, err := fetchBooks(client, ctx)
 
 	// Then
 	require.ErrorIs(t, err, context.Canceled)
@@ -271,7 +271,7 @@ func Test_Client_fetches_urls_in_order_and_deduplicates_by_buy_url(t *testing.T)
 	require.NoError(t, err)
 
 	// When
-	books, err := client.Fetch(context.Background())
+	books, err := fetchBooks(client, context.Background())
 
 	// Then
 	require.NoError(t, err)
@@ -286,6 +286,115 @@ func Test_Client_fetches_urls_in_order_and_deduplicates_by_buy_url(t *testing.T)
 		{Title: "Third", Price: "300 руб.", BuyURL: server.URL + "/two/book-3.html"},
 		{Title: "Fourth", Price: "400 руб.", BuyURL: server.URL + "/three/book-4.html"},
 	}, books)
+}
+
+func Test_ClientWithResult_deduplicates_failure_after_success_on_later_page(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if request.URL.Path == "/first" {
+			_, err := writer.Write([]byte(`<p><a href="/bs.php4?bs=Seller">BS - Seller</a><br>
+<b>Сбойное объявление.</b> М., 2026 г. <a href="/book.html"><b>Купить</b></a></p>`))
+			assert.NoError(t, err)
+			return
+		}
+		_, err := writer.Write([]byte(listingPage("Успешное объявление", "/book.html", "100 руб.")))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+	client, err := alib.NewClient(server.URL+"/first,"+server.URL+"/second", time.Second, 0, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+
+	// When
+	result, err := client.FetchWithResult(context.Background())
+
+	// Then
+	require.NoError(t, err)
+	require.Len(t, result.Books, 1)
+	require.Empty(t, result.FailedBuyURLs)
+}
+
+func Test_ClientWithResult_returns_deduplicated_failed_buy_urls(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		failedListing := `<p><a href="/bs.php4?bs=Seller">BS - Seller</a><br>
+<b>Сбойное объявление.</b> М., 2026 г. <a href="/broken.html"><b>Купить</b></a></p>`
+		if request.URL.Path == "/first" {
+			_, err := writer.Write([]byte(failedListing))
+			assert.NoError(t, err)
+
+			return
+		}
+		_, err := writer.Write([]byte(failedListing + listingPage("Рабочая книга", "/good.html", "100 руб.")))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+	client, err := alib.NewClient(server.URL+"/first,"+server.URL+"/second", time.Second, 0, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+
+	// When
+	result, err := client.FetchWithResult(context.Background())
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, []string{server.URL + "/broken.html"}, result.FailedBuyURLs)
+	require.Len(t, result.Books, 1)
+	require.Equal(t, server.URL+"/good.html", result.Books[0].BuyURL)
+}
+
+func Test_ClientWithResult_returns_unidentified_failures_from_mixed_page(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, err := writer.Write([]byte(`<p><b>Сбойное объявление.</b> М., 2026 г. <a><b>Купить</b></a></p>` +
+			listingPage("Рабочая книга", "/good.html", "100 руб.")))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+	client, err := alib.NewClient(server.URL, time.Second, 0, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+
+	// When
+	result, err := client.FetchWithResult(context.Background())
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, 1, result.UnidentifiedFailures)
+	require.Len(t, result.Books, 1)
+}
+
+func Test_ClientWithResult_keeps_unidentified_failure_from_failed_page(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if request.URL.Path == "/failed" {
+			_, err := writer.Write([]byte(`<p><b>Сбойное объявление.</b> М., 2026 г. <a><b>Купить</b></a></p>`))
+			assert.NoError(t, err)
+			return
+		}
+		_, err := writer.Write([]byte(listingPage("Рабочая книга", "/good.html", "100 руб.")))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+	client, err := alib.NewClient(server.URL+"/failed,"+server.URL+"/valid", time.Second, 0, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+
+	// When
+	result, err := client.FetchWithResult(context.Background())
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, 1, result.UnidentifiedFailures)
+	require.Len(t, result.Books, 1)
 }
 
 func Test_Client_logs_full_URL_for_download_failure(t *testing.T) {
@@ -306,7 +415,7 @@ func Test_Client_logs_full_URL_for_download_failure(t *testing.T) {
 	require.NoError(t, err)
 
 	// When
-	books, err := client.Fetch(context.Background())
+	books, err := fetchBooks(client, context.Background())
 
 	// Then
 	require.ErrorIs(t, err, alib.ErrUnexpectedStatus)
@@ -335,7 +444,7 @@ func Test_Client_logs_full_URL_for_parse_failure(t *testing.T) {
 	require.NoError(t, err)
 
 	// When
-	books, err := client.Fetch(context.Background())
+	books, err := fetchBooks(client, context.Background())
 
 	// Then
 	require.ErrorIs(t, err, alib.ErrNoBooks)
@@ -365,7 +474,7 @@ func Test_Client_does_not_expose_query_credentials_from_malformed_redirect(t *te
 	require.NoError(t, err)
 
 	// When
-	books, err := client.Fetch(context.Background())
+	books, err := fetchBooks(client, context.Background())
 
 	// Then
 	require.Error(t, err)
@@ -417,7 +526,7 @@ func Test_Client_downloads_all_pages_before_parsing_and_logs_outcomes(t *testing
 	require.NoError(t, err)
 
 	// When
-	books, err := client.Fetch(context.Background())
+	books, err := fetchBooks(client, context.Background())
 
 	// Then
 	require.NoError(t, err)
@@ -464,7 +573,7 @@ func Test_Client_rejects_oversized_response_without_content_length(t *testing.T)
 	require.NoError(t, err)
 
 	// When
-	books, err := client.Fetch(context.Background())
+	books, err := fetchBooks(client, context.Background())
 
 	// Then
 	require.ErrorContains(t, err, "alib response exceeds 4194304 bytes")
@@ -497,7 +606,7 @@ func Test_Client_continues_after_response_body_read_failure(t *testing.T) {
 	require.NoError(t, err)
 
 	// When
-	books, err := client.Fetch(context.Background())
+	books, err := fetchBooks(client, context.Background())
 
 	// Then
 	require.NoError(t, err)
@@ -529,7 +638,7 @@ func Test_Client_accepts_all_correct_empty_pages(t *testing.T) {
 	require.NoError(t, err)
 
 	// When
-	books, err := client.Fetch(context.Background())
+	books, err := fetchBooks(client, context.Background())
 
 	// Then
 	require.NoError(t, err)
@@ -557,7 +666,7 @@ func Test_Client_returns_combined_error_when_all_pages_fail(t *testing.T) {
 	require.NoError(t, err)
 
 	// When
-	books, err := client.Fetch(context.Background())
+	books, err := fetchBooks(client, context.Background())
 
 	// Then
 	require.ErrorIs(t, err, alib.ErrUnexpectedStatus)
@@ -588,7 +697,7 @@ func Test_Client_waits_between_requests(t *testing.T) {
 	require.NoError(t, err)
 
 	// When
-	_, err = client.Fetch(context.Background())
+	_, err = client.FetchWithResult(context.Background())
 
 	// Then
 	require.NoError(t, err)
@@ -622,7 +731,7 @@ func Test_Client_waits_between_attempts_after_failure(t *testing.T) {
 	require.NoError(t, err)
 
 	// When
-	_, err = client.Fetch(context.Background())
+	_, err = client.FetchWithResult(context.Background())
 
 	// Then
 	require.NoError(t, err)
@@ -647,7 +756,7 @@ func Test_Client_does_not_wait_after_single_request(t *testing.T) {
 
 	// When
 	go func() {
-		_, fetchErr := client.Fetch(context.Background())
+		_, fetchErr := client.FetchWithResult(context.Background())
 		result <- fetchErr
 	}()
 
@@ -687,7 +796,7 @@ func Test_Client_returns_context_error_when_canceled_during_wait(t *testing.T) {
 	defer cancel()
 	result := make(chan error, 1)
 	go func() {
-		_, fetchErr := client.Fetch(ctx)
+		_, fetchErr := client.FetchWithResult(ctx)
 		result <- fetchErr
 	}()
 	<-firstResponse
@@ -735,7 +844,7 @@ func Test_Client_returns_context_error_when_canceled_during_body_download(t *tes
 	defer cancel()
 	result := make(chan error, 1)
 	go func() {
-		_, fetchErr := client.Fetch(ctx)
+		_, fetchErr := client.FetchWithResult(ctx)
 		result <- fetchErr
 	}()
 	<-downloadStarted
@@ -760,6 +869,12 @@ func Test_Client_returns_context_error_when_canceled_during_body_download(t *tes
 
 func listingPage(title, buyURL, price string) string {
 	return "<p><b>" + title + "</b> Цена: " + price + " <a href=\"" + buyURL + "\"><b>Купить</b></a></p>"
+}
+
+func fetchBooks(client *alib.Client, ctx context.Context) ([]alib.Book, error) {
+	result, err := client.FetchWithResult(ctx)
+
+	return result.Books, err
 }
 
 type cancelOnMessageHandler struct {

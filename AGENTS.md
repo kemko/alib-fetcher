@@ -20,21 +20,27 @@ One digest cycle is deliberately ordered as follows:
    bodies and their source order.
 3. Parse successful responses only after all downloads finish, then combine and
    deduplicate listings by their resolved `BuyURL`, retaining the first occurrence.
-4. Record fetched listings in bbolt as JSON records, preserving sent status.
-5. Load all pending records from bbolt in first-discovery order, including
+4. Read existing `BuyURL` records without writing new fetched listings.
+5. Sequentially prepare new books, isolating book-specific errors and cleaning
+   each temporary directory before continuing.
+6. Record only fully prepared, renderable new listings in bbolt, preserving sent status.
+7. Load all pending records from bbolt in first-discovery order, including
    books from earlier failed cycles.
-6. Sort pending books with year `0` first, then publication year descending,
+8. Sort pending books with year `0` first, then publication year descending,
    preserving first-discovery order within each group.
-7. When Slink is enabled, prepare pending photo links sequentially, save each
-   changed book, and remove its temporary directory before continuing.
-8. Render pending books into Telegram-sized chunks.
-9. Send each chunk and mark only that chunk's books as delivered, only after
+9. Sequentially prepare pending books, isolating book-specific errors and
+   cleaning each temporary directory before continuing.
+10. Render pending books into Telegram-sized chunks, adding the book-failure
+   summary when needed.
+11. Send each chunk and mark only that chunk's books as delivered, only after
    Telegram accepts it.
 
 Preserve these semantics:
 
 - The first successful run records and sends every listing currently on the
-  configured source pages.
+  configured source pages that can be prepared and rendered. A book-specific
+  failure is counted once, omitted from the current digest, and a new failed
+  book is not recorded so the next cycle can rediscover it.
 - `BuyURL` is the persistent identity of a listing; titles and other metadata
   are not stable deduplication keys.
 - A failed Telegram chunk must remain pending so a later cycle can retry it.
@@ -53,6 +59,11 @@ Preserve these semantics:
   images, or 50-media limit. Ordinary chunks contain at most 250 listings.
 - A slideshow contains at most 50 images; successful images beyond that limit
   remain source links so one listing stays atomic and deliverable.
+- The final digest chunk includes `Не удалось обработать книг: N` when one or
+  more book-specific failures occurred. It follows an `<hr/>` when the chunk
+  also contains books; with no renderable books, the digest contains the heading
+  and summary, split if limits require. The count includes listings skipped by
+  `digest.ErrMessageTooLong`.
 - When a digest has multiple chunks, the first uses the normal notification
   sound and all later chunks are sent silently.
 - Every sent digest attaches the `Обновить` inline button only to the final
@@ -100,14 +111,13 @@ Preserve these semantics:
   refresh callback from a different numeric chat ID or public `@channel`
   username is answered and ignored. A refresh callback skipped because another
   digest is running must still be answered.
-- A refresh callback remains unanswered, and therefore in Telegram's loading
-  state, until its digest finishes. A successful digest with `Result.New == 0`
-  answers `Новых книг нет`; one with `Result.New > 0` answers with empty text;
-  an error answers `Ошибка обновления`, while details remain in the service
-  log. Refresh digests are canceled after 10 seconds so the final answer reaches
-  Telegram before the callback query expires; a timeout is an error. Toast
-  display duration is controlled by the Telegram client; the Bot API cannot
-  guarantee an exact duration.
+- After acquiring the runner lock, a refresh callback is answered immediately
+  with `Формирование дайджеста запущено`; the digest continues in the
+  background on the service lifetime context and has no overall deadline.
+  Digest results and errors are recorded in `digest.completed` and
+  `digest.failed`; `HTTP_TIMEOUT` still applies to each external request.
+  Toast display duration is controlled by the Telegram client; the Bot API
+  cannot guarantee an exact duration.
 - For refresh-triggered digests, remove the clicked message's old reply markup
   only after renderable chunks are known and before the first new Telegram
   message is sent. If no chunk will be sent, leave the old button in place. If
@@ -191,8 +201,8 @@ Optional defaults:
 | `HTTP_TIMEOUT` | `30s` | positive Go duration applied per external request |
 | `MESSAGE_LIMIT` | `32000` | displayed Rich Message text rune count after HTML parsing, allowed range 64..32768 |
 | `SLINK_URL` | empty | HTTP(S) Slink base URL without userinfo, query, or fragment; empty disables Slink when all Slink variables are empty |
-| `SLINK_API_KEY` | empty | Slink API key; required with the other Slink variables and never logged |
-| `SLINK_TAG_ID` | empty | UUID of the pre-created Slink `alib` tag; required with the other Slink variables |
+| `SLINK_API_KEY` | empty | Slink API key beginning with `sk_`; required with the other Slink variables and never logged |
+| `SLINK_TAG_ID` | empty | UUID of the pre-created Slink `alib` tag owned by the API-key account; required with the other Slink variables |
 
 Invalid configuration, including a malformed or overflowing
 `TELEGRAM_CHAT_ID`, prevents process startup. Errors name the invalid variable.
@@ -258,12 +268,16 @@ HTTP and HTML META refresh redirects into one system-temp directory per book.
 Targets must use HTTP(S), omit userinfo, and resolve only to public addresses at
 every connection; loopback, private, link-local, multicast, and unspecified
 addresses are rejected before dialing. Downloads are capped at 15 MiB and Slink
-responses at 1 MiB. Image type is detected from content. Uploads use multipart
-field `image` with the detected MIME type, `tagIds`, and Bearer authentication at
-`api/external/upload` relative to `SLINK_URL`. Individual photo failures log
-without secrets and retain the source link; context cancellation stops the digest.
-Prepared results are saved before their temp directory is removed and are reused
-only for the same Slink URL/tag profile.
+responses at 1 MiB. Image type is detected from content. Uploads use `POST
+/api/external/upload` with multipart field `image`, repeated `tagIds[]`, Bearer
+authentication, and an `Origin` derived from `SLINK_URL`. The API key must use
+the `sk_` prefix, the tag must belong to that key's owner, and Slink
+external-upload auto-publish must be enabled. Individual photo failures log a
+safe stage/status/category and isolate the whole book; new failed books are not
+recorded and pending failed books remain pending. Context cancellation stops the digest.
+New prepared results are cleaned before their batch insert; changed pending
+results are saved before cleanup. Persisted results are reused only for the same
+Slink URL/tag profile.
 
 The Alib client accepts one or more HTTP(S) endpoints, sends
 `User-Agent: alib-fetcher/1.0`, and requires HTTP 200. Endpoints are downloaded
@@ -296,7 +310,7 @@ Structured logs go to stdout. Stable event names are `scheduler.started`,
 `alib.page_parse_failed`, `slink.photo_failed`, `slink.response_close_failed`,
 `callback.poll_failed`, `callback.answer_failed`,
 `state.forget_latest.completed`, and `service.failed`; digest completion fields
-are `fetched`, `new`, `pruned`, and `sent`, while forget-latest completion fields
+are `fetched`, `new`, `failed`, `pruned`, and `sent`, while forget-latest completion fields
 are `requested` and `deleted`. Every Alib page event includes the zero-based
 `index` and full configured endpoint `url`, including GET parameters and
 fragments; `alib.page_parsed` also includes `books`, and failed events include

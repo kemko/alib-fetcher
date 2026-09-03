@@ -22,6 +22,13 @@ const (
 // ErrNoBooks indicates that the source page contained no recognizable listings.
 var ErrNoBooks = errors.New("page contains no book listings")
 
+// ParseResult contains successfully parsed books and failed listing identities.
+type ParseResult struct {
+	Books                []Book
+	FailedBuyURLs        []string
+	UnidentifiedFailures int
+}
+
 type listingPart struct {
 	node *html.Node
 	text string
@@ -41,43 +48,122 @@ type emptySearchPageMarkers struct {
 
 // Parse decodes an Alib.ru page and extracts unique sale listings.
 func Parse(reader io.Reader, baseURL *url.URL, contentType string) ([]Book, error) {
+	result, err := ParseWithResult(reader, baseURL, contentType)
+	if err != nil {
+		return nil, err
+	}
+
+	return result.Books, nil
+}
+
+// ParseWithResult decodes an Alib.ru page and returns parsed listings plus failed listing identities.
+func ParseWithResult(reader io.Reader, baseURL *url.URL, contentType string) (ParseResult, error) {
 	decoded, err := charset.NewReader(reader, contentType)
 	if err != nil {
-		return nil, fmt.Errorf("decode page: %w", err)
+		return ParseResult{}, fmt.Errorf("decode page: %w", err)
 	}
 
 	document, err := html.Parse(decoded)
 	if err != nil {
-		return nil, fmt.Errorf("parse page: %w", err)
+		return ParseResult{}, fmt.Errorf("parse page: %w", err)
 	}
 
-	books := make([]Book, 0)
-	seen := make(map[string]struct{})
+	state := parseState{
+		books:       make([]Book, 0),
+		seen:        make(map[string]struct{}),
+		failed:      make(map[string]struct{}),
+		failedOrder: make([]string, 0),
+	}
+	unidentifiedFailures := 0
 	for node := range document.Descendants() {
 		if node.Type != html.ElementNode || node.Data != "p" {
 			continue
 		}
-
-		book, found := parseBook(node, baseURL)
-		if !found {
-			continue
+		if collectListing(&state, node, baseURL) {
+			unidentifiedFailures++
 		}
-		if _, exists := seen[book.BuyURL]; exists {
-			continue
-		}
-
-		seen[book.BuyURL] = struct{}{}
-		books = append(books, book)
+	}
+	failedBuyURLs := remainingFailures(state.failedOrder, state.failed)
+	result := ParseResult{
+		Books:                state.books,
+		FailedBuyURLs:        failedBuyURLs,
+		UnidentifiedFailures: unidentifiedFailures,
 	}
 
-	if len(books) == 0 {
-		if isEmptySearchResultsPage(document) && !hasMalformedListing(document, baseURL) {
-			return books, nil
+	if len(state.books) == 0 {
+		if unidentifiedFailures > 0 ||
+			(len(state.seen) == 0 && len(state.failed) == 0 && !isEmptySearchResultsPage(document)) {
+			return result, ErrNoBooks
 		}
-		return nil, ErrNoBooks
 	}
 
-	return books, nil
+	return result, nil
+}
+
+type parseState struct {
+	seen        map[string]struct{}
+	failed      map[string]struct{}
+	books       []Book
+	failedOrder []string
+}
+
+func collectListing(state *parseState, node *html.Node, baseURL *url.URL) bool {
+	book, buyURL, candidate, found := parseListing(node, baseURL)
+	if !candidate {
+		return false
+	}
+	if !found {
+		if buyURL == "" {
+			return true
+		}
+		if _, succeeded := state.seen[buyURL]; succeeded {
+			return false
+		}
+		if _, alreadyFailed := state.failed[buyURL]; !alreadyFailed {
+			state.failedOrder = append(state.failedOrder, buyURL)
+			state.failed[buyURL] = struct{}{}
+		}
+		return false
+	}
+
+	delete(state.failed, book.BuyURL)
+	if _, exists := state.seen[book.BuyURL]; exists {
+		return false
+	}
+	state.seen[book.BuyURL] = struct{}{}
+	state.books = append(state.books, book)
+
+	return false
+}
+
+func remainingFailures(order []string, failed map[string]struct{}) []string {
+	result := make([]string, 0, len(failed))
+	for _, buyURL := range order {
+		if _, stillFailed := failed[buyURL]; stillFailed {
+			result = append(result, buyURL)
+		}
+	}
+
+	return result
+}
+
+func parseListing(node *html.Node, baseURL *url.URL) (Book, string, bool, bool) {
+	titleNode, _, buyNode := listingNodes(node)
+	candidate := buyNode != nil || titleNode != nil && strings.Contains(normalizedText(node), priceLabel)
+	if !candidate {
+		return Book{}, "", false, false
+	}
+
+	buyURL := ""
+	if buyNode != nil {
+		buyURL = resolveURL(baseURL, href(buyNode))
+	}
+	book, found := parseBook(node, baseURL)
+	if found {
+		return book, book.BuyURL, true, true
+	}
+
+	return Book{}, buyURL, true, false
 }
 
 func isEmptySearchResultsPage(document *html.Node) bool {
@@ -166,24 +252,6 @@ func attribute(node *html.Node, name string) string {
 	}
 
 	return ""
-}
-
-func hasMalformedListing(document *html.Node, baseURL *url.URL) bool {
-	for node := range document.Descendants() {
-		if node.Type != html.ElementNode || node.Data != "p" {
-			continue
-		}
-
-		titleNode, _, buyNode := listingNodes(node)
-		if buyNode == nil && (titleNode == nil || !strings.Contains(normalizedText(node), priceLabel)) {
-			continue
-		}
-		if _, found := parseBook(node, baseURL); !found {
-			return true
-		}
-	}
-
-	return false
 }
 
 func parseBook(node *html.Node, baseURL *url.URL) (Book, bool) {

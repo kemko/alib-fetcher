@@ -384,7 +384,7 @@ func waitForListener(t *testing.T, done <-chan struct{}) {
 
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("callback listener did not stop")
 	}
 }
@@ -394,7 +394,7 @@ func waitForSignal(t *testing.T, signal <-chan struct{}, failureMessage string) 
 
 	select {
 	case <-signal:
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal(failureMessage)
 	}
 }

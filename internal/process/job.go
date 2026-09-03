@@ -52,6 +52,7 @@ func executeJob(
 	}
 	logger.InfoContext(ctx, "digest.completed",
 		slog.Int(logKeyFetched, result.Fetched),
+		slog.Int(logKeyFailed, result.Failed),
 		slog.Int(logKeyNew, result.New),
 		slog.Int(logKeyPruned, result.Pruned),
 		slog.Int(logKeySent, result.Sent),

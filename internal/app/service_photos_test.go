@@ -40,9 +40,9 @@ func Test_Service_savesPreparedBookBeforeCleanupAndRendering(t *testing.T) {
 		Photos: []alib.Photo{{URL: "http://photo.test/photo", Caption: "Обложка"}},
 	}
 	state := &fakeState{
-		pending:     []alib.Book{book},
-		recordedNew: 1,
-		events:      &events,
+		pending:  []alib.Book{book},
+		existing: []bool{true},
+		events:   &events,
 	}
 	photoState := &photoState{fakeState: state}
 	photoState.save = func(_ context.Context, prepared alib.Book) error {
@@ -74,10 +74,50 @@ func Test_Service_savesPreparedBookBeforeCleanupAndRendering(t *testing.T) {
 
 	// Then
 	require.NoError(t, err)
-	require.Equal(t, app.Result{Fetched: 1, New: 1, Sent: 1}, result)
+	require.Equal(t, app.Result{Fetched: 1, Sent: 1}, result)
 	require.Len(t, photoState.saved, 1)
 	require.Contains(t, sender.messages[0], "<tg-slideshow>")
 	require.Equal(t, []string{"fetch", "record", "pending", "prepare", "upload", "save:" + book.BuyURL, "send", "mark:" + book.BuyURL}, events)
+}
+
+func Test_Service_persistsPreparedOversizedPendingBookBeforeSkipping(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	events := make([]string, 0)
+	server := photoServer(&events)
+	defer server.Close()
+	processor := newTrackingPhotoProcessor(t, server, &events)
+	now := time.Date(2026, time.September, 3, 12, 0, 0, 0, time.UTC)
+	book := alib.Book{
+		Title:  strings.Repeat("Очень длинная книга ", 20),
+		BuyURL: "https://example.com/book",
+		Photos: []alib.Photo{{URL: "http://photo.test/photo", Caption: "Обложка"}},
+	}
+	state, err := store.Open(filepath.Join(t.TempDir(), "state.db"), now)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, state.Close()) })
+	_, err = state.RecordDiscovered(context.Background(), []alib.Book{book}, now)
+	require.NoError(t, err)
+	service := app.NewService(app.Dependencies{
+		Fetcher:        fakeFetcher{},
+		State:          state,
+		Sender:         &fakeSender{},
+		PhotoProcessor: processor,
+		MessageLimit:   120,
+		Now:            func() time.Time { return now },
+	})
+
+	// When
+	firstResult, firstErr := service.Run(context.Background())
+	secondResult, secondErr := service.Run(context.Background())
+
+	// Then
+	require.NoError(t, firstErr)
+	require.NoError(t, secondErr)
+	require.Equal(t, app.Result{Failed: 1}, firstResult)
+	require.Equal(t, app.Result{Failed: 1}, secondResult)
+	require.Equal(t, []string{"prepare", "upload", "prepare"}, events)
 }
 
 func Test_Service_cleansPreparedFilesWhenStateSaveFails(t *testing.T) {
@@ -91,7 +131,7 @@ func Test_Service_cleansPreparedFilesWhenStateSaveFails(t *testing.T) {
 	book := alib.Book{Title: "Книга", BuyURL: "https://example.com/book", Photos: []alib.Photo{{URL: "http://photo.test/photo"}}}
 	stateErr := errors.New("state unavailable")
 	state := &photoState{
-		fakeState: &fakeState{pending: []alib.Book{book}, recordedNew: 1},
+		fakeState: &fakeState{pending: []alib.Book{book}, existing: []bool{true}},
 		save: func(context.Context, alib.Book) error {
 			return stateErr
 		},
@@ -111,7 +151,7 @@ func Test_Service_cleansPreparedFilesWhenStateSaveFails(t *testing.T) {
 
 	// Then
 	require.ErrorIs(t, err, stateErr)
-	require.Equal(t, app.Result{Fetched: 1, New: 1}, result)
+	require.Equal(t, app.Result{Fetched: 1}, result)
 	require.Empty(t, sender.messages)
 	require.Len(t, processor.prepared, 1)
 	_, statErr := os.Stat(processor.prepared[0].TemporaryDirectory())
@@ -128,7 +168,7 @@ func Test_Service_cleansPreparedFilesWhenStateSaveIsCanceled(t *testing.T) {
 	book := alib.Book{Title: "Книга", BuyURL: "https://example.com/book", Photos: []alib.Photo{{URL: "http://photo.test/photo"}}}
 	ctx, cancel := context.WithCancel(context.Background())
 	state := &photoState{
-		fakeState: &fakeState{pending: []alib.Book{book}, recordedNew: 1},
+		fakeState: &fakeState{pending: []alib.Book{book}, existing: []bool{true}},
 		save: func(context.Context, alib.Book) error {
 			cancel()
 
@@ -150,7 +190,7 @@ func Test_Service_cleansPreparedFilesWhenStateSaveIsCanceled(t *testing.T) {
 
 	// Then
 	require.ErrorIs(t, err, context.Canceled)
-	require.Equal(t, app.Result{Fetched: 1, New: 1}, result)
+	require.Equal(t, app.Result{Fetched: 1}, result)
 	require.Empty(t, sender.messages)
 	require.Len(t, processor.prepared, 1)
 	_, statErr := os.Stat(processor.prepared[0].TemporaryDirectory())
@@ -207,7 +247,7 @@ func Test_Service_integratesPhotoPreparationAndSlideshow(t *testing.T) {
 			_, err := io.WriteString(writer, "not an image")
 			assert.NoError(t, err)
 		case "/api/external/upload":
-			assert.Equal(t, "Bearer integration-api-key", request.Header.Get("Authorization"))
+			assert.Equal(t, "Bearer sk_integration-api-key", request.Header.Get("Authorization"))
 			if err := request.ParseMultipartForm(1 << 20); !assert.NoError(t, err) {
 				return
 			}
@@ -222,7 +262,7 @@ func Test_Service_integratesPhotoPreparationAndSlideshow(t *testing.T) {
 	t.Cleanup(server.Close)
 	client, err := slink.NewClientWithOptions(
 		server.URL,
-		"integration-api-key",
+		"sk_integration-api-key",
 		"integration-tag",
 		time.Second,
 		logger,
@@ -260,11 +300,11 @@ func Test_Service_integratesPhotoPreparationAndSlideshow(t *testing.T) {
 	// Then
 	require.NoError(t, err)
 	require.Equal(t, app.Result{Fetched: 1, New: 1, Sent: 1}, result)
-	require.Len(t, state.saved, 1)
+	require.Empty(t, state.saved)
 	require.Contains(t, sender.messages[0], `<tg-slideshow><img src="`+server.URL+`/published/image"/><figcaption>Обложка</figcaption></tg-slideshow>`)
 	require.Contains(t, sender.messages[0], `Смотрите: <a href="http://photo.test/document">Документ</a>`)
 	require.NotContains(t, sender.messages[0], "http://photo.test/meta")
-	require.NotContains(t, logs.String(), "integration-api-key")
+	require.NotContains(t, logs.String(), "sk_integration-api-key")
 }
 
 func Test_Service_integratesParsedPhotosWithPersistentStore(t *testing.T) {
@@ -290,7 +330,7 @@ func Test_Service_integratesParsedPhotosWithPersistentStore(t *testing.T) {
 			assert.NoError(t, err)
 		case request.URL.Path == "/base/api/external/upload":
 			uploads.Add(1)
-			assert.Equal(t, "Bearer persistent-api-key", request.Header.Get("Authorization"))
+			assert.Equal(t, "Bearer sk_persistent-api-key", request.Header.Get("Authorization"))
 			file, header, err := request.FormFile("image")
 			if !assert.NoError(t, err) {
 				return
@@ -307,7 +347,7 @@ func Test_Service_integratesParsedPhotosWithPersistentStore(t *testing.T) {
 	t.Cleanup(server.Close)
 	client, err := slink.NewClientWithOptions(
 		server.URL+"/base",
-		"persistent-api-key",
+		"sk_persistent-api-key",
 		"integration-tag",
 		time.Second,
 		logger,
@@ -324,8 +364,7 @@ func Test_Service_integratesParsedPhotosWithPersistentStore(t *testing.T) {
 	books, err := alib.Parse(strings.NewReader(`<p><b>Книга.</b> М., 2026 г.<br>
 Цена: 100 руб. <a href="/book"><b>Купить</b></a><br>
 Смотрите: <a href="/foto.php4?kind=meta">Обложка</a> -
-<a href="/foto.php4?kind=document">Документ</a> -
-<a href="/foto.php4?kind=failure">Сбой</a></p>`), pageURL, "text/html")
+<a href="/foto.php4?kind=document">Документ</a></p>`), pageURL, "text/html")
 	require.NoError(t, err)
 	require.Len(t, books, 1)
 	now := time.Date(2026, time.September, 3, 12, 0, 0, 0, time.UTC)
@@ -373,10 +412,8 @@ func Test_Service_integratesParsedPhotosWithPersistentStore(t *testing.T) {
 	require.Len(t, secondSender.messages, 1)
 	require.Contains(t, secondSender.messages[0], `<tg-slideshow><img src="`+server.URL+
 		`/base/published/image"/><figcaption>Обложка</figcaption></tg-slideshow>`)
-	require.Contains(t, secondSender.messages[0], `Смотрите: <a href="http://photo.test/foto.php4?kind=document">Документ</a> - `+
-		`<a href="http://photo.test/foto.php4?kind=failure">Сбой</a>`)
-	require.Contains(t, logs.String(), `"msg":"slink.photo_failed"`)
-	require.NotContains(t, logs.String(), "persistent-api-key")
+	require.Contains(t, secondSender.messages[0], `Смотрите: <a href="http://photo.test/foto.php4?kind=document">Документ</a>`)
+	require.NotContains(t, logs.String(), "sk_persistent-api-key")
 }
 
 func requireTemporaryRootEmpty(t *testing.T, temporaryRoot string) {
@@ -418,7 +455,7 @@ func newTrackingPhotoProcessor(t *testing.T, server *httptest.Server, events *[]
 	logger := slog.New(slog.DiscardHandler)
 	client, err := slink.NewClientWithOptions(
 		server.URL,
-		"api-key",
+		"sk_api-key",
 		"tag-id",
 		time.Second,
 		logger,

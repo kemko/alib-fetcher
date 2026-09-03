@@ -26,14 +26,20 @@ import (
 
 func TestProcess_uploadsImageWithAuthAndTagAndCleansFiles(t *testing.T) {
 	var uploadCount atomic.Int32
+	var origin string
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path == "/photo" {
+			assert.Equal(t, userAgent, request.Header.Get("User-Agent"))
+			assert.Equal(t, "https://alib.example/book", request.Header.Get("Referer"))
 			writer.Header().Set("Content-Type", "text/plain")
 			writeBytes(t, writer, []byte("\x89PNG\r\n\x1a\n"))
 			return
 		}
 		assert.Equal(t, http.MethodPost, request.Method)
-		assert.Equal(t, "Bearer secret-api-key", request.Header.Get("Authorization"))
+		assert.Equal(t, "/api/external/upload", request.URL.Path)
+		assert.Equal(t, "Bearer sk_secret-api-key", request.Header.Get("Authorization"))
+		assert.Equal(t, origin, request.Header.Get("Origin"))
+		assert.Equal(t, userAgent, request.Header.Get("User-Agent"))
 		if err := request.ParseMultipartForm(1 << 20); err != nil {
 			t.Error(err)
 			return
@@ -60,6 +66,7 @@ func TestProcess_uploadsImageWithAuthAndTagAndCleansFiles(t *testing.T) {
 		}
 	}))
 	defer server.Close()
+	origin = server.URL
 
 	client := testClient(t, server)
 	prepared, err := client.Process(context.Background(), alib.Book{
@@ -116,31 +123,108 @@ func TestProcess_followsHTTPAndMetaRedirectsAndReusesDuplicate(t *testing.T) {
 	require.NoError(t, prepared.Cleanup())
 }
 
-func TestProcess_marksNonImageAndLeavesFailedPhotosUnprocessed(t *testing.T) {
+func TestProcess_marksNonImageAndPreservesSourceLink(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == "/bad" {
-			writer.WriteHeader(http.StatusInternalServerError)
-			return
-		}
 		writer.Header().Set("Content-Type", "application/octet-stream")
 		writeText(t, writer, "not an image")
 	}))
 	defer server.Close()
 	client := testClient(t, server)
-	prepared, err := client.Process(context.Background(), alib.Book{Photos: []alib.Photo{
-		{URL: "http://photo.test/file", Caption: "file"},
-		{URL: "http://photo.test/bad", Caption: "bad"},
-	}})
+	const sourceURL = "http://photo.test/file"
+	prepared, err := client.Process(context.Background(), alib.Book{Photos: []alib.Photo{{URL: sourceURL, Caption: "file"}}})
 	require.NoError(t, err)
 	require.True(t, prepared.Book.Photos[0].NonImage)
+	require.Equal(t, sourceURL, prepared.Book.Photos[0].URL)
 	require.Equal(t, client.Profile(), prepared.Book.Photos[0].SlinkProfile)
-	require.Empty(t, prepared.Book.Photos[1].SlinkURL)
-	require.Empty(t, prepared.Book.Photos[1].SlinkProfile)
-	require.False(t, prepared.Book.Photos[1].NonImage)
 	require.NoError(t, prepared.Cleanup())
 }
 
-func TestProcess_leavesMalformedAndCyclicMetaAndOversizedFilesUnprocessed(t *testing.T) {
+func TestProcess_returnsFirstPhotoErrorAndCleansTemporaryFiles(t *testing.T) {
+	temporaryRoot := t.TempDir()
+	t.Setenv("TMPDIR", temporaryRoot)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(http.StatusForbidden)
+	}))
+	defer server.Close()
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	client, err := NewClientWithOptions(
+		server.URL,
+		"sk_failure-key",
+		"tag-id",
+		time.Second,
+		logger,
+		Options{
+			LookupIP: func(context.Context, string) ([]net.IP, error) {
+				return []net.IP{net.ParseIP("8.8.8.8")}, nil
+			},
+			DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, network, server.Listener.Addr().String())
+			},
+		},
+	)
+	require.NoError(t, err)
+
+	prepared, err := client.Process(context.Background(), alib.Book{
+		BuyURL: "https://alib.example/book",
+		Photos: []alib.Photo{{URL: "http://photo.test/photo"}},
+	})
+
+	require.Error(t, err)
+	require.Nil(t, prepared)
+	entries, readErr := os.ReadDir(temporaryRoot)
+	require.NoError(t, readErr)
+	require.Empty(t, entries)
+	require.Contains(t, logs.String(), `"stage":"source_download"`)
+	require.Contains(t, logs.String(), `"error_category":"source_http"`)
+	require.Contains(t, logs.String(), `"http_status":403`)
+	require.NotContains(t, logs.String(), "photo.test")
+	require.NotContains(t, logs.String(), "sk_failure-key")
+}
+
+func TestProcess_reportsSlinkHTTPFailureWithoutSensitiveDetails(t *testing.T) {
+	var logs bytes.Buffer
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/photo" {
+			writeBytes(t, writer, []byte("GIF89a"))
+			return
+		}
+		writer.WriteHeader(http.StatusBadGateway)
+		writeText(t, writer, "private response body")
+	}))
+	defer server.Close()
+	client, err := NewClientWithOptions(
+		server.URL,
+		"sk_upload-key",
+		"tag-id",
+		time.Second,
+		slog.New(slog.NewJSONHandler(&logs, nil)),
+		testOptions(server),
+	)
+	require.NoError(t, err)
+
+	prepared, err := client.Process(context.Background(), alib.Book{
+		BuyURL: "https://alib.example/book",
+		Photos: []alib.Photo{{URL: "http://photo.test/photo"}},
+	})
+
+	require.Error(t, err)
+	require.Nil(t, prepared)
+	require.Contains(t, logs.String(), `"stage":"slink_upload"`)
+	require.Contains(t, logs.String(), `"error_category":"slink_http"`)
+	require.Contains(t, logs.String(), `"http_status":502`)
+	require.NotContains(t, logs.String(), "private response body")
+	require.NotContains(t, logs.String(), "sk_upload-key")
+	require.NotContains(t, logs.String(), "photo.test")
+}
+
+func TestSafeReferer_rejectsUnsafeURLsAndStripsFragments(t *testing.T) {
+	require.Equal(t, "https://alib.example/book?source=latest", safeReferer("https://alib.example/book?source=latest#private"))
+	require.Empty(t, safeReferer("https://user:secret@alib.example/book"))
+	require.Empty(t, safeReferer("javascript:alert(1)"))
+}
+
+func TestProcess_reportsMetaAndDownloadFailures(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/bad-meta":
@@ -158,21 +242,23 @@ func TestProcess_leavesMalformedAndCyclicMetaAndOversizedFilesUnprocessed(t *tes
 	}))
 	defer server.Close()
 	client := testClient(t, server)
-	prepared, err := client.Process(context.Background(), alib.Book{Photos: []alib.Photo{
-		{URL: "http://photo.test/bad-meta"},
-		{URL: "http://photo.test/cycle-a"},
-		{URL: "http://photo.test/large"},
-	}})
-	require.NoError(t, err)
-	for _, photo := range prepared.Book.Photos {
-		require.Empty(t, photo.SlinkURL)
-		require.Empty(t, photo.SlinkProfile)
-		require.False(t, photo.NonImage)
+	testCases := map[string]struct {
+		path     string
+		stage    string
+		category string
+	}{
+		"malformed META refresh": {path: "/bad-meta", stage: "source_meta", category: "meta_redirect"},
+		"META refresh cycle":     {path: "/cycle-a", stage: "source_meta", category: "redirect_cycle"},
+		"oversized source":       {path: "/large", stage: "source_download", category: "read"},
 	}
-	require.NoError(t, prepared.Cleanup())
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			requireProcessFailure(t, client, "http://photo.test"+testCase.path, testCase.stage, testCase.category)
+		})
+	}
 }
 
-func TestProcess_rejectsSSRFAndSlinkResponseErrors(t *testing.T) {
+func TestProcess_rejectsRestrictedSourceURL(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path == "/photo" {
 			writeBytes(t, writer, []byte("\xff\xd8\xff\xe0"))
@@ -182,49 +268,40 @@ func TestProcess_rejectsSSRFAndSlinkResponseErrors(t *testing.T) {
 	}))
 	defer server.Close()
 	client := testClient(t, server)
-	prepared, err := client.Process(context.Background(), alib.Book{Photos: []alib.Photo{
-		{URL: "http://127.0.0.1/photo"},
-		{URL: "http://photo.test/photo"},
-	}})
-	require.NoError(t, err)
-	require.Empty(t, prepared.Book.Photos[0].SlinkURL)
-	require.Empty(t, prepared.Book.Photos[1].SlinkURL)
-	require.NoError(t, prepared.Cleanup())
+	requireProcessFailure(t, client, "http://127.0.0.1/photo", "source_download", "request")
 }
 
 func TestProcess_rejectsOversizedAndNonHTTPSlinkResponses(t *testing.T) {
-	var uploadCount atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == "/photo" {
-			writeBytes(t, writer, []byte("GIF89a"))
-			return
-		}
-		if uploadCount.Add(1) == 2 {
-			writeText(t, writer, `{"url":"ftp://slink.example/image"}`)
-			return
-		}
-		writer.Header().Set("Content-Type", "application/json")
-		writeText(t, writer, `{"url":"`+strings.Repeat("x", maxUploadResponse)+`"}`)
-	}))
-	defer server.Close()
-	client := testClient(t, server)
-	prepared, err := client.Process(context.Background(), alib.Book{Photos: []alib.Photo{
-		{URL: "http://photo.test/photo"},
-		{URL: "http://photo.test/photo?kind=scheme"},
-	}})
-	require.NoError(t, err)
-	for _, photo := range prepared.Book.Photos {
-		require.Empty(t, photo.SlinkURL)
-		require.Empty(t, photo.SlinkProfile)
-		require.False(t, photo.NonImage)
+	testCases := map[string]struct {
+		response string
+		category string
+	}{
+		"oversized response": {
+			response: `{"url":"` + strings.Repeat("x", maxUploadResponse) + `"}`,
+			category: "response_too_large",
+		},
+		"non-HTTP URL": {response: `{"url":"ftp://slink.example/image"}`, category: "response_url"},
 	}
-	require.NoError(t, prepared.Cleanup())
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if request.URL.Path == "/photo" {
+					writeBytes(t, writer, []byte("GIF89a"))
+					return
+				}
+				writer.Header().Set("Content-Type", "application/json")
+				writeText(t, writer, testCase.response)
+			}))
+			t.Cleanup(server.Close)
+			requireProcessFailure(t, testClient(t, server), "http://photo.test/photo", "slink_upload", testCase.category)
+		})
+	}
 }
 
 func TestProcess_returnsContextCancellation(t *testing.T) {
 	client, err := NewClientWithOptions(
 		"https://slink.example",
-		"key",
+		"sk_key",
 		"tag",
 		time.Second,
 		slog.New(slog.DiscardHandler),
@@ -292,7 +369,7 @@ func TestProcess_rejectsRestrictedSourceAddressesBeforeDial(t *testing.T) {
 			var dialCount atomic.Int32
 			client, err := NewClientWithOptions(
 				"https://slink.example",
-				"key",
+				"sk_key",
 				"tag",
 				time.Second,
 				slog.New(slog.DiscardHandler),
@@ -312,38 +389,43 @@ func TestProcess_rejectsRestrictedSourceAddressesBeforeDial(t *testing.T) {
 				Photos: []alib.Photo{{URL: testCase.rawURL}},
 			})
 
-			require.NoError(t, err)
+			require.Error(t, err)
+			require.Nil(t, prepared)
 			require.Zero(t, dialCount.Load())
-			require.Empty(t, prepared.Book.Photos[0].SlinkURL)
-			require.NoError(t, prepared.Cleanup())
 		})
 	}
 }
 
 func TestProcess_rejectsRestrictedHTTPAndMetaRedirects(t *testing.T) {
-	var requestCount atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		requestCount.Add(1)
-		if request.URL.Path == "/http" {
-			http.Redirect(writer, request, "http://127.0.0.1/private", http.StatusFound)
-			return
-		}
-		writeText(t, writer, `<meta http-equiv="refresh" content="0;url=http://192.168.1.1/private">`)
-	}))
-	defer server.Close()
-	client := testClient(t, server)
-
-	prepared, err := client.Process(context.Background(), alib.Book{Photos: []alib.Photo{
-		{URL: "http://photo.test/http"},
-		{URL: "http://photo.test/meta"},
-	}})
-
-	require.NoError(t, err)
-	require.EqualValues(t, 2, requestCount.Load())
-	for _, photo := range prepared.Book.Photos {
-		require.Empty(t, photo.SlinkURL)
+	testCases := map[string]struct {
+		path     string
+		category string
+	}{
+		"HTTP": {path: "/http", category: "request"},
+		"META": {path: "/meta", category: "request"},
 	}
-	require.NoError(t, prepared.Cleanup())
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			var requestCount atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				requestCount.Add(1)
+				if request.URL.Path == "/http" {
+					http.Redirect(writer, request, "http://127.0.0.1/private", http.StatusFound)
+					return
+				}
+				writeText(t, writer, `<meta http-equiv="refresh" content="0;url=http://192.168.1.1/private">`)
+			}))
+			t.Cleanup(server.Close)
+			requireProcessFailure(
+				t,
+				testClient(t, server),
+				"http://photo.test"+testCase.path,
+				"source_download",
+				testCase.category,
+			)
+			require.EqualValues(t, 1, requestCount.Load())
+		})
+	}
 }
 
 func TestProcess_dialsTheValidatedAddress(t *testing.T) {
@@ -358,7 +440,7 @@ func TestProcess_dialsTheValidatedAddress(t *testing.T) {
 	var dialedAddress string
 	client, err := NewClientWithOptions(
 		server.URL,
-		"key",
+		"sk_key",
 		"tag",
 		time.Second,
 		slog.New(slog.DiscardHandler),
@@ -394,7 +476,7 @@ func TestProcess_honorsCancellationAndCleansTemporaryFilesDuringNetworkOperation
 			newClient: func(t *testing.T, started chan<- struct{}, _ <-chan struct{}) *Client {
 				client, err := NewClientWithOptions(
 					"https://slink.example",
-					"key",
+					"sk_key",
 					"tag",
 					time.Second,
 					slog.New(slog.DiscardHandler),
@@ -473,12 +555,13 @@ func TestProcess_honorsCancellationAndCleansTemporaryFilesDuringNetworkOperation
 }
 
 func TestProcess_honorsTimeoutDuringDNSLookup(t *testing.T) {
+	var logs bytes.Buffer
 	client, err := NewClientWithOptions(
 		"https://slink.example",
-		"key",
+		"sk_key",
 		"tag",
 		50*time.Millisecond,
-		slog.New(slog.DiscardHandler),
+		slog.New(slog.NewJSONHandler(&logs, nil)),
 		Options{LookupIP: func(ctx context.Context, _ string) ([]net.IP, error) {
 			<-ctx.Done()
 
@@ -492,10 +575,11 @@ func TestProcess_honorsTimeoutDuringDNSLookup(t *testing.T) {
 		Photos: []alib.Photo{{URL: "http://photo.test/photo"}},
 	})
 
-	require.NoError(t, err)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.Less(t, time.Since(startedAt), time.Second)
-	require.Empty(t, prepared.Book.Photos[0].SlinkURL)
-	require.NoError(t, prepared.Cleanup())
+	require.Nil(t, prepared)
+	require.Contains(t, logs.String(), `"stage":"source_download"`)
+	require.Contains(t, logs.String(), `"error_category":"request"`)
 }
 
 func TestSaveDownloadedFile_enforcesDownloadBoundary(t *testing.T) {
@@ -508,6 +592,26 @@ func TestSaveDownloadedFile_enforcesDownloadBoundary(t *testing.T) {
 	_, err = saveDownloadedFile(overDirectory, bytes.NewReader(make([]byte, maxDownloadBytes+1)))
 	require.ErrorContains(t, err, "exceeds")
 	entries, readErr := os.ReadDir(overDirectory)
+	require.NoError(t, readErr)
+	require.Empty(t, entries)
+}
+
+func requireProcessFailure(t *testing.T, client *Client, rawURL, stage, category string) {
+	t.Helper()
+	temporaryRoot := t.TempDir()
+	t.Setenv("TMPDIR", temporaryRoot)
+
+	prepared, err := client.Process(context.Background(), alib.Book{
+		Photos: []alib.Photo{{URL: rawURL}},
+	})
+
+	require.Error(t, err)
+	require.Nil(t, prepared)
+	details := photoFailureDetailsFromError(err)
+	require.Equal(t, stage, details.stage)
+	require.Equal(t, category, details.category)
+	require.Zero(t, details.status)
+	entries, readErr := os.ReadDir(temporaryRoot)
 	require.NoError(t, readErr)
 	require.Empty(t, entries)
 }
@@ -544,13 +648,14 @@ func TestProcess_acceptsExactSlinkResponseLimitAndRejectsInvalidURLs(t *testing.
 				Photos: []alib.Photo{{URL: "http://photo.test/photo"}},
 			})
 
-			require.NoError(t, err)
 			if testCase.wantSlink {
+				require.NoError(t, err)
 				require.Equal(t, server.URL+"/published", prepared.Book.Photos[0].SlinkURL)
-			} else {
-				require.Empty(t, prepared.Book.Photos[0].SlinkURL)
+				require.NoError(t, prepared.Cleanup())
+				return
 			}
-			require.NoError(t, prepared.Cleanup())
+			require.Error(t, err)
+			require.Nil(t, prepared)
 		})
 	}
 }
@@ -597,13 +702,14 @@ func TestProcess_enforcesHTTPAndMetaRedirectBoundaries(t *testing.T) {
 				Photos: []alib.Photo{{URL: "http://photo.test/" + testCase.kind + "/0"}},
 			})
 
-			require.NoError(t, err)
 			if testCase.wantImage {
+				require.NoError(t, err)
 				require.NotEmpty(t, prepared.Book.Photos[0].SlinkURL)
-			} else {
-				require.Empty(t, prepared.Book.Photos[0].SlinkURL)
+				require.NoError(t, prepared.Cleanup())
+				return
 			}
-			require.NoError(t, prepared.Cleanup())
+			require.Error(t, err)
+			require.Nil(t, prepared)
 		})
 	}
 }
@@ -623,7 +729,7 @@ func TestProcess_usesSlinkBasePathForUploadAndRelativeResponse(t *testing.T) {
 	target := server.Listener.Addr().String()
 	client, err := NewClientWithOptions(
 		server.URL+"/base",
-		"key",
+		"sk_key",
 		"tag",
 		time.Second,
 		slog.New(slog.DiscardHandler),
@@ -652,34 +758,42 @@ func paddedJSONResponse(payload string, size int) []byte {
 }
 
 func TestNewClient_profileDoesNotContainAPIKey(t *testing.T) {
-	client, err := NewClient("https://slink.example/", "private-key", "tag-id", time.Second, slog.New(slog.DiscardHandler))
+	client, err := NewClient("https://slink.example/", "sk_private-key", "tag-id", time.Second, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	require.NotEmpty(t, client.Profile())
-	require.NotContains(t, client.Profile(), "private-key")
-	_, err = NewClient("ftp://slink.example", "key", "tag", time.Second, slog.New(slog.DiscardHandler))
+	require.NotContains(t, client.Profile(), "sk_private-key")
+	_, err = NewClient("ftp://slink.example", "sk_key", "tag", time.Second, slog.New(slog.DiscardHandler))
 	require.Error(t, err)
+	_, err = NewClient("https://slink.example", "private-key", "tag", time.Second, slog.New(slog.DiscardHandler))
+	require.ErrorContains(t, err, "API key must start with sk_")
+	require.NotContains(t, err.Error(), "private-key")
 }
 
 func testClient(t *testing.T, server *httptest.Server) *Client {
 	t.Helper()
-	target := server.Listener.Addr().String()
 	client, err := NewClientWithOptions(
 		server.URL,
-		"secret-api-key",
+		"sk_secret-api-key",
 		"tag-id",
 		time.Second,
 		slog.New(slog.DiscardHandler),
-		Options{
-			LookupIP: func(context.Context, string) ([]net.IP, error) {
-				return []net.IP{net.ParseIP("8.8.8.8")}, nil
-			},
-			DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
-				return (&net.Dialer{}).DialContext(ctx, network, target)
-			},
-		},
+		testOptions(server),
 	)
 	require.NoError(t, err)
 	return client
+}
+
+func testOptions(server *httptest.Server) Options {
+	target := server.Listener.Addr().String()
+
+	return Options{
+		LookupIP: func(context.Context, string) ([]net.IP, error) {
+			return []net.IP{net.ParseIP("8.8.8.8")}, nil
+		},
+		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, target)
+		},
+	}
 }
 
 func readAll(t *testing.T, reader io.Reader) string {

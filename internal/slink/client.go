@@ -33,9 +33,13 @@ const (
 	maxUploadResponse = 1 << 20
 	maxMetaRedirects  = 5
 	maxHTTPRedirects  = 5
+	userAgent         = "alib-fetcher/1.0"
 	logKeyError       = "error"
+	logKeyErrorCat    = "error_category"
 	logKeyErrorType   = "error_type"
 	logKeyIndex       = "index"
+	logKeyHTTPStatus  = "http_status"
+	logKeyStage       = "stage"
 )
 
 var publicIPv6Prefix = netip.MustParsePrefix("2000::/3")
@@ -72,12 +76,24 @@ type Options struct {
 // PreparedBook contains a book with successful Slink processing results.
 type PreparedBook struct {
 	temporaryDirectory string
+	cleanup            func() error
 	Book               alib.Book
+}
+
+// NewPreparedBook creates a prepared result with an optional idempotent cleanup function.
+func NewPreparedBook(book alib.Book, cleanup func() error) *PreparedBook {
+	return &PreparedBook{Book: book, cleanup: cleanup}
 }
 
 // Cleanup removes the temporary files for the book. It is safe to call more than once.
 func (p *PreparedBook) Cleanup() error {
-	if p == nil || p.temporaryDirectory == "" {
+	if p == nil {
+		return nil
+	}
+	if p.cleanup != nil {
+		return p.cleanup()
+	}
+	if p.temporaryDirectory == "" {
 		return nil
 	}
 
@@ -122,6 +138,9 @@ func NewClientWithOptions(
 	}
 	if apiKey == "" {
 		return nil, errors.New("create slink client: API key is required")
+	}
+	if !strings.HasPrefix(apiKey, "sk_") {
+		return nil, errors.New("create slink client: API key must start with sk_")
 	}
 	if tagID == "" {
 		return nil, errors.New("create slink client: tag ID is required")
@@ -186,7 +205,7 @@ func (c *Client) Process(ctx context.Context, book alib.Book) (*PreparedBook, er
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	prepared := &PreparedBook{Book: cloneBook(book)}
+	prepared := NewPreparedBook(cloneBook(book), nil)
 	if len(prepared.Book.Photos) == 0 {
 		return prepared, nil
 	}
@@ -196,14 +215,15 @@ func (c *Client) Process(ctx context.Context, book alib.Book) (*PreparedBook, er
 		return nil, fmt.Errorf("create temporary photo directory: %w", err)
 	}
 	prepared.temporaryDirectory = directory
-	if prepareErr := c.preparePhotos(ctx, prepared); prepareErr != nil {
+	prepared.cleanup = func() error { return os.RemoveAll(directory) }
+	if prepareErr := c.preparePhotos(ctx, prepared, safeReferer(book.BuyURL)); prepareErr != nil {
 		return nil, errors.Join(prepareErr, prepared.Cleanup())
 	}
 
 	return prepared, nil
 }
 
-func (c *Client) preparePhotos(ctx context.Context, prepared *PreparedBook) error {
+func (c *Client) preparePhotos(ctx context.Context, prepared *PreparedBook, referer string) error {
 	cache := make(map[string]photoResult)
 	for index := range prepared.Book.Photos {
 		if err := ctx.Err(); err != nil {
@@ -219,13 +239,13 @@ func (c *Client) preparePhotos(ctx context.Context, prepared *PreparedBook) erro
 			continue
 		}
 
-		result, file, processErr := c.processPhoto(ctx, prepared.TemporaryDirectory(), *photo)
+		result, file, processErr := c.processPhoto(ctx, prepared.TemporaryDirectory(), *photo, referer)
 		if processErr != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			c.logFailure(ctx, index, processErr)
-			continue
+			return processErr
 		}
 		if file != "" {
 			result, processErr = c.publishImage(ctx, file, result.contentType)
@@ -234,7 +254,7 @@ func (c *Client) preparePhotos(ctx context.Context, prepared *PreparedBook) erro
 					return ctx.Err()
 				}
 				c.logFailure(ctx, index, processErr)
-				continue
+				return processErr
 			}
 		}
 		applyPhotoResult(photo, result)
@@ -256,7 +276,12 @@ type downloadedFile struct {
 	contentType string
 }
 
-func (c *Client) processPhoto(ctx context.Context, directory string, photo alib.Photo) (photoResult, string, error) {
+func (c *Client) processPhoto(
+	ctx context.Context,
+	directory string,
+	photo alib.Photo,
+	referer string,
+) (photoResult, string, error) {
 	currentURL := photo.URL
 	visited := make(map[string]struct{})
 	for metaRedirect := 0; ; metaRedirect++ {
@@ -264,17 +289,17 @@ func (c *Client) processPhoto(ctx context.Context, directory string, photo alib.
 			return photoResult{}, "", err
 		}
 		if _, found := visited[currentURL]; found {
-			return photoResult{}, "", errors.New("photo META refresh cycle")
+			return photoResult{}, "", photoFailure("source_meta", "redirect_cycle", 0, nil)
 		}
 		visited[currentURL] = struct{}{}
 
-		file, responseURL, err := c.download(ctx, directory, currentURL)
+		file, responseURL, err := c.download(ctx, directory, currentURL, referer)
 		if err != nil {
 			return photoResult{}, "", err
 		}
 		nextURL, found, parseErr := metaRefresh(file.path, responseURL)
 		if parseErr != nil {
-			return photoResult{}, "", parseErr
+			return photoResult{}, "", photoFailure("source_meta", "meta_redirect", 0, parseErr)
 		}
 		if !found {
 			if !isImageType(file.contentType) {
@@ -283,35 +308,39 @@ func (c *Client) processPhoto(ctx context.Context, directory string, photo alib.
 			return photoResult{contentType: file.contentType}, file.path, nil
 		}
 		if metaRedirect >= maxMetaRedirects {
-			return photoResult{}, "", errors.New("photo META refresh limit exceeded")
+			return photoResult{}, "", photoFailure("source_meta", "redirect_limit", 0, nil)
 		}
 		currentURL = nextURL
 	}
 }
 
-func (c *Client) download(ctx context.Context, directory, rawURL string) (downloadedFile, *url.URL, error) {
+func (c *Client) download(ctx context.Context, directory, rawURL, referer string) (downloadedFile, *url.URL, error) {
 	parsedURL, err := parseSourceURL(rawURL)
 	if err != nil {
-		return downloadedFile{}, nil, err
+		return downloadedFile{}, nil, photoFailure("source_download", "invalid_url", 0, err)
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	request, err := http.NewRequestWithContext(requestCtx, http.MethodGet, parsedURL.String(), nil)
 	if err != nil {
-		return downloadedFile{}, nil, fmt.Errorf("create photo request: %w", err)
+		return downloadedFile{}, nil, photoFailure("source_download", "request", 0, err)
+	}
+	request.Header.Set("User-Agent", userAgent)
+	if referer != "" {
+		request.Header.Set("Referer", referer)
 	}
 	response, err := c.source.Do(request)
 	if err != nil {
-		return downloadedFile{}, nil, contextError(err)
+		return downloadedFile{}, nil, photoFailure("source_download", "request", 0, contextError(err))
 	}
 	defer c.closeResponseBody(response.Body)
 
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return downloadedFile{}, nil, fmt.Errorf("photo download returned status %d", response.StatusCode)
+		return downloadedFile{}, nil, photoFailure("source_download", "source_http", response.StatusCode, nil)
 	}
 	file, err := saveDownloadedFile(directory, response.Body)
 	if err != nil {
-		return downloadedFile{}, nil, err
+		return downloadedFile{}, nil, photoFailure("source_download", "read", 0, err)
 	}
 	contentType := http.DetectContentType(file.content)
 	file.content = nil
@@ -384,41 +413,43 @@ func (c *Client) publishImage(ctx context.Context, path, contentType string) (ph
 	defer cancel()
 	body, contentLength, requestContentType, err := multipartBody(path, contentType, c.tagID)
 	if err != nil {
-		return photoResult{}, err
+		return photoResult{}, photoFailure("slink_upload", "request_body", 0, err)
 	}
 	endpoint := c.baseURL.ResolveReference(&url.URL{Path: "api/external/upload"})
 	request, err := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint.String(), body)
 	if err != nil {
-		return photoResult{}, fmt.Errorf("create Slink upload request: %w", err)
+		return photoResult{}, photoFailure("slink_upload", "request", 0, err)
 	}
 	request.Header.Set("Authorization", "Bearer "+c.apiKey)
 	request.Header.Set("Content-Type", requestContentType)
+	request.Header.Set("Origin", c.baseURL.Scheme+"://"+c.baseURL.Host)
+	request.Header.Set("User-Agent", userAgent)
 	request.ContentLength = contentLength
 	response, err := c.http.Do(request)
 	if err != nil {
-		return photoResult{}, contextError(err)
+		return photoResult{}, photoFailure("slink_upload", "request", 0, contextError(err))
 	}
 	defer c.closeResponseBody(response.Body)
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return photoResult{}, fmt.Errorf("slink upload returned status %d", response.StatusCode)
+		return photoResult{}, photoFailure("slink_upload", "slink_http", response.StatusCode, nil)
 	}
 
 	responseData, err := io.ReadAll(io.LimitReader(response.Body, maxUploadResponse+1))
 	if err != nil {
-		return photoResult{}, fmt.Errorf("read Slink response: %w", contextError(err))
+		return photoResult{}, photoFailure("slink_upload", "response", 0, contextError(err))
 	}
 	if len(responseData) > maxUploadResponse {
-		return photoResult{}, fmt.Errorf("slink response exceeds %d bytes", maxUploadResponse)
+		return photoResult{}, photoFailure("slink_upload", "response_too_large", 0, nil)
 	}
 	var payload struct {
 		URL string `json:"url"`
 	}
 	if decodeErr := json.Unmarshal(responseData, &payload); decodeErr != nil {
-		return photoResult{}, fmt.Errorf("decode slink response: %w", decodeErr)
+		return photoResult{}, photoFailure("slink_upload", "response", 0, decodeErr)
 	}
 	resolvedURL, err := c.resolveSlinkURL(payload.URL)
 	if err != nil {
-		return photoResult{}, err
+		return photoResult{}, photoFailure("slink_upload", "response_url", 0, err)
 	}
 
 	return photoResult{slinkURL: resolvedURL, slinkProfile: c.profile}, nil
@@ -612,7 +643,7 @@ func parseBaseURL(raw string) (*url.URL, error) {
 	if validationErr := validateHTTPURL(parsed); validationErr != nil {
 		return nil, validationErr
 	}
-	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
 		return nil, errors.New("slink base URL must not contain userinfo, query, or fragment")
 	}
 	if parsed.Path != "" && !strings.HasSuffix(parsed.Path, "/") {
@@ -678,11 +709,67 @@ func cloneBook(book alib.Book) alib.Book {
 }
 
 func (c *Client) logFailure(ctx context.Context, index int, err error) {
-	c.logger.ErrorContext(ctx, "slink.photo_failed",
+	failure := photoFailureDetailsFromError(err)
+	attrs := []any{
 		slog.Int(logKeyIndex, index),
 		slog.String(logKeyError, "photo processing failed"),
 		slog.String(logKeyErrorType, fmt.Sprintf("%T", err)),
-	)
+		slog.String(logKeyStage, failure.stage),
+		slog.String(logKeyErrorCat, failure.category),
+	}
+	if failure.status != 0 {
+		attrs = append(attrs, slog.Int(logKeyHTTPStatus, failure.status))
+	}
+	c.logger.ErrorContext(ctx, "slink.photo_failed", attrs...)
+}
+
+type photoFailureDetails struct {
+	stage    string
+	category string
+	status   int
+}
+
+type photoFailureError struct {
+	err error
+	photoFailureDetails
+}
+
+func (e *photoFailureError) Error() string {
+	if e.status != 0 {
+		return fmt.Sprintf("%s failed: %s (HTTP %d)", e.stage, e.category, e.status)
+	}
+
+	return fmt.Sprintf("%s failed: %s", e.stage, e.category)
+}
+
+func (e *photoFailureError) Unwrap() error {
+	return e.err
+}
+
+func photoFailure(stage, category string, status int, err error) error {
+	return &photoFailureError{
+		photoFailureDetails: photoFailureDetails{stage: stage, category: category, status: status},
+		err:                 err,
+	}
+}
+
+func photoFailureDetailsFromError(err error) photoFailureDetails {
+	var failure *photoFailureError
+	if errors.As(err, &failure) {
+		return failure.photoFailureDetails
+	}
+
+	return photoFailureDetails{stage: "processing", category: "unknown"}
+}
+
+func safeReferer(rawURL string) string {
+	parsed, err := parseSourceURL(rawURL)
+	if err != nil {
+		return ""
+	}
+	parsed.Fragment = ""
+
+	return parsed.String()
 }
 
 func contextError(err error) error {

@@ -43,18 +43,24 @@ type Chunk struct {
 
 // Render formats books as Telegram HTML and splits only between listings.
 func Render(books []alib.Book, options Options) ([]Chunk, error) {
-	chunks, _, err := render(books, options, false)
+	chunks, _, err := render(books, options, false, 0)
 
 	return chunks, err
 }
 
 // RenderSendable formats every listing that fits and reports the oversized listings it skipped.
-func RenderSendable(books []alib.Book, options Options) ([]Chunk, []string, error) {
-	return render(books, options, true)
+func RenderSendable(books []alib.Book, options Options, previousFailures int) ([]Chunk, []string, error) {
+	return render(books, options, true, previousFailures)
 }
 
-func render(books []alib.Book, options Options, skipOversized bool) ([]Chunk, []string, error) {
+func render(books []alib.Book, options Options, skipOversized bool, previousFailures int) ([]Chunk, []string, error) {
 	if len(books) == 0 {
+		if previousFailures > 0 {
+			summaryChunks, err := renderFailureSummary(previousFailures, options)
+
+			return summaryChunks, nil, err
+		}
+
 		return nil, nil, nil
 	}
 	if renderedRuneCount(header) > options.Limit {
@@ -67,13 +73,8 @@ func render(books []alib.Book, options Options, skipOversized bool) ([]Chunk, []
 	currentBlocks := 0
 	currentMedia := 0
 	for _, book := range books {
-		item := renderBook(book, options)
-		itemLimit := options.Limit
-		if renderedRuneCount(item) > itemLimit && strings.TrimSpace(book.Content) != "" {
-			item = truncateContent(book, options)
-			itemLimit--
-		}
-		if renderedRuneCount(item) > itemLimit {
+		item, fits := renderItem(book, options)
+		if !fits {
 			if skipOversized {
 				skippedBuyURLs = append(skippedBuyURLs, book.BuyURL)
 				continue
@@ -81,41 +82,109 @@ func render(books []alib.Book, options Options, skipOversized bool) ([]Chunk, []
 
 			return nil, nil, fmt.Errorf("%w: %s", ErrMessageTooLong, book.BuyURL)
 		}
-		separator := ""
-		if len(current.Books) > 0 {
-			separator = listingSeparator
-		} else if current.Text != "" {
-			separator = sectionBreak
-		}
-
-		itemBlocks := richMessageBlocks(book, options)
-		itemMedia := richMessageMedia(book, options)
-		candidateBlocks := currentBlocks + itemBlocks
-		candidateMedia := currentMedia + itemMedia
-		if len(current.Books) > 0 {
-			candidateBlocks++
-		}
-		if chunkExceedsLimits(candidateBlocks, candidateMedia, current.Text+separator+item, options.Limit) {
-			chunks = append(chunks, current)
-			current = Chunk{Books: make([]alib.Book, 0)}
-			currentBlocks = 0
-			currentMedia = 0
-			separator = ""
-		}
-
-		current.Text += separator + item
-		current.Books = append(current.Books, book)
-		if len(current.Books) > 1 {
-			currentBlocks++
-		}
-		currentBlocks += itemBlocks
-		currentMedia += itemMedia
+		chunks, current, currentBlocks, currentMedia = appendBook(
+			chunks, current, currentBlocks, currentMedia, book, item, options,
+		)
 	}
+	failed := previousFailures + len(skippedBuyURLs)
 	if len(current.Books) == 0 {
-		return nil, skippedBuyURLs, nil
+		if failed == 0 {
+			return nil, skippedBuyURLs, nil
+		}
+
+		summaryChunks, err := renderFailureSummary(failed, options)
+
+		return summaryChunks, skippedBuyURLs, err
+	}
+	if failed == 0 {
+		return append(chunks, current), skippedBuyURLs, nil
 	}
 
-	return append(chunks, current), skippedBuyURLs, nil
+	summary := failureSummary(failed)
+	if !chunkExceedsLimits(
+		currentBlocks+2,
+		currentMedia,
+		current.Text+listingSeparator+summary,
+		options.Limit,
+	) {
+		current.Text += listingSeparator + summary
+		return append(chunks, current), skippedBuyURLs, nil
+	}
+
+	chunks = append(chunks, current)
+	return append(chunks, Chunk{Text: summary, Books: make([]alib.Book, 0)}), skippedBuyURLs, nil
+}
+
+func renderItem(book alib.Book, options Options) (string, bool) {
+	item := renderBook(book, options)
+	itemLimit := options.Limit
+	if renderedRuneCount(item) > itemLimit && strings.TrimSpace(book.Content) != "" {
+		item = truncateContent(book, options)
+		itemLimit--
+	}
+
+	return item, renderedRuneCount(item) <= itemLimit
+}
+
+func appendBook(
+	chunks []Chunk,
+	current Chunk,
+	currentBlocks, currentMedia int,
+	book alib.Book,
+	item string,
+	options Options,
+) ([]Chunk, Chunk, int, int) {
+	separator := ""
+	if len(current.Books) > 0 {
+		separator = listingSeparator
+	} else if current.Text != "" {
+		separator = sectionBreak
+	}
+	itemBlocks := richMessageBlocks(book, options)
+	itemMedia := richMessageMedia(book, options)
+	candidateBlocks := currentBlocks + itemBlocks
+	if len(current.Books) > 0 {
+		candidateBlocks++
+	}
+	if chunkExceedsLimits(candidateBlocks, currentMedia+itemMedia, current.Text+separator+item, options.Limit) {
+		chunks = append(chunks, current)
+		current = Chunk{Books: make([]alib.Book, 0)}
+		currentBlocks = 0
+		currentMedia = 0
+		separator = ""
+	}
+
+	current.Text += separator + item
+	current.Books = append(current.Books, book)
+	if len(current.Books) > 1 {
+		currentBlocks++
+	}
+	currentBlocks += itemBlocks
+	currentMedia += itemMedia
+
+	return chunks, current, currentBlocks, currentMedia
+}
+
+func renderFailureSummary(failed int, options Options) ([]Chunk, error) {
+	summary := failureSummary(failed)
+	if renderedRuneCount(summary) > options.Limit {
+		return nil, fmt.Errorf("%w: failure summary", ErrMessageTooLong)
+	}
+	if !chunkExceedsLimits(1, 0, header+sectionBreak+summary, options.Limit) {
+		return []Chunk{{Text: header + sectionBreak + summary, Books: make([]alib.Book, 0)}}, nil
+	}
+	if renderedRuneCount(header) > options.Limit {
+		return nil, fmt.Errorf("%w: failure summary", ErrMessageTooLong)
+	}
+
+	return []Chunk{
+		{Text: header, Books: make([]alib.Book, 0)},
+		{Text: summary, Books: make([]alib.Book, 0)},
+	}, nil
+}
+
+func failureSummary(failed int) string {
+	return fmt.Sprintf("Не удалось обработать книг: %d", failed)
 }
 
 func chunkExceedsLimits(blocks, media int, text string, textLimit int) bool {

@@ -160,6 +160,9 @@ func validateSlinkSettings(settings Config) error {
 	if !validUUID(settings.SlinkTagID) {
 		return fmt.Errorf("%w: SLINK_TAG_ID must be a UUID", ErrInvalid)
 	}
+	if !strings.HasPrefix(settings.SlinkAPIKey, "sk_") {
+		return fmt.Errorf("%w: SLINK_API_KEY must start with sk_", ErrInvalid)
+	}
 
 	return nil
 }

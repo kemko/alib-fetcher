@@ -6,17 +6,13 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
-	"time"
 
-	"github.com/kemko/alib-fetcher/internal/app"
 	"github.com/kemko/alib-fetcher/internal/telegram"
 )
 
 const (
-	refreshCallbackTimeout    = 10 * time.Second
 	refreshAlreadyRunningText = "Проверка уже выполняется"
-	refreshFailedText         = "Ошибка обновления"
-	refreshNoBooksText        = "Новых книг нет"
+	refreshStartedText        = "Формирование дайджеста запущено"
 	refreshUnavailableText    = "Кнопка недоступна"
 )
 
@@ -90,18 +86,6 @@ func handleRefreshCallback(
 	callback telegram.Callback,
 	logger *slog.Logger,
 ) {
-	handleRefreshCallbackWithin(ctx, callbacks, runner, callback, logger, refreshCallbackTimeout)
-}
-
-func handleRefreshCallbackWithin(
-	ctx context.Context,
-	callbacks CallbackClient,
-	runner *digestRunner,
-	callback telegram.Callback,
-	logger *slog.Logger,
-	timeout time.Duration,
-) {
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	beforeDelivery := func(runCtx context.Context) error {
 		if err := callbacks.RemoveReplyMarkup(runCtx, callback.MessageChatID, callback.MessageID); err != nil {
 			return fmt.Errorf("remove refresh button: %w", err)
@@ -109,22 +93,13 @@ func handleRefreshCallbackWithin(
 
 		return nil
 	}
-	started := runner.tryStartRefresh(runCtx, beforeDelivery, func(result app.Result, err error) {
-		defer cancel()
-
-		text := ""
-		if err != nil {
-			text = refreshFailedText
-		} else if result.New == 0 {
-			text = refreshNoBooksText
-		}
-		answerRefreshCallback(ctx, callbacks, callback.ID, text, logger)
-	})
+	started := runner.tryStartRefresh(ctx, beforeDelivery)
 	if started {
+		answerRefreshCallback(ctx, callbacks, callback.ID, refreshStartedText, logger)
+
 		return
 	}
 
-	cancel()
 	answerRefreshCallback(ctx, callbacks, callback.ID, refreshAlreadyRunningText, logger)
 }
 
