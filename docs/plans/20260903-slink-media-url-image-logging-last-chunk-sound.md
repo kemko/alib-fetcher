@@ -114,10 +114,10 @@
 
 - Modify: none
 
-- [ ] Выполнить `make verify`.
-- [ ] Выполнить `make coverage` и подтвердить общий statement coverage не ниже 80%.
-- [ ] Проверить чистый task-related diff и отсутствие временного токена, тестовых файлов и credentials.
-- [ ] Подготовить отдельные focused commits только после полного успеха проверок.
+- [x] Выполнить `make verify`.
+- [x] Выполнить `make coverage` и подтвердить общий statement coverage не ниже 80% (88.5%).
+- [x] Проверить чистый task-related diff и отсутствие временного токена, тестовых файлов и credentials.
+- [x] Подготовить отдельные focused commits только после полного успеха проверок.
 
 ## Post-Completion
 
