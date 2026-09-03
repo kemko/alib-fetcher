@@ -16,20 +16,13 @@ import (
 
 // Fetcher obtains the latest source listings.
 type Fetcher interface {
-	Fetch(context.Context) ([]alib.Book, error)
-}
-
-type detailedFetcher interface {
 	FetchWithResult(context.Context) (alib.FetchResult, error)
-}
-
-type existingState interface {
-	Existing(context.Context, []alib.Book) ([]bool, error)
 }
 
 // State tracks discovered listings and their delivery status.
 type State interface {
 	Prune(context.Context, time.Time) (int, error)
+	Existing(context.Context, []alib.Book) ([]bool, error)
 	RecordDiscovered(context.Context, []alib.Book, time.Time) (int, error)
 	Pending(context.Context) ([]alib.Book, error)
 	SavePrepared(context.Context, alib.Book) error
@@ -98,12 +91,17 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 	}
 	result := Result{Pruned: pruned}
 
-	books, failed, err := s.fetch(ctx)
+	fetchResult, err := s.dependencies.Fetcher.FetchWithResult(ctx)
 	if err != nil {
 		return result, fmt.Errorf("fetch listings: %w", err)
 	}
+	books := fetchResult.Books
 	result.Fetched = len(books)
-	result.Failed = failed
+	failedURLs := make(map[string]struct{}, len(fetchResult.FailedBuyURLs))
+	for _, buyURL := range fetchResult.FailedBuyURLs {
+		failedURLs[buyURL] = struct{}{}
+	}
+	result.Failed = len(failedURLs)
 	if s.dependencies.PhotoProcessor != nil {
 		renderOptions.SlinkProfile = s.dependencies.PhotoProcessor.Profile()
 	}
@@ -112,16 +110,17 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 	if err != nil {
 		return result, err
 	}
-	preparedBooks, preparedBooksByURL, failedURLs, newBooks, bookFailures, err := s.prepareFetched(
+	preparedBooks, preparedBooksByURL, newBooks, err := s.prepareFetched(
 		ctx,
 		books,
 		existing,
+		failedURLs,
 		renderOptions,
 	)
+	result.Failed = len(failedURLs)
 	if err != nil {
 		return result, err
 	}
-	result.Failed += bookFailures
 	if len(preparedBooks) > 0 {
 		_, err = s.dependencies.State.RecordDiscovered(ctx, preparedBooks, cycleTime)
 		if err != nil {
@@ -135,11 +134,11 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 		return result, fmt.Errorf("load pending listings: %w", err)
 	}
 	pending = sortPending(pending)
-	pending, pendingFailures, err := s.preparePending(ctx, pending, preparedBooksByURL, failedURLs, &renderOptions)
+	pending, err = s.preparePending(ctx, pending, preparedBooksByURL, failedURLs, &renderOptions)
+	result.Failed = len(failedURLs)
 	if err != nil {
 		return result, err
 	}
-	result.Failed += pendingFailures
 
 	sent, renderedFailures, err := s.renderAndSend(ctx, pending, renderOptions, cycleTime, result.Failed)
 	result.Sent = sent
@@ -155,12 +154,7 @@ func (s *Service) existing(ctx context.Context, books []alib.Book) ([]bool, erro
 	if len(books) == 0 {
 		return nil, nil
 	}
-	state, ok := s.dependencies.State.(existingState)
-	if !ok {
-		return make([]bool, len(books)), nil
-	}
-
-	existing, err := state.Existing(ctx, books)
+	existing, err := s.dependencies.State.Existing(ctx, books)
 	if err != nil {
 		return nil, fmt.Errorf("check existing listings: %w", err)
 	}
@@ -169,16 +163,6 @@ func (s *Service) existing(ctx context.Context, books []alib.Book) ([]bool, erro
 	}
 
 	return existing, nil
-}
-
-func (s *Service) fetch(ctx context.Context) ([]alib.Book, int, error) {
-	if fetcher, ok := s.dependencies.Fetcher.(detailedFetcher); ok {
-		result, err := fetcher.FetchWithResult(ctx)
-		return result.Books, result.Failed, err
-	}
-
-	books, err := s.dependencies.Fetcher.Fetch(ctx)
-	return books, 0, err
 }
 
 func (s *Service) renderAndSend(
@@ -221,20 +205,14 @@ func (s *Service) prepareFetched(
 	ctx context.Context,
 	books []alib.Book,
 	existing []bool,
+	failedURLs map[string]struct{},
 	options digest.Options,
-) ([]alib.Book, map[string]alib.Book, map[string]struct{}, int, int, error) {
+) ([]alib.Book, map[string]alib.Book, int, error) {
 	prepared := make([]alib.Book, 0, len(books))
 	preparedBooks := make(map[string]alib.Book, len(books))
-	failedURLs := make(map[string]struct{})
 	newBooks := 0
-	failed := 0
 	for index, book := range books {
 		if existing[index] {
-			if !renderable(book, options) {
-				failed++
-				failedURLs[book.BuyURL] = struct{}{}
-				continue
-			}
 			prepared = append(prepared, book)
 			continue
 		}
@@ -242,25 +220,22 @@ func (s *Service) prepareFetched(
 		preparedBook, cleanup, err := s.prepareBook(ctx, book)
 		if err != nil {
 			if ctx.Err() != nil {
-				return nil, nil, nil, 0, failed, fmt.Errorf("prepare book %q: %w", book.BuyURL, err)
+				return nil, nil, 0, fmt.Errorf("prepare book %q: %w", book.BuyURL, err)
 			}
-			failed++
 			failedURLs[book.BuyURL] = struct{}{}
 			continue
 		}
 		if !renderable(preparedBook, options) {
 			if cleanupErr := cleanup(); cleanupErr != nil && ctx.Err() != nil {
-				return nil, nil, nil, 0, failed, fmt.Errorf("cleanup prepared book %q: %w", book.BuyURL, cleanupErr)
+				return nil, nil, 0, fmt.Errorf("cleanup prepared book %q: %w", book.BuyURL, cleanupErr)
 			}
-			failed++
 			failedURLs[book.BuyURL] = struct{}{}
 			continue
 		}
 		if cleanupErr := cleanup(); cleanupErr != nil {
 			if ctx.Err() != nil {
-				return nil, nil, nil, 0, failed, fmt.Errorf("cleanup prepared book %q: %w", book.BuyURL, cleanupErr)
+				return nil, nil, 0, fmt.Errorf("cleanup prepared book %q: %w", book.BuyURL, cleanupErr)
 			}
-			failed++
 			failedURLs[book.BuyURL] = struct{}{}
 			continue
 		}
@@ -269,7 +244,7 @@ func (s *Service) prepareFetched(
 		newBooks++
 	}
 
-	return prepared, preparedBooks, failedURLs, newBooks, failed, nil
+	return prepared, preparedBooks, newBooks, nil
 }
 
 func (s *Service) preparePending(
@@ -278,23 +253,19 @@ func (s *Service) preparePending(
 	preparedBooks map[string]alib.Book,
 	failedURLs map[string]struct{},
 	options *digest.Options,
-) ([]alib.Book, int, error) {
+) ([]alib.Book, error) {
 	result := make([]alib.Book, 0, len(pending))
-	failed := 0
 	for _, book := range pending {
-		preparedBook, ready, countedFailure, err := s.preparePendingBook(ctx, book, preparedBooks, failedURLs, *options)
+		preparedBook, ready, err := s.preparePendingBook(ctx, book, preparedBooks, failedURLs, *options)
 		if err != nil {
-			return nil, failed, err
-		}
-		if countedFailure {
-			failed++
+			return nil, err
 		}
 		if ready {
 			result = append(result, preparedBook)
 		}
 	}
 
-	return result, failed, nil
+	return result, nil
 }
 
 func (s *Service) preparePendingBook(
@@ -303,44 +274,44 @@ func (s *Service) preparePendingBook(
 	preparedBooks map[string]alib.Book,
 	failedURLs map[string]struct{},
 	options digest.Options,
-) (alib.Book, bool, bool, error) {
+) (alib.Book, bool, error) {
 	if preparedBook, alreadyProcessed := preparedBooks[book.BuyURL]; alreadyProcessed {
-		return preparedBook, true, false, nil
+		return preparedBook, true, nil
 	}
 	if _, alreadyFailed := failedURLs[book.BuyURL]; alreadyFailed {
-		return alib.Book{}, false, false, nil
+		return alib.Book{}, false, nil
 	}
 
 	preparedBook, cleanup, err := s.prepareBook(ctx, book)
 	if err != nil {
 		if ctx.Err() != nil {
-			return alib.Book{}, false, false, fmt.Errorf("prepare book %q: %w", book.BuyURL, err)
+			return alib.Book{}, false, fmt.Errorf("prepare book %q: %w", book.BuyURL, err)
 		}
 		failedURLs[book.BuyURL] = struct{}{}
-		return alib.Book{}, false, true, nil
+		return alib.Book{}, false, nil
 	}
 	if !renderable(preparedBook, options) {
 		if cleanupErr := cleanup(); cleanupErr != nil && ctx.Err() != nil {
-			return alib.Book{}, false, false, fmt.Errorf("cleanup prepared book %q: %w", book.BuyURL, cleanupErr)
+			return alib.Book{}, false, fmt.Errorf("cleanup prepared book %q: %w", book.BuyURL, cleanupErr)
 		}
 		failedURLs[book.BuyURL] = struct{}{}
-		return alib.Book{}, false, true, nil
+		return alib.Book{}, false, nil
 	}
 	if !reflect.DeepEqual(book, preparedBook) {
 		if saveErr := s.dependencies.State.SavePrepared(ctx, preparedBook); saveErr != nil {
-			return alib.Book{}, false, false, fmt.Errorf(
+			return alib.Book{}, false, fmt.Errorf(
 				"save prepared book %q: %w", book.BuyURL, errors.Join(saveErr, cleanup()))
 		}
 	}
 	if cleanupErr := cleanup(); cleanupErr != nil {
 		if ctx.Err() != nil {
-			return alib.Book{}, false, false, fmt.Errorf("cleanup prepared book %q: %w", book.BuyURL, cleanupErr)
+			return alib.Book{}, false, fmt.Errorf("cleanup prepared book %q: %w", book.BuyURL, cleanupErr)
 		}
 		failedURLs[book.BuyURL] = struct{}{}
-		return alib.Book{}, false, true, nil
+		return alib.Book{}, false, nil
 	}
 
-	return preparedBook, true, false, nil
+	return preparedBook, true, nil
 }
 
 func (s *Service) prepareBook(ctx context.Context, book alib.Book) (alib.Book, func() error, error) {

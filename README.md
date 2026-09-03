@@ -153,9 +153,11 @@ the heading appears only in the first message.
 If the heading and first pending listing cannot fit together but the listing
 fits alone, the first message contains only the heading and the listing follows
 in a headerless message.
-When book-specific failures occurred, the final message adds
-`Не удалось обработать книг: N` after an `<hr/>`; the count includes listings
-skipped because of `digest.ErrMessageTooLong`.
+When book-specific failures occurred, the final message includes
+`Не удалось обработать книг: N`; it follows an `<hr/>` when the chunk also
+contains books. With no renderable books, the digest contains the heading and
+summary, split into two messages if required by the limits. The count includes
+listings skipped because of `digest.ErrMessageTooLong`.
 
 When Slink is enabled, each source photo is downloaded through HTTP(S), including
 limited HTTP redirects and HTML `META refresh` redirects. Downloads are limited
@@ -176,26 +178,28 @@ The source order and repeated links are preserved. A slideshow contains at most
 create the `alib` tag, use its UUID in `SLINK_TAG_ID`, create an API key, and
 enable `Auto-publish API uploads` for that Slink user.
 
-Photo files are stored in a separate temporary directory per book. The directory
-remains available while the prepared result is saved to bbolt, then is removed
-before rendering or Telegram delivery. Failed preparation or state writes also
-clean up the directory; successful Slink URLs are persisted so later digests do
-not upload the same source URL again while `SLINK_URL` and `SLINK_TAG_ID` remain
-unchanged. Changing either value reprocesses pending photos; rotating only the API
-key does not.
+Photo files are stored in a separate temporary directory per book. A new book's
+directory is removed before its prepared result is inserted into bbolt; a changed
+pending book is saved before its directory is removed. Cleanup finishes before
+rendering or Telegram delivery. Failed preparation or state writes also clean up
+the directory; successful Slink URLs are persisted so later digests do not upload
+the same source URL again while `SLINK_URL` and `SLINK_TAG_ID` remain unchanged.
+Changing either value reprocesses pending photos; rotating only the API key does
+not.
 The first message uses the normal notification sound; all later messages are
 silent. Whenever a digest sends at least one message, the final message
 includes an inline `Обновить` button.
 Pressing it asks a running service with the same bot token to start one
 out-of-schedule digest. If that refresh sends new notifications, the clicked
 message's old button is removed before the first new message is sent, and the
-last new message receives a fresh `Обновить` button. If the refresh finds no
-sendable books, the old button stays in place.
+last new message receives a fresh `Обновить` button. If the refresh produces no
+message chunk, the old button stays in place. A failure-summary-only digest does
+produce a chunk and therefore moves the button.
 The callback is answered immediately with `Формирование дайджеста запущено`
 after the refresh runner lock is acquired; the digest continues in the
-background on the service lifetime context. A successful refresh with no newly
-discovered records has a `Новых книг нет` toast; successful refreshes with new
-records have no final callback answer; errors are reported in the service log.
+background on the service lifetime context. No completion callback answer is
+sent; completion and errors are reported through `digest.completed` and
+`digest.failed` logs.
 `HTTP_TIMEOUT` applies to each external request, not to the whole refresh
 digest. Toast display duration is controlled by the Telegram client;
 the Bot API cannot guarantee an exact duration.

@@ -21,16 +21,18 @@ One digest cycle is deliberately ordered as follows:
 3. Parse successful responses only after all downloads finish, then combine and
    deduplicate listings by their resolved `BuyURL`, retaining the first occurrence.
 4. Read existing `BuyURL` records without writing new fetched listings.
-5. Sequentially prepare new and pending books, isolating book-specific errors
-   and cleaning each temporary directory before continuing.
+5. Sequentially prepare new books, isolating book-specific errors and cleaning
+   each temporary directory before continuing.
 6. Record only fully prepared, renderable new listings in bbolt, preserving sent status.
 7. Load all pending records from bbolt in first-discovery order, including
    books from earlier failed cycles.
 8. Sort pending books with year `0` first, then publication year descending,
    preserving first-discovery order within each group.
-9. Render pending books into Telegram-sized chunks, adding the book-failure
+9. Sequentially prepare pending books, isolating book-specific errors and
+   cleaning each temporary directory before continuing.
+10. Render pending books into Telegram-sized chunks, adding the book-failure
    summary when needed.
-10. Send each chunk and mark only that chunk's books as delivered, only after
+11. Send each chunk and mark only that chunk's books as delivered, only after
    Telegram accepts it.
 
 Preserve these semantics:
@@ -57,9 +59,11 @@ Preserve these semantics:
   images, or 50-media limit. Ordinary chunks contain at most 250 listings.
 - A slideshow contains at most 50 images; successful images beyond that limit
   remain source links so one listing stays atomic and deliverable.
-- The final digest chunk includes `Не удалось обработать книг: N` after an
-  `<hr/>` when one or more book-specific failures occurred; the count includes
-  listings skipped by `digest.ErrMessageTooLong`.
+- The final digest chunk includes `Не удалось обработать книг: N` when one or
+  more book-specific failures occurred. It follows an `<hr/>` when the chunk
+  also contains books; with no renderable books, the digest contains the heading
+  and summary, split if limits require. The count includes listings skipped by
+  `digest.ErrMessageTooLong`.
 - When a digest has multiple chunks, the first uses the normal notification
   sound and all later chunks are sent silently.
 - Every sent digest attaches the `Обновить` inline button only to the final
@@ -271,8 +275,9 @@ the `sk_` prefix, the tag must belong to that key's owner, and Slink
 external-upload auto-publish must be enabled. Individual photo failures log a
 safe stage/status/category and isolate the whole book; new failed books are not
 recorded and pending failed books remain pending. Context cancellation stops the digest.
-Prepared results are saved before their temp directory is removed and are reused
-only for the same Slink URL/tag profile.
+New prepared results are cleaned before their batch insert; changed pending
+results are saved before cleanup. Persisted results are reused only for the same
+Slink URL/tag profile.
 
 The Alib client accepts one or more HTTP(S) endpoints, sends
 `User-Agent: alib-fetcher/1.0`, and requires HTTP 200. Endpoints are downloaded

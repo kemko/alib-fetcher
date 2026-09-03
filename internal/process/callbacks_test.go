@@ -238,9 +238,10 @@ func Test_handleRefreshCallback_continues_after_callback_is_answered(t *testing.
 	// Given
 	digestStarted := make(chan struct{})
 	releaseDigest := make(chan struct{})
+	digestDeadline := make(chan bool, 1)
 	client := &recordingCallbackClient{}
 	runner := &digestRunner{dependencies: app.Dependencies{
-		Fetcher:      &blockingFetcher{started: digestStarted, release: releaseDigest},
+		Fetcher:      &blockingFetcher{started: digestStarted, release: releaseDigest, deadline: digestDeadline},
 		Sender:       noopSender{},
 		MessageLimit: 4096,
 		Now:          time.Now,
@@ -255,6 +256,7 @@ func Test_handleRefreshCallback_continues_after_callback_is_answered(t *testing.
 	}, slog.New(slog.DiscardHandler))
 	waitForSignal(t, digestStarted)
 	require.Equal(t, []callbackAnswer{{id: "callback-1", text: refreshStartedText}}, client.answersSnapshot())
+	require.False(t, <-digestDeadline)
 	close(releaseDigest)
 	runner.wait()
 

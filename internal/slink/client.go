@@ -76,12 +76,24 @@ type Options struct {
 // PreparedBook contains a book with successful Slink processing results.
 type PreparedBook struct {
 	temporaryDirectory string
+	cleanup            func() error
 	Book               alib.Book
+}
+
+// NewPreparedBook creates a prepared result with an optional idempotent cleanup function.
+func NewPreparedBook(book alib.Book, cleanup func() error) *PreparedBook {
+	return &PreparedBook{Book: book, cleanup: cleanup}
 }
 
 // Cleanup removes the temporary files for the book. It is safe to call more than once.
 func (p *PreparedBook) Cleanup() error {
-	if p == nil || p.temporaryDirectory == "" {
+	if p == nil {
+		return nil
+	}
+	if p.cleanup != nil {
+		return p.cleanup()
+	}
+	if p.temporaryDirectory == "" {
 		return nil
 	}
 
@@ -193,7 +205,7 @@ func (c *Client) Process(ctx context.Context, book alib.Book) (*PreparedBook, er
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	prepared := &PreparedBook{Book: cloneBook(book)}
+	prepared := NewPreparedBook(cloneBook(book), nil)
 	if len(prepared.Book.Photos) == 0 {
 		return prepared, nil
 	}
@@ -203,6 +215,7 @@ func (c *Client) Process(ctx context.Context, book alib.Book) (*PreparedBook, er
 		return nil, fmt.Errorf("create temporary photo directory: %w", err)
 	}
 	prepared.temporaryDirectory = directory
+	prepared.cleanup = func() error { return os.RemoveAll(directory) }
 	if prepareErr := c.preparePhotos(ctx, prepared, safeReferer(book.BuyURL)); prepareErr != nil {
 		return nil, errors.Join(prepareErr, prepared.Cleanup())
 	}
@@ -276,7 +289,7 @@ func (c *Client) processPhoto(
 			return photoResult{}, "", err
 		}
 		if _, found := visited[currentURL]; found {
-			return photoResult{}, "", errors.New("photo META refresh cycle")
+			return photoResult{}, "", photoFailure("source_meta", "redirect_cycle", 0, nil)
 		}
 		visited[currentURL] = struct{}{}
 
@@ -734,10 +747,6 @@ func (e *photoFailureError) Unwrap() error {
 }
 
 func photoFailure(stage, category string, status int, err error) error {
-	if err != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
-		return err
-	}
-
 	return &photoFailureError{
 		photoFailureDetails: photoFailureDetails{stage: stage, category: category, status: status},
 		err:                 err,

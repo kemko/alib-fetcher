@@ -68,11 +68,10 @@ func ParseWithResult(reader io.Reader, baseURL *url.URL, contentType string) (Pa
 	}
 
 	state := parseState{
-		books:              make([]Book, 0),
-		seen:               make(map[string]struct{}),
-		failed:             make(map[string]struct{}),
-		failedOrder:        make([]string, 0),
-		recognizedListings: make(map[string]struct{}),
+		books:       make([]Book, 0),
+		seen:        make(map[string]struct{}),
+		failed:      make(map[string]struct{}),
+		failedOrder: make([]string, 0),
 	}
 	unresolvedCandidate := false
 	for node := range document.Descendants() {
@@ -86,7 +85,7 @@ func ParseWithResult(reader io.Reader, baseURL *url.URL, contentType string) (Pa
 
 	if len(state.books) == 0 {
 		if unresolvedCandidate ||
-			(len(state.recognizedListings) == 0 && len(state.failed) == 0 && !isEmptySearchResultsPage(document)) {
+			(len(state.seen) == 0 && len(state.failed) == 0 && !isEmptySearchResultsPage(document)) {
 			return ParseResult{}, ErrNoBooks
 		}
 	}
@@ -97,11 +96,10 @@ func ParseWithResult(reader io.Reader, baseURL *url.URL, contentType string) (Pa
 }
 
 type parseState struct {
-	seen               map[string]struct{}
-	failed             map[string]struct{}
-	recognizedListings map[string]struct{}
-	books              []Book
-	failedOrder        []string
+	seen        map[string]struct{}
+	failed      map[string]struct{}
+	books       []Book
+	failedOrder []string
 }
 
 func collectListing(state *parseState, node *html.Node, baseURL *url.URL) bool {
@@ -113,7 +111,7 @@ func collectListing(state *parseState, node *html.Node, baseURL *url.URL) bool {
 		if buyURL == "" {
 			return true
 		}
-		if _, succeeded := state.recognizedListings[buyURL]; succeeded {
+		if _, succeeded := state.seen[buyURL]; succeeded {
 			return false
 		}
 		if _, alreadyFailed := state.failed[buyURL]; !alreadyFailed {
@@ -123,7 +121,6 @@ func collectListing(state *parseState, node *html.Node, baseURL *url.URL) bool {
 		return false
 	}
 
-	state.recognizedListings[book.BuyURL] = struct{}{}
 	delete(state.failed, book.BuyURL)
 	if _, exists := state.seen[book.BuyURL]; exists {
 		return false

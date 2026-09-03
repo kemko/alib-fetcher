@@ -224,7 +224,7 @@ func TestSafeReferer_rejectsUnsafeURLsAndStripsFragments(t *testing.T) {
 	require.Empty(t, safeReferer("javascript:alert(1)"))
 }
 
-func TestProcess_leavesMalformedAndCyclicMetaAndOversizedFilesUnprocessed(t *testing.T) {
+func TestProcess_reportsMetaAndDownloadFailures(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/bad-meta":
@@ -242,16 +242,23 @@ func TestProcess_leavesMalformedAndCyclicMetaAndOversizedFilesUnprocessed(t *tes
 	}))
 	defer server.Close()
 	client := testClient(t, server)
-	prepared, err := client.Process(context.Background(), alib.Book{Photos: []alib.Photo{
-		{URL: "http://photo.test/bad-meta"},
-		{URL: "http://photo.test/cycle-a"},
-		{URL: "http://photo.test/large"},
-	}})
-	require.Error(t, err)
-	require.Nil(t, prepared)
+	testCases := map[string]struct {
+		path     string
+		stage    string
+		category string
+	}{
+		"malformed META refresh": {path: "/bad-meta", stage: "source_meta", category: "meta_redirect"},
+		"META refresh cycle":     {path: "/cycle-a", stage: "source_meta", category: "redirect_cycle"},
+		"oversized source":       {path: "/large", stage: "source_download", category: "read"},
+	}
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			requireProcessFailure(t, client, "http://photo.test"+testCase.path, testCase.stage, testCase.category)
+		})
+	}
 }
 
-func TestProcess_rejectsSSRFAndSlinkResponseErrors(t *testing.T) {
+func TestProcess_rejectsRestrictedSourceURL(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path == "/photo" {
 			writeBytes(t, writer, []byte("\xff\xd8\xff\xe0"))
@@ -261,36 +268,34 @@ func TestProcess_rejectsSSRFAndSlinkResponseErrors(t *testing.T) {
 	}))
 	defer server.Close()
 	client := testClient(t, server)
-	prepared, err := client.Process(context.Background(), alib.Book{Photos: []alib.Photo{
-		{URL: "http://127.0.0.1/photo"},
-		{URL: "http://photo.test/photo"},
-	}})
-	require.Error(t, err)
-	require.Nil(t, prepared)
+	requireProcessFailure(t, client, "http://127.0.0.1/photo", "source_download", "request")
 }
 
 func TestProcess_rejectsOversizedAndNonHTTPSlinkResponses(t *testing.T) {
-	var uploadCount atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == "/photo" {
-			writeBytes(t, writer, []byte("GIF89a"))
-			return
-		}
-		if uploadCount.Add(1) == 2 {
-			writeText(t, writer, `{"url":"ftp://slink.example/image"}`)
-			return
-		}
-		writer.Header().Set("Content-Type", "application/json")
-		writeText(t, writer, `{"url":"`+strings.Repeat("x", maxUploadResponse)+`"}`)
-	}))
-	defer server.Close()
-	client := testClient(t, server)
-	prepared, err := client.Process(context.Background(), alib.Book{Photos: []alib.Photo{
-		{URL: "http://photo.test/photo"},
-		{URL: "http://photo.test/photo?kind=scheme"},
-	}})
-	require.Error(t, err)
-	require.Nil(t, prepared)
+	testCases := map[string]struct {
+		response string
+		category string
+	}{
+		"oversized response": {
+			response: `{"url":"` + strings.Repeat("x", maxUploadResponse) + `"}`,
+			category: "response_too_large",
+		},
+		"non-HTTP URL": {response: `{"url":"ftp://slink.example/image"}`, category: "response_url"},
+	}
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if request.URL.Path == "/photo" {
+					writeBytes(t, writer, []byte("GIF89a"))
+					return
+				}
+				writer.Header().Set("Content-Type", "application/json")
+				writeText(t, writer, testCase.response)
+			}))
+			t.Cleanup(server.Close)
+			requireProcessFailure(t, testClient(t, server), "http://photo.test/photo", "slink_upload", testCase.category)
+		})
+	}
 }
 
 func TestProcess_returnsContextCancellation(t *testing.T) {
@@ -392,26 +397,35 @@ func TestProcess_rejectsRestrictedSourceAddressesBeforeDial(t *testing.T) {
 }
 
 func TestProcess_rejectsRestrictedHTTPAndMetaRedirects(t *testing.T) {
-	var requestCount atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		requestCount.Add(1)
-		if request.URL.Path == "/http" {
-			http.Redirect(writer, request, "http://127.0.0.1/private", http.StatusFound)
-			return
-		}
-		writeText(t, writer, `<meta http-equiv="refresh" content="0;url=http://192.168.1.1/private">`)
-	}))
-	defer server.Close()
-	client := testClient(t, server)
-
-	prepared, err := client.Process(context.Background(), alib.Book{Photos: []alib.Photo{
-		{URL: "http://photo.test/http"},
-		{URL: "http://photo.test/meta"},
-	}})
-
-	require.Error(t, err)
-	require.Nil(t, prepared)
-	require.EqualValues(t, 1, requestCount.Load())
+	testCases := map[string]struct {
+		path     string
+		category string
+	}{
+		"HTTP": {path: "/http", category: "request"},
+		"META": {path: "/meta", category: "request"},
+	}
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			var requestCount atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				requestCount.Add(1)
+				if request.URL.Path == "/http" {
+					http.Redirect(writer, request, "http://127.0.0.1/private", http.StatusFound)
+					return
+				}
+				writeText(t, writer, `<meta http-equiv="refresh" content="0;url=http://192.168.1.1/private">`)
+			}))
+			t.Cleanup(server.Close)
+			requireProcessFailure(
+				t,
+				testClient(t, server),
+				"http://photo.test"+testCase.path,
+				"source_download",
+				testCase.category,
+			)
+			require.EqualValues(t, 1, requestCount.Load())
+		})
+	}
 }
 
 func TestProcess_dialsTheValidatedAddress(t *testing.T) {
@@ -541,12 +555,13 @@ func TestProcess_honorsCancellationAndCleansTemporaryFilesDuringNetworkOperation
 }
 
 func TestProcess_honorsTimeoutDuringDNSLookup(t *testing.T) {
+	var logs bytes.Buffer
 	client, err := NewClientWithOptions(
 		"https://slink.example",
 		"sk_key",
 		"tag",
 		50*time.Millisecond,
-		slog.New(slog.DiscardHandler),
+		slog.New(slog.NewJSONHandler(&logs, nil)),
 		Options{LookupIP: func(ctx context.Context, _ string) ([]net.IP, error) {
 			<-ctx.Done()
 
@@ -563,6 +578,8 @@ func TestProcess_honorsTimeoutDuringDNSLookup(t *testing.T) {
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.Less(t, time.Since(startedAt), time.Second)
 	require.Nil(t, prepared)
+	require.Contains(t, logs.String(), `"stage":"source_download"`)
+	require.Contains(t, logs.String(), `"error_category":"request"`)
 }
 
 func TestSaveDownloadedFile_enforcesDownloadBoundary(t *testing.T) {
@@ -575,6 +592,26 @@ func TestSaveDownloadedFile_enforcesDownloadBoundary(t *testing.T) {
 	_, err = saveDownloadedFile(overDirectory, bytes.NewReader(make([]byte, maxDownloadBytes+1)))
 	require.ErrorContains(t, err, "exceeds")
 	entries, readErr := os.ReadDir(overDirectory)
+	require.NoError(t, readErr)
+	require.Empty(t, entries)
+}
+
+func requireProcessFailure(t *testing.T, client *Client, rawURL, stage, category string) {
+	t.Helper()
+	temporaryRoot := t.TempDir()
+	t.Setenv("TMPDIR", temporaryRoot)
+
+	prepared, err := client.Process(context.Background(), alib.Book{
+		Photos: []alib.Photo{{URL: rawURL}},
+	})
+
+	require.Error(t, err)
+	require.Nil(t, prepared)
+	details := photoFailureDetailsFromError(err)
+	require.Equal(t, stage, details.stage)
+	require.Equal(t, category, details.category)
+	require.Zero(t, details.status)
+	entries, readErr := os.ReadDir(temporaryRoot)
 	require.NoError(t, readErr)
 	require.Empty(t, entries)
 }

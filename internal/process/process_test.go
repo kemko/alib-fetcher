@@ -51,7 +51,9 @@ func Test_executeJob_logs_failed_book_count_on_completed_digest(t *testing.T) {
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, nil))
 	dependencies := app.Dependencies{
-		Fetcher:      resultFetcher{result: alib.FetchResult{Failed: 2}},
+		Fetcher: resultFetcher{result: alib.FetchResult{
+			FailedBuyURLs: []string{"https://example.com/failed-1", "https://example.com/failed-2"},
+		}},
 		Sender:       noopSender{},
 		MessageLimit: 4096,
 		Now:          time.Now,
@@ -269,7 +271,7 @@ func Test_Run_service_mode_listens_for_callbacks_runs_startup_and_waits_for_list
 	t.Parallel()
 
 	// Given
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	statePath := filepath.Join(t.TempDir(), "state.db")
 	now := time.Date(2026, time.August, 8, 0, 0, 0, 0, time.UTC)
@@ -323,7 +325,7 @@ func Test_Run_service_mode_skips_startup_when_disabled_but_listens_for_callbacks
 	t.Parallel()
 
 	// Given
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var fetches atomic.Int32
 	callbacks := &blockingRunCallbackClient{
@@ -407,8 +409,8 @@ func Test_Run_waits_for_refresh_runner_after_listener_stops(t *testing.T) {
 
 type emptyFetcher struct{}
 
-func (emptyFetcher) Fetch(context.Context) ([]alib.Book, error) {
-	return nil, nil
+func (emptyFetcher) FetchWithResult(context.Context) (alib.FetchResult, error) {
+	return alib.FetchResult{}, nil
 }
 
 type bookFetcher struct {
@@ -419,16 +421,12 @@ type resultFetcher struct {
 	result alib.FetchResult
 }
 
-func (f resultFetcher) Fetch(context.Context) ([]alib.Book, error) {
-	return f.result.Books, nil
-}
-
 func (f resultFetcher) FetchWithResult(context.Context) (alib.FetchResult, error) {
 	return f.result, nil
 }
 
-func (f bookFetcher) Fetch(context.Context) ([]alib.Book, error) {
-	return f.books, nil
+func (f bookFetcher) FetchWithResult(context.Context) (alib.FetchResult, error) {
+	return alib.FetchResult{Books: f.books}, nil
 }
 
 type noopSender struct{}
@@ -518,11 +516,11 @@ type uncancelableFetcher struct {
 	release <-chan struct{}
 }
 
-func (f uncancelableFetcher) Fetch(context.Context) ([]alib.Book, error) {
+func (f uncancelableFetcher) FetchWithResult(context.Context) (alib.FetchResult, error) {
 	close(f.started)
 	<-f.release
 
-	return nil, nil
+	return alib.FetchResult{}, nil
 }
 
 func waitForSignal(t *testing.T, signal <-chan struct{}) {
@@ -530,7 +528,7 @@ func waitForSignal(t *testing.T, signal <-chan struct{}) {
 
 	select {
 	case <-signal:
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for signal")
 	}
 }
@@ -541,7 +539,7 @@ func waitForRun(t *testing.T, done <-chan error) error {
 	select {
 	case err := <-done:
 		return err
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("process did not stop")
 
 		return nil

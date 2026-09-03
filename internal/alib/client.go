@@ -28,8 +28,8 @@ var errResponseTooLarge = fmt.Errorf("alib response exceeds %d bytes", maxPageRe
 
 // FetchResult contains successfully fetched books and failed listing identities.
 type FetchResult struct {
-	Books  []Book
-	Failed int
+	Books         []Book
+	FailedBuyURLs []string
 }
 
 // Client fetches book listings from configured Alib.ru pages.
@@ -91,16 +91,6 @@ func NewClient(rawURLs string, timeout, requestInterval time.Duration, logger *s
 	}, nil
 }
 
-// Fetch downloads all configured pages and then parses successful responses in order.
-func (c *Client) Fetch(ctx context.Context) ([]Book, error) {
-	result, err := c.FetchWithResult(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	return result.Books, nil
-}
-
 // FetchWithResult downloads all configured pages and returns partial listing failures.
 func (c *Client) FetchWithResult(ctx context.Context) (FetchResult, error) {
 	downloaded, pageErrors, err := c.downloadPages(ctx)
@@ -116,7 +106,7 @@ func (c *Client) FetchWithResult(ctx context.Context) (FetchResult, error) {
 		return FetchResult{}, errors.Join(pageErrors...)
 	}
 
-	return FetchResult{Books: books, Failed: len(failed)}, nil
+	return FetchResult{Books: books, FailedBuyURLs: failed}, nil
 }
 
 func (c *Client) downloadPages(ctx context.Context) ([]downloadedPage, []error, error) {
@@ -150,12 +140,13 @@ func (c *Client) downloadPages(ctx context.Context) ([]downloadedPage, []error, 
 func (c *Client) parsePages(
 	ctx context.Context,
 	pages []downloadedPage,
-) ([]Book, map[string]struct{}, int, []error, error) {
+) ([]Book, []string, int, []error, error) {
 	books := make([]Book, 0)
 	failed := make(map[string]struct{})
 	pageErrors := make([]error, 0, len(pages))
 	parsedPages := 0
 	seen := make(map[string]struct{})
+	failedOrder := make([]string, 0)
 	for _, page := range pages {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, 0, nil, err
@@ -175,29 +166,34 @@ func (c *Client) parsePages(
 		c.logger.InfoContext(ctx, "alib.page_parsed",
 			slog.Int(logKeyIndex, page.index), slog.String(logKeyURL, page.endpoint.String()),
 			slog.Int(logKeyBooks, len(pageResult.Books)))
-		mergePageResult(&books, &failed, &seen, pageResult)
+		mergePageResult(&books, failed, seen, &failedOrder, pageResult)
 	}
 
-	return books, failed, parsedPages, pageErrors, nil
+	return books, remainingFailures(failedOrder, failed), parsedPages, pageErrors, nil
 }
 
 func mergePageResult(
 	books *[]Book,
-	failed *map[string]struct{},
-	seen *map[string]struct{},
+	failed map[string]struct{},
+	seen map[string]struct{},
+	failedOrder *[]string,
 	page ParseResult,
 ) {
 	for _, buyURL := range page.FailedBuyURLs {
-		if _, succeeded := (*seen)[buyURL]; !succeeded {
-			(*failed)[buyURL] = struct{}{}
+		if _, succeeded := seen[buyURL]; succeeded {
+			continue
+		}
+		if _, alreadyFailed := failed[buyURL]; !alreadyFailed {
+			*failedOrder = append(*failedOrder, buyURL)
+			failed[buyURL] = struct{}{}
 		}
 	}
 	for _, book := range page.Books {
-		delete(*failed, book.BuyURL)
-		if _, exists := (*seen)[book.BuyURL]; exists {
+		delete(failed, book.BuyURL)
+		if _, exists := seen[book.BuyURL]; exists {
 			continue
 		}
-		(*seen)[book.BuyURL] = struct{}{}
+		seen[book.BuyURL] = struct{}{}
 		*books = append(*books, book)
 	}
 }

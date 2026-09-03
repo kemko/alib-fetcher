@@ -158,31 +158,36 @@ type countingFetcher struct {
 	calls *atomic.Int32
 }
 
-func (f countingFetcher) Fetch(context.Context) ([]alib.Book, error) {
+func (f countingFetcher) FetchWithResult(context.Context) (alib.FetchResult, error) {
 	f.calls.Add(1)
 
-	return nil, nil
+	return alib.FetchResult{}, nil
 }
 
 type blockingFetcher struct {
-	calls   *atomic.Int32
-	started chan<- struct{}
-	release <-chan struct{}
-	once    sync.Once
+	calls    *atomic.Int32
+	started  chan<- struct{}
+	release  <-chan struct{}
+	deadline chan<- bool
+	once     sync.Once
 }
 
-func (f *blockingFetcher) Fetch(ctx context.Context) ([]alib.Book, error) {
+func (f *blockingFetcher) FetchWithResult(ctx context.Context) (alib.FetchResult, error) {
 	if f.calls != nil {
 		f.calls.Add(1)
+	}
+	if f.deadline != nil {
+		_, hasDeadline := ctx.Deadline()
+		f.deadline <- hasDeadline
 	}
 	f.once.Do(func() {
 		close(f.started)
 	})
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return alib.FetchResult{}, ctx.Err()
 	case <-f.release:
-		return nil, nil
+		return alib.FetchResult{}, nil
 	}
 }
 
@@ -190,6 +195,6 @@ type errorFetcher struct {
 	err error
 }
 
-func (f errorFetcher) Fetch(context.Context) ([]alib.Book, error) {
-	return nil, f.err
+func (f errorFetcher) FetchWithResult(context.Context) (alib.FetchResult, error) {
+	return alib.FetchResult{}, f.err
 }
