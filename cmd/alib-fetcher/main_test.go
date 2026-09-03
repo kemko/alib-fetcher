@@ -479,7 +479,7 @@ func Test_run_forget_latest_documented_cli_scenario_deletes_latest_records_witho
 	require.Equal(t, []alib.Book{books[0], books[1]}, pending)
 }
 
-func Test_run_sends_only_first_wired_message_with_sound(t *testing.T) {
+func Test_run_sends_only_last_wired_message_with_sound(t *testing.T) {
 	// Given
 	useOnceMode(t)
 
@@ -557,7 +557,7 @@ func Test_run_sends_only_first_wired_message_with_sound(t *testing.T) {
 		} else {
 			require.NotContains(t, payload.RichMessage.HTML, "<b>Новые книги на Alib.ru</b>")
 		}
-		if index == 0 {
+		if index == len(payloads)-1 {
 			require.False(t, payload.DisableNotification)
 		} else {
 			require.True(t, payload.DisableNotification)

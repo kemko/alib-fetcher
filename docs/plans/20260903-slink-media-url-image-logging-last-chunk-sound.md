@@ -50,12 +50,12 @@
 - Modify: `internal/app/service_test.go`
 - Modify: `cmd/alib-fetcher/main_test.go`
 
-- [ ] Обновить app-level тесты для одного, двух и трёх chunks: ожидаемые silent-флаги `false, true` заменить на `true, false`; для трёх chunks ожидать `true, true, false`.
-- [ ] Проверить retry: повтор одного chunk сохраняет его silent-флаг, а звук получает только финальный chunk текущей отправки.
-- [ ] Сохранить `attachRefresh` только на последнем chunk и acknowledgement после успешной отправки.
-- [ ] Изменить вычисление `silent` на `index < len(chunks)-1`.
-- [ ] Обновить end-to-end проверку `disable_notification` в `main_test.go`.
-- [ ] Выполнить `make test`; исправить все ошибки до Task 2.
+- [x] Обновить app-level тесты для одного, двух и трёх chunks: ожидаемые silent-флаги `false, true` заменить на `true, false`; для трёх chunks ожидать `true, true, false`.
+- [x] Проверить retry: повтор одного chunk сохраняет его silent-флаг, а звук получает только финальный chunk текущей отправки.
+- [x] Сохранить `attachRefresh` только на последнем chunk и acknowledgement после успешной отправки.
+- [x] Изменить вычисление `silent` на `index < len(chunks)-1`.
+- [x] Обновить end-to-end проверку `disable_notification` в `main_test.go`.
+- [x] Выполнить `make test`; исправить все ошибки до Task 2.
 
 ### Task 2: Преобразовывать Slink share URL в проверенный прямой media URL
 
