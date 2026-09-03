@@ -97,9 +97,11 @@ func Test_startCallbackListening_runs_digest_and_removes_old_button_before_new_s
 	require.NoError(t, err)
 	require.Empty(t, pending)
 	require.Len(t, sender.messages, 1)
-	require.Equal(t, []callbackAnswer{{id: "callback-1", text: ""}}, client.answersSnapshot())
+	require.Equal(t, []callbackAnswer{{id: "callback-1", text: refreshStartedText}}, client.answersSnapshot())
 	require.Equal(t, []removedReplyMarkup{{chatID: -100123, messageID: 77}}, client.removalsSnapshot())
-	require.Equal(t, []string{"remove", "send", "answer"}, events.snapshot())
+	eventsSnapshot := events.snapshot()
+	require.Contains(t, eventsSnapshot, "answer")
+	require.Less(t, eventIndex(eventsSnapshot, "remove"), eventIndex(eventsSnapshot, "send"))
 }
 
 func Test_handleRefreshCallback_leaves_old_button_when_digest_sends_no_books(t *testing.T) {
@@ -127,7 +129,7 @@ func Test_handleRefreshCallback_leaves_old_button_when_digest_sends_no_books(t *
 	runner.wait()
 
 	// Then
-	require.Equal(t, []callbackAnswer{{id: "callback-1", text: refreshNoBooksText}}, client.answersSnapshot())
+	require.Equal(t, []callbackAnswer{{id: "callback-1", text: refreshStartedText}}, client.answersSnapshot())
 	require.Empty(t, client.removalsSnapshot())
 	require.Empty(t, sender.messages)
 }
@@ -186,7 +188,7 @@ func Test_handleRefreshCallback_answers_duplicate_refresh_while_background_diges
 		MessageID:     77,
 	}, slog.New(slog.DiscardHandler))
 	waitForSignal(t, digestStarted)
-	require.Empty(t, client.answersSnapshot())
+	require.Equal(t, []callbackAnswer{{id: "callback-1", text: refreshStartedText}}, client.answersSnapshot())
 	handleRefreshCallback(ctx, client, runner, telegram.Callback{
 		ID:            "callback-2",
 		Data:          telegram.RefreshCallbackData,
@@ -198,12 +200,12 @@ func Test_handleRefreshCallback_answers_duplicate_refresh_while_background_diges
 
 	// Then
 	require.Equal(t, []callbackAnswer{
+		{id: "callback-1", text: refreshStartedText},
 		{id: "callback-2", text: refreshAlreadyRunningText},
-		{id: "callback-1", text: refreshNoBooksText},
 	}, client.answersSnapshot())
 }
 
-func Test_handleRefreshCallback_hides_digest_error_details_after_digest_finishes(t *testing.T) {
+func Test_handleRefreshCallback_answers_immediately_without_digest_result(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -226,14 +228,46 @@ func Test_handleRefreshCallback_hides_digest_error_details_after_digest_finishes
 	runner.wait()
 
 	// Then
-	require.Equal(t, []callbackAnswer{{id: "callback-1", text: refreshFailedText}}, client.answersSnapshot())
+	require.Equal(t, []callbackAnswer{{id: "callback-1", text: refreshStartedText}}, client.answersSnapshot())
 	require.Empty(t, client.removalsSnapshot())
 }
 
-func Test_handleRefreshCallback_times_out_before_callback_expires(t *testing.T) {
+func Test_handleRefreshCallback_continues_after_callback_is_answered(t *testing.T) {
 	t.Parallel()
 
 	// Given
+	digestStarted := make(chan struct{})
+	releaseDigest := make(chan struct{})
+	client := &recordingCallbackClient{}
+	runner := &digestRunner{dependencies: app.Dependencies{
+		Fetcher:      &blockingFetcher{started: digestStarted, release: releaseDigest},
+		Sender:       noopSender{},
+		MessageLimit: 4096,
+		Now:          time.Now,
+	}, statePath: filepath.Join(t.TempDir(), "state.db"), logger: slog.New(slog.DiscardHandler)}
+
+	// When
+	handleRefreshCallback(context.Background(), client, runner, telegram.Callback{
+		ID:            "callback-1",
+		Data:          telegram.RefreshCallbackData,
+		MessageChatID: -100123,
+		MessageID:     77,
+	}, slog.New(slog.DiscardHandler))
+	waitForSignal(t, digestStarted)
+	require.Equal(t, []callbackAnswer{{id: "callback-1", text: refreshStartedText}}, client.answersSnapshot())
+	close(releaseDigest)
+	runner.wait()
+
+	// Then
+	require.Equal(t, []callbackAnswer{{id: "callback-1", text: refreshStartedText}}, client.answersSnapshot())
+	require.Empty(t, client.removalsSnapshot())
+}
+
+func Test_handleRefreshCallback_cancels_background_digest_on_shutdown(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	ctx, cancel := context.WithCancel(context.Background())
 	digestStarted := make(chan struct{})
 	client := &recordingCallbackClient{}
 	runner := &digestRunner{dependencies: app.Dependencies{
@@ -244,18 +278,19 @@ func Test_handleRefreshCallback_times_out_before_callback_expires(t *testing.T) 
 	}, statePath: filepath.Join(t.TempDir(), "state.db"), logger: slog.New(slog.DiscardHandler)}
 
 	// When
-	handleRefreshCallbackWithin(context.Background(), client, runner, telegram.Callback{
+	handleRefreshCallback(ctx, client, runner, telegram.Callback{
 		ID:            "callback-1",
 		Data:          telegram.RefreshCallbackData,
 		MessageChatID: -100123,
 		MessageID:     77,
-	}, slog.New(slog.DiscardHandler), 250*time.Millisecond)
+	}, slog.New(slog.DiscardHandler))
 	waitForSignal(t, digestStarted)
+	require.Equal(t, []callbackAnswer{{id: "callback-1", text: refreshStartedText}}, client.answersSnapshot())
+	cancel()
 	runner.wait()
 
 	// Then
-	require.Equal(t, []callbackAnswer{{id: "callback-1", text: refreshFailedText}}, client.answersSnapshot())
-	require.Empty(t, client.removalsSnapshot())
+	require.Equal(t, []callbackAnswer{{id: "callback-1", text: refreshStartedText}}, client.answersSnapshot())
 }
 
 func Test_handleRefreshCallback_prefers_error_status_after_discovering_new_book(t *testing.T) {
@@ -282,7 +317,7 @@ func Test_handleRefreshCallback_prefers_error_status_after_discovering_new_book(
 	runner.wait()
 
 	// Then
-	require.Equal(t, []callbackAnswer{{id: "callback-1", text: refreshFailedText}}, client.answersSnapshot())
+	require.Equal(t, []callbackAnswer{{id: "callback-1", text: refreshStartedText}}, client.answersSnapshot())
 	require.Len(t, sender.messages, 1)
 }
 
@@ -501,6 +536,16 @@ func (e *recordedEvents) snapshot() []string {
 	defer e.mu.Unlock()
 
 	return append([]string(nil), e.items...)
+}
+
+func eventIndex(events []string, wanted string) int {
+	for index, event := range events {
+		if event == wanted {
+			return index
+		}
+	}
+
+	return -1
 }
 
 func waitForCallbackLoop(t *testing.T, done <-chan struct{}) {

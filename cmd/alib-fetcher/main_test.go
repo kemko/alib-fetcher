@@ -169,7 +169,7 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 	}
 }
 
-func Test_run_enablesSlinkPhotoProcessorFromEnvironment(t *testing.T) {
+func Test_run_isolatesSlinkPhotoProcessorFailure(t *testing.T) {
 	// Given
 	useOnceMode(t)
 	alibServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
@@ -198,8 +198,9 @@ func Test_run_enablesSlinkPhotoProcessorFromEnvironment(t *testing.T) {
 	err := run(logger)
 
 	// Then
-	require.ErrorContains(t, err, "prepare photos")
-	require.Empty(t, telegramRequests)
+	require.NoError(t, err)
+	request := <-telegramRequests
+	require.Contains(t, request.Message.RichMessage.HTML, "Не удалось обработать книг: 1")
 	require.Contains(t, logs.String(), `"msg":"slink.photo_failed"`)
 	require.NotContains(t, logs.String(), "sk_main-wiring-secret")
 }

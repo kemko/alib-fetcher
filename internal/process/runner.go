@@ -45,7 +45,6 @@ func (r *digestRunner) runScheduled(ctx context.Context) {
 func (r *digestRunner) tryStartRefresh(
 	ctx context.Context,
 	beforeDelivery func(context.Context) error,
-	onComplete func(app.Result, error),
 ) bool {
 	if !r.lock.TryLock() {
 		return false
@@ -55,12 +54,9 @@ func (r *digestRunner) tryStartRefresh(
 	go func() {
 		defer r.refreshRuns.Done()
 
-		result, err := r.runLocked(ctx, beforeDelivery)
+		_, err := r.runLocked(ctx, beforeDelivery)
 		r.logFailure(ctx, triggerRefresh, err)
 		r.lock.Unlock()
-		if onComplete != nil {
-			onComplete(result, err)
-		}
 	}()
 
 	return true

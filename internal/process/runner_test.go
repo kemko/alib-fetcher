@@ -13,8 +13,6 @@ import (
 
 	"github.com/kemko/alib-fetcher/internal/alib"
 	"github.com/kemko/alib-fetcher/internal/app"
-	"github.com/kemko/alib-fetcher/internal/store"
-
 	"github.com/stretchr/testify/require"
 )
 
@@ -67,7 +65,7 @@ func Test_digestRunner_shares_lock_across_startup_scheduled_and_refresh_digests(
 	}()
 	waitForSignal(t, digestStarted)
 	runner.runScheduled(ctx)
-	refreshStarted := runner.tryStartRefresh(ctx, nil, nil)
+	refreshStarted := runner.tryStartRefresh(ctx, nil)
 	close(releaseDigest)
 	waitForSignal(t, startupDone)
 	runner.wait()
@@ -105,7 +103,7 @@ func Test_digestRunner_logs_trigger_when_digest_fails(t *testing.T) {
 			run: func(t *testing.T, ctx context.Context, runner *digestRunner) {
 				t.Helper()
 
-				require.True(t, runner.tryStartRefresh(ctx, nil, nil))
+				require.True(t, runner.tryStartRefresh(ctx, nil))
 				runner.wait()
 			},
 		},
@@ -135,103 +133,24 @@ func Test_digestRunner_logs_trigger_when_digest_fails(t *testing.T) {
 	}
 }
 
-func Test_digestRunner_passes_refresh_result_and_error_to_completion_hook(t *testing.T) {
-	t.Parallel()
-
-	// Given
-	ctx := context.Background()
-	book := alib.Book{Title: "Книга", BuyURL: "https://example.com/book"}
-	var result app.Result
-	var runErr error
-	runner := newDigestRunner(app.Dependencies{
-		Fetcher:      bookFetcher{books: []alib.Book{book}},
-		Sender:       noopSender{},
-		MessageLimit: 4096,
-		Now:          time.Now,
-	}, filepath.Join(t.TempDir(), "state.db"), slog.New(slog.DiscardHandler))
-
-	// When
-	require.True(t, runner.tryStartRefresh(ctx, nil, func(completed app.Result, err error) {
-		result = completed
-		runErr = err
-	}))
-	runner.wait()
-
-	// Then
-	require.Equal(t, app.Result{Fetched: 1, New: 1, Sent: 1}, result)
-	require.NoError(t, runErr)
-}
-
-func Test_digestRunner_releases_lock_before_refresh_completion_hook(t *testing.T) {
+func Test_digestRunner_releases_lock_after_refresh_digest_finishes(t *testing.T) {
 	t.Parallel()
 
 	// Given
 	var fetches atomic.Int32
-	completionStarted := make(chan struct{})
-	releaseCompletion := make(chan struct{})
 	runner := newDigestRunner(app.Dependencies{
 		Fetcher:      countingFetcher{calls: &fetches},
 		Sender:       noopSender{},
 		MessageLimit: 4096,
 		Now:          time.Now,
 	}, filepath.Join(t.TempDir(), "state.db"), slog.New(slog.DiscardHandler))
-	var releaseOnce sync.Once
-	release := func() {
-		releaseOnce.Do(func() { close(releaseCompletion) })
-	}
-	t.Cleanup(func() {
-		release()
-		runner.wait()
-	})
-
 	// When
-	require.True(t, runner.tryStartRefresh(context.Background(), nil, func(app.Result, error) {
-		close(completionStarted)
-		<-releaseCompletion
-	}))
-	waitForSignal(t, completionStarted)
+	require.True(t, runner.tryStartRefresh(context.Background(), nil))
+	runner.wait()
 	runner.runScheduled(context.Background())
 
 	// Then
 	require.Equal(t, int32(2), fetches.Load())
-	release()
-	runner.wait()
-}
-
-func Test_digestRunner_passes_partial_result_and_error_to_completion_hook(t *testing.T) {
-	t.Parallel()
-
-	// Given
-	ctx := context.Background()
-	now := time.Date(2026, time.August, 18, 0, 0, 0, 0, time.UTC)
-	statePath := filepath.Join(t.TempDir(), "state.db")
-	book := alib.Book{BuyURL: "https://example.com/old"}
-	state, err := store.Open(statePath, now)
-	require.NoError(t, err)
-	_, err = state.RecordDiscovered(ctx, []alib.Book{book}, now)
-	require.NoError(t, err)
-	require.NoError(t, state.MarkSent(ctx, []alib.Book{book}, now.Add(-15*24*time.Hour)))
-	require.NoError(t, state.Close())
-	fetchErr := errors.New("fetch failed")
-	var result app.Result
-	var runErr error
-	runner := newDigestRunner(app.Dependencies{
-		Fetcher:      errorFetcher{err: fetchErr},
-		Sender:       noopSender{},
-		MessageLimit: 4096,
-		Now:          func() time.Time { return now },
-	}, statePath, slog.New(slog.DiscardHandler))
-
-	// When
-	require.True(t, runner.tryStartRefresh(ctx, nil, func(completed app.Result, err error) {
-		result = completed
-		runErr = err
-	}))
-	runner.wait()
-
-	// Then
-	require.Equal(t, app.Result{Pruned: 1}, result)
-	require.ErrorIs(t, runErr, fetchErr)
 }
 
 type countingFetcher struct {
