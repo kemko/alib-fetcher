@@ -168,10 +168,10 @@ func renderBook(book alib.Book, options Options) string {
 	if condition := strings.TrimSpace(book.Condition); condition != "" {
 		details = append(details, renderMultilineText(condition))
 	}
-	if len(book.PhotoURLs) > 0 {
-		photoLinks := make([]string, 0, len(book.PhotoURLs))
-		for _, photoURL := range book.PhotoURLs {
-			photoLinks = append(photoLinks, renderLink(photoURL, "фото"))
+	if len(book.Photos) > 0 {
+		photoLinks := make([]string, 0, len(book.Photos))
+		for _, photo := range book.Photos {
+			photoLinks = append(photoLinks, renderLink(photo.URL, "фото"))
 		}
 		details = append(details, "Смотрите: "+strings.Join(photoLinks, " - "))
 	}

@@ -34,9 +34,9 @@ func Test_Render_formats_structured_listing_and_escapes_HTML(t *testing.T) {
 		Price:           "3 900 руб.",
 		Condition:       "Состояние: Отличное.\nКомплект <полный>.",
 		BuyURL:          "https://example.com/book?a=1&b=2",
-		PhotoURLs: []string{
-			"https://example.com/photo?id=1&size=large",
-			"https://example.com/photo?id=2",
+		Photos: []alib.Photo{
+			{URL: "https://example.com/photo?id=1&size=large", Caption: "фото"},
+			{URL: "https://example.com/photo?id=2", Caption: "фото"},
 		},
 	}
 	options := digest.Options{
@@ -647,7 +647,7 @@ func Test_Render_parses_and_sends_belyaev_listing_with_long_photo_urls(t *testin
 	require.Len(t, books, 1)
 	book := books[0]
 	require.Equal(t, "https://www.alib.ru/book-belyaev.html", book.BuyURL)
-	require.Len(t, book.PhotoURLs, 16)
+	require.Len(t, book.Photos, 16)
 	require.Equal(t, "Полное описание книги Беляева: издание включает лучшие произведения автора, подробные сведения о составе, состоянии и особенностях экземпляра.", book.Content)
 
 	// When
@@ -668,8 +668,8 @@ func Test_Render_parses_and_sends_belyaev_listing_with_long_photo_urls(t *testin
 		require.Contains(t, chunks[0].Text, book.Price)
 		require.Contains(t, chunks[0].Text, book.Condition)
 		require.Contains(t, chunks[0].Text, html.EscapeString(book.BuyURL))
-		for _, photoURL := range book.PhotoURLs {
-			require.Contains(t, chunks[0].Text, html.EscapeString(photoURL))
+		for _, photo := range book.Photos {
+			require.Contains(t, chunks[0].Text, html.EscapeString(photo.URL))
 		}
 		require.Equal(t, 16, strings.Count(chunks[0].Text, ">фото</a>"))
 	}
