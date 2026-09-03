@@ -887,12 +887,12 @@ func (f fakeFetcher) Fetch(context.Context) ([]alib.Book, error) {
 }
 
 type fakeState struct {
-	events       *[]string
-	recordErr    error
-	pendingErr   error
 	markedAt     time.Time
 	prunedBefore time.Time
 	recordedAt   time.Time
+	recordErr    error
+	pendingErr   error
+	events       *[]string
 	pending      []alib.Book
 	marked       []alib.Book
 	recorded     []alib.Book
@@ -925,6 +925,10 @@ func (f *fakeState) Pending(context.Context) ([]alib.Book, error) {
 		return nil, f.pendingErr
 	}
 	return f.pending, nil
+}
+
+func (*fakeState) SavePrepared(context.Context, alib.Book) error {
+	return nil
 }
 
 func (f *fakeState) MarkSent(ctx context.Context, books []alib.Book, sentAt time.Time) error {
