@@ -38,6 +38,8 @@ const (
 	logKeyIndex       = "index"
 )
 
+var publicIPv6Prefix = netip.MustParsePrefix("2000::/3")
+
 var nonPublicPrefixes = [...]netip.Prefix{
 	netip.MustParsePrefix("0.0.0.0/8"),
 	netip.MustParsePrefix("100.64.0.0/10"),
@@ -588,6 +590,9 @@ func restrictedIP(ip net.IP) bool {
 	}
 	address = address.Unmap()
 	if !address.IsGlobalUnicast() || address.IsPrivate() {
+		return true
+	}
+	if address.Is6() && !publicIPv6Prefix.Contains(address) {
 		return true
 	}
 	for _, prefix := range nonPublicPrefixes {

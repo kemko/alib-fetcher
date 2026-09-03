@@ -272,6 +272,8 @@ func TestProcess_rejectsRestrictedSourceAddressesBeforeDial(t *testing.T) {
 		{name: "literal reserved", rawURL: "http://240.0.0.1/photo"},
 		{name: "literal IPv6 documentation", rawURL: "http://[2001:db8::1]/photo"},
 		{name: "literal IPv6 translation", rawURL: "http://[64:ff9b::a9fe:a9fe]/photo"},
+		{name: "literal IPv6 site local", rawURL: "http://[fec0::1]/photo"},
+		{name: "literal IPv6 unallocated", rawURL: "http://[4000::1]/photo"},
 		{name: "literal multicast", rawURL: "http://224.0.0.1/photo"},
 		{name: "literal unspecified", rawURL: "http://0.0.0.0/photo"},
 		{name: "DNS loopback", rawURL: "http://photo.test/photo", resolved: net.ParseIP("127.0.0.1")},
@@ -279,6 +281,8 @@ func TestProcess_rejectsRestrictedSourceAddressesBeforeDial(t *testing.T) {
 		{name: "DNS link local", rawURL: "http://photo.test/photo", resolved: net.ParseIP("169.254.1.1")},
 		{name: "DNS shared", rawURL: "http://photo.test/photo", resolved: net.ParseIP("100.100.100.200")},
 		{name: "DNS documentation", rawURL: "http://photo.test/photo", resolved: net.ParseIP("203.0.113.10")},
+		{name: "DNS IPv6 site local", rawURL: "http://photo.test/photo", resolved: net.ParseIP("fec0::1")},
+		{name: "DNS IPv6 unallocated", rawURL: "http://photo.test/photo", resolved: net.ParseIP("4000::1")},
 		{name: "DNS multicast", rawURL: "http://photo.test/photo", resolved: net.ParseIP("224.0.0.1")},
 		{name: "DNS unspecified", rawURL: "http://photo.test/photo", resolved: net.ParseIP("0.0.0.0")},
 	}
