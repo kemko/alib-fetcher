@@ -82,13 +82,13 @@
 - Modify: `internal/slink/client_test.go`
 - Modify: `cmd/alib-fetcher/main_test.go`
 
-- [ ] Добавить INFO event `slink.photo_started` с `buy_url`, `index` и `total`.
-- [ ] Добавить INFO event `slink.photo_completed` с `buy_url`, `index`, `total`, `outcome` и, для изображения, конечным `media_url`.
-- [ ] Различать outcomes `uploaded`, `reused`, `duplicate` и `source_link`.
-- [ ] Дополнить `slink.photo_failed` полем `buy_url` и новым stage `slink_media`; сохранить `stage`, `error_category` и необязательный `http_status`.
-- [ ] Добавить тесты событий для upload, persisted reuse, duplicate, non-image и media-resolution failure.
-- [ ] Проверить отсутствие API key, source photo URL, приватного response body и временного пути во всех логах.
-- [ ] Выполнить `make test`; исправить все ошибки до Task 4.
+- [x] Добавить INFO event `slink.photo_started` с `buy_url`, `index` и `total`.
+- [x] Добавить INFO event `slink.photo_completed` с `buy_url`, `index`, `total`, `outcome` и, для изображения, конечным `media_url`.
+- [x] Различать outcomes `uploaded`, `reused`, `duplicate` и `source_link`.
+- [x] Дополнить `slink.photo_failed` полем `buy_url` и новым stage `slink_media`; сохранить `stage`, `error_category` и необязательный `http_status`.
+- [x] Добавить тесты событий для upload, persisted reuse, duplicate, non-image и media-resolution failure.
+- [x] Проверить отсутствие API key, source photo URL, приватного response body и временного пути во всех логах.
+- [x] Выполнить `make test`; исправить все ошибки до Task 4.
 
 ### Task 4: Закрепить полный сценарий и обновить документацию
 

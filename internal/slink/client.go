@@ -38,9 +38,20 @@ const (
 	logKeyError       = "error"
 	logKeyErrorCat    = "error_category"
 	logKeyErrorType   = "error_type"
+	logKeyBuyURL      = "buy_url"
 	logKeyIndex       = "index"
 	logKeyHTTPStatus  = "http_status"
 	logKeyStage       = "stage"
+	logKeyTotal       = "total"
+	logKeyOutcome     = "outcome"
+	logKeyMediaURL    = "media_url"
+)
+
+const (
+	photoOutcomeUploaded   = "uploaded"
+	photoOutcomeReused     = "reused"
+	photoOutcomeDuplicate  = "duplicate"
+	photoOutcomeSourceLink = "source_link"
 )
 
 // Options configures the HTTP and DNS dependencies of Client.
@@ -202,21 +213,26 @@ func (c *Client) Process(ctx context.Context, book alib.Book) (*PreparedBook, er
 
 func (c *Client) preparePhotos(ctx context.Context, prepared *PreparedBook, referer string) error {
 	cache := make(map[string]photoResult)
+	total := len(prepared.Book.Photos)
 	for index := range prepared.Book.Photos {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		c.logPhotoStarted(ctx, prepared.Book.BuyURL, index, total)
 		photo := &prepared.Book.Photos[index]
 		if result, found := cache[photo.URL]; found {
 			applyPhotoResult(photo, result)
+			result.outcome = photoOutcomeDuplicate
+			c.logPhotoCompleted(ctx, prepared.Book.BuyURL, index, total, result)
 			continue
 		}
 		result, processErr := c.preparePhoto(ctx, prepared.TemporaryDirectory(), *photo, referer)
 		if processErr != nil {
-			return c.handlePhotoFailure(ctx, index, processErr)
+			return c.handlePhotoFailure(ctx, prepared.Book.BuyURL, index, total, processErr)
 		}
 		applyPhotoResult(photo, result)
 		cache[photo.URL] = result
+		c.logPhotoCompleted(ctx, prepared.Book.BuyURL, index, total, result)
 	}
 
 	return nil
@@ -240,11 +256,11 @@ func (c *Client) preparePhoto(
 	return c.publishImage(ctx, file, result.contentType)
 }
 
-func (c *Client) handlePhotoFailure(ctx context.Context, index int, err error) error {
+func (c *Client) handlePhotoFailure(ctx context.Context, buyURL string, index, total int, err error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	c.logFailure(ctx, index, err)
+	c.logFailure(ctx, buyURL, index, total, err)
 
 	return err
 }
@@ -253,6 +269,7 @@ type photoResult struct {
 	slinkURL     string
 	slinkProfile string
 	contentType  string
+	outcome      string
 	nonImage     bool
 }
 
@@ -288,7 +305,11 @@ func (c *Client) processPhoto(
 		}
 		if !found {
 			if !isImageType(file.contentType) {
-				return photoResult{nonImage: true, slinkProfile: c.profile}, "", nil
+				return photoResult{
+					nonImage:     true,
+					slinkProfile: c.profile,
+					outcome:      photoOutcomeSourceLink,
+				}, "", nil
 			}
 			return photoResult{contentType: file.contentType}, file.path, nil
 		}
@@ -441,7 +462,11 @@ func (c *Client) publishImage(ctx context.Context, path, contentType string) (ph
 		return photoResult{}, err
 	}
 
-	return photoResult{slinkURL: mediaURL, slinkProfile: c.profile}, nil
+	return photoResult{
+		slinkURL:     mediaURL,
+		slinkProfile: c.profile,
+		outcome:      photoOutcomeUploaded,
+	}, nil
 }
 
 func multipartBody(path, contentType, tagID string) (io.Reader, int64, string, error) {
@@ -744,6 +769,7 @@ func (c *Client) reusableResult(photo alib.Photo) (photoResult, bool) {
 func (c *Client) resolvePersistedResult(ctx context.Context, photo alib.Photo) (photoResult, error) {
 	result := photoResultFromPhoto(photo)
 	if result.nonImage {
+		result.outcome = photoOutcomeReused
 		return result, nil
 	}
 	mediaURL, err := c.resolveMediaURL(ctx, result.slinkURL)
@@ -751,6 +777,7 @@ func (c *Client) resolvePersistedResult(ctx context.Context, photo alib.Photo) (
 		return photoResult{}, err
 	}
 	result.slinkURL = mediaURL
+	result.outcome = photoOutcomeReused
 
 	return result, nil
 }
@@ -770,10 +797,35 @@ func cloneBook(book alib.Book) alib.Book {
 	return book
 }
 
-func (c *Client) logFailure(ctx context.Context, index int, err error) {
+func (c *Client) logPhotoStarted(ctx context.Context, buyURL string, index, total int) {
+	c.logger.InfoContext(
+		ctx,
+		"slink.photo_started",
+		slog.String(logKeyBuyURL, buyURL),
+		slog.Int(logKeyIndex, index),
+		slog.Int(logKeyTotal, total),
+	)
+}
+
+func (c *Client) logPhotoCompleted(ctx context.Context, buyURL string, index, total int, result photoResult) {
+	attrs := []any{
+		slog.String(logKeyBuyURL, buyURL),
+		slog.Int(logKeyIndex, index),
+		slog.Int(logKeyTotal, total),
+		slog.String(logKeyOutcome, result.outcome),
+	}
+	if !result.nonImage && result.slinkURL != "" {
+		attrs = append(attrs, slog.String(logKeyMediaURL, result.slinkURL))
+	}
+	c.logger.InfoContext(ctx, "slink.photo_completed", attrs...)
+}
+
+func (c *Client) logFailure(ctx context.Context, buyURL string, index, total int, err error) {
 	failure := photoFailureDetailsFromError(err)
 	attrs := []any{
+		slog.String(logKeyBuyURL, buyURL),
 		slog.Int(logKeyIndex, index),
+		slog.Int(logKeyTotal, total),
 		slog.String(logKeyError, "photo processing failed"),
 		slog.String(logKeyErrorType, fmt.Sprintf("%T", err)),
 		slog.String(logKeyStage, failure.stage),

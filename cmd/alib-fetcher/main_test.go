@@ -324,12 +324,16 @@ func Test_run_endToEnd_isolatesSlinkSourceFailure(t *testing.T) {
 	require.NoError(t, state.Close())
 
 	logOutput := logs.String()
+	require.Contains(t, logOutput, `"msg":"slink.photo_started","buy_url":"`+alibServer.URL+`/good-buy","index":0,"total":1`)
+	require.Contains(t, logOutput, `"msg":"slink.photo_completed","buy_url":"`+alibServer.URL+`/good-buy","index":0,"total":1,"outcome":"uploaded","media_url":"http://slink.test/published/good.png"`)
 	require.Contains(t, logOutput, `"msg":"slink.photo_failed"`)
+	require.Contains(t, logOutput, `"buy_url":"`+alibServer.URL+`/bad-buy","index":0,"total":1`)
 	require.Contains(t, logOutput, `"stage":"source_download"`)
 	require.Contains(t, logOutput, `"http_status":403`)
 	require.Contains(t, logOutput, `"msg":"digest.completed"`)
 	require.Contains(t, logOutput, `"failed":1`)
 	require.NotContains(t, logOutput, apiKey)
+	require.NotContains(t, logOutput, "kind=good")
 	require.NotContains(t, logOutput, "kind=bad")
 }
 
