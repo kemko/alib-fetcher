@@ -17,6 +17,7 @@ import (
 	"github.com/kemko/alib-fetcher/internal/app"
 	"github.com/kemko/alib-fetcher/internal/config"
 	"github.com/kemko/alib-fetcher/internal/process"
+	"github.com/kemko/alib-fetcher/internal/slink"
 	"github.com/kemko/alib-fetcher/internal/telegram"
 )
 
@@ -75,13 +76,27 @@ func run(logger *slog.Logger) error {
 	if settings.FreshBooks != nil {
 		freshBooks = settings.FreshBooks
 	}
+	var photoProcessor app.PhotoProcessor
+	if settings.SlinkURL != "" {
+		photoProcessor, err = slink.NewClient(
+			settings.SlinkURL,
+			settings.SlinkAPIKey,
+			settings.SlinkTagID,
+			settings.HTTPTimeout,
+			logger,
+		)
+		if err != nil {
+			return err
+		}
+	}
 	dependencies := app.Dependencies{
-		Fetcher:      fetcher,
-		Sender:       telegramAdapter,
-		FreshBooks:   freshBooks,
-		Location:     settings.Location,
-		MessageLimit: settings.MessageLimit,
-		Now:          time.Now,
+		Fetcher:        fetcher,
+		Sender:         telegramAdapter,
+		FreshBooks:     freshBooks,
+		Location:       settings.Location,
+		MessageLimit:   settings.MessageLimit,
+		PhotoProcessor: photoProcessor,
+		Now:            time.Now,
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

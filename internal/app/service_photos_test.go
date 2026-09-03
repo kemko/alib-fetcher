@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"github.com/kemko/alib-fetcher/internal/app"
 	"github.com/kemko/alib-fetcher/internal/slink"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -178,6 +180,87 @@ func Test_Service_keepsPhotoPathUnchangedWithoutProcessor(t *testing.T) {
 	require.Equal(t, app.Result{Fetched: 1, New: 1, Sent: 1}, result)
 	require.Contains(t, sender.messages[0], `Смотрите: <a href="https://example.com/photo">Обложка</a>`)
 	require.NotContains(t, sender.messages[0], "tg-slideshow")
+}
+
+func Test_Service_integratesPhotoPreparationAndSlideshow(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/meta":
+			writer.Header().Set("Content-Type", "text/html")
+			_, err := io.WriteString(writer, `<meta http-equiv="REFRESH" content="0; URL=/image">`)
+			assert.NoError(t, err)
+		case "/image":
+			writer.Header().Set("Content-Type", "text/plain")
+			_, err := writer.Write([]byte("\x89PNG\r\n\x1a\n"))
+			assert.NoError(t, err)
+		case "/document":
+			writer.Header().Set("Content-Type", "text/plain")
+			_, err := io.WriteString(writer, "not an image")
+			assert.NoError(t, err)
+		case "/api/external/upload":
+			assert.Equal(t, "Bearer integration-api-key", request.Header.Get("Authorization"))
+			if err := request.ParseMultipartForm(1 << 20); !assert.NoError(t, err) {
+				return
+			}
+			assert.Equal(t, []string{"integration-tag"}, request.MultipartForm.Value["tagIds"])
+			writer.Header().Set("Content-Type", "application/json")
+			_, err := io.WriteString(writer, `{"url":"/published/image"}`)
+			assert.NoError(t, err)
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client, err := slink.NewClientWithOptions(
+		server.URL,
+		"integration-api-key",
+		"integration-tag",
+		time.Second,
+		logger,
+		slink.Options{
+			HTTPClient: &http.Client{Transport: rewriteTransport{target: server.URL}},
+			LookupIP: func(context.Context, string) ([]net.IP, error) {
+				return []net.IP{net.ParseIP("93.184.216.34")}, nil
+			},
+		},
+	)
+	require.NoError(t, err)
+	book := alib.Book{
+		Title:  "Книга",
+		BuyURL: "https://example.com/book",
+		Photos: []alib.Photo{
+			{URL: "http://photo.test/meta", Caption: "Обложка"},
+			{URL: "http://photo.test/document", Caption: "Документ"},
+		},
+	}
+	state := &photoState{fakeState: &fakeState{pending: []alib.Book{book}, recordedNew: 1}}
+	processor := client
+	sender := &fakeSender{}
+	service := app.NewService(app.Dependencies{
+		Fetcher:        fakeFetcher{books: []alib.Book{book}},
+		State:          state,
+		Sender:         sender,
+		PhotoProcessor: processor,
+		MessageLimit:   4096,
+		Now:            time.Now,
+	})
+
+	// When
+	result, err := service.Run(context.Background())
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, app.Result{Fetched: 1, New: 1, Sent: 1}, result)
+	require.Len(t, state.saved, 1)
+	require.Contains(t, sender.messages[0], `<tg-slideshow><img src="`+server.URL+`/published/image"/><figcaption>Обложка</figcaption></tg-slideshow>`)
+	require.Contains(t, sender.messages[0], `Смотрите: <a href="http://photo.test/document">Документ</a>`)
+	require.NotContains(t, sender.messages[0], "http://photo.test/meta")
+	require.NotContains(t, logs.String(), "integration-api-key")
 }
 
 type photoState struct {

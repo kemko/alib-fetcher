@@ -23,10 +23,17 @@ embedded bbolt database, which also stores the pending send queue.
 | `TELEGRAM_API_BASE` | no | `https://api.telegram.org` | Bot API base URL; custom/local servers require Bot API 10.1+ |
 | `HTTP_TIMEOUT` | no | `30s` | Positive Go duration applied to each external request |
 | `MESSAGE_LIMIT` | no | `32000` | Displayed Rich Message text rune limit, allowed range `64..32768` |
+| `SLINK_URL` | no | empty | HTTP(S) Slink base URL; empty disables image publishing |
+| `SLINK_API_KEY` | no | empty | Slink API key; required with the other Slink variables |
+| `SLINK_TAG_ID` | no | empty | UUID of the Slink `alib` tag; required with the other Slink variables |
 
 Configuration is validated before process startup. Invalid chat IDs, including
 plain text without `@`, an empty `@` username, whitespace, and numeric overflow,
 fail fast with an error naming `TELEGRAM_CHAT_ID`.
+Slink is disabled when all three `SLINK_*` variables are empty. A partial
+configuration fails fast naming the missing variable. `SLINK_URL` must be an
+HTTP(S) base URL without userinfo, query, or fragment, and `SLINK_TAG_ID` must
+be a UUID. API keys are never included in errors or logs.
 `ALIB_URL` accepts one URL or a comma-separated list. Surrounding whitespace is
 trimmed, URL order is preserved, and literal commas must be percent-encoded as
 `%2C`. URL userinfo is rejected. For example:
@@ -137,6 +144,23 @@ only in the first message.
 If the heading and first pending listing cannot fit together but the listing
 fits alone, the first message contains only the heading and the listing follows
 in a headerless message.
+
+When Slink is enabled, each source photo is downloaded through HTTP(S), including
+limited HTTP redirects and HTML `META refresh` redirects. Downloads are limited
+to 15 MiB. Images are uploaded sequentially to Slink with the `alib` tag;
+individual download, type-detection, redirect, or upload failures leave the
+original link in `Смотрите` and do not block the book. Successful image URLs are
+rendered before the purchase section as a Telegram `<tg-slideshow>` containing
+`<img src="..."/>` elements and one `<figcaption>` with unique source captions.
+The source order and repeated links are preserved. The operator must create the
+`alib` tag, use its UUID in `SLINK_TAG_ID`, create an API key, and enable
+`Auto-publish API uploads` for that Slink user.
+
+Photo files are stored in a separate temporary directory per book. The directory
+remains available while the prepared result is saved to bbolt, then is removed
+before rendering or Telegram delivery. Failed preparation or state writes also
+clean up the directory; successful Slink URLs are persisted so later digests do
+not upload the same source URL again.
 The first message uses the normal notification sound; all later messages are
 silent. Whenever a digest sends at least one message, the final message
 includes an inline `Обновить` button.

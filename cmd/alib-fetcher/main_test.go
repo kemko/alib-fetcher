@@ -641,6 +641,9 @@ func setEnvironmentAbsentDigestConfiguration(t *testing.T) {
 		"RUN_ON_STARTUP",
 		"FRESH_BOOKS",
 		"ALIB_REQUEST_INTERVAL",
+		"SLINK_URL",
+		"SLINK_API_KEY",
+		"SLINK_TAG_ID",
 	} {
 		unsetEnvironment(t, key)
 	}

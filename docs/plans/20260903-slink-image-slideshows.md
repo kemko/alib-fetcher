@@ -192,20 +192,20 @@ bbolt.
 - Modify: `docker-compose.yml`
 - Modify: `README.md`
 
-- [ ] Добавить `SLINK_URL`, `SLINK_API_KEY`, `SLINK_TAG_ID`; пустые значения отключают интеграцию, а
+- [x] Добавить `SLINK_URL`, `SLINK_API_KEY`, `SLINK_TAG_ID`; пустые значения отключают интеграцию, а
   частичная группа конфигурации завершается ошибкой с именем переменной.
-- [ ] Проверять `SLINK_URL` как HTTP(S) base URL без userinfo/query/fragment и `SLINK_TAG_ID` как UUID; API key не включать
+- [x] Проверять `SLINK_URL` как HTTP(S) base URL без userinfo/query/fragment и `SLINK_TAG_ID` как UUID; API key не включать
   в ошибки или логи.
-- [ ] Создавать Slink processor в `main` только при полной конфигурации, используя `HTTP_TIMEOUT` и
+- [x] Создавать Slink processor в `main` только при полной конфигурации, используя `HTTP_TIMEOUT` и
   общий structured logger.
-- [ ] Добавить интеграционный тест полного пути: Alib photo link → META refresh → image/non-image → Slink
+- [x] Добавить интеграционный тест полного пути: Alib photo link → META refresh → image/non-image → Slink
   upload/tag → bbolt save → temp cleanup → Telegram HTML; проверить отсутствие API key в логах.
-- [ ] Передать новые переменные через Compose без встраивания секретов в image и
+- [x] Передать новые переменные через Compose без встраивания секретов в image и
   смонтировать защищённый writable tmpfs на `/tmp` при read-only root filesystem.
-- [ ] Обновить README: переменные, обязательный тег `alib`, Auto-publish, best effort, META refresh, лимит 15 MiB,
+- [x] Обновить README: переменные, обязательный тег `alib`, Auto-publish, best effort, META refresh, лимит 15 MiB,
   жизненный цикл временных файлов, persistence и формат slideshow/caption.
-- [ ] Проверить Compose командой `docker compose config`.
-- [ ] Запустить `make test`; все тесты должны пройти до Task 6.
+- [x] Проверить Compose командой `docker compose config`.
+- [x] Запустить `make test`; все тесты должны пройти до Task 6.
 
 ### Task 6: Verify acceptance criteria
 
