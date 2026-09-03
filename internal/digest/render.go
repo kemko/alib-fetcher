@@ -19,18 +19,19 @@ const (
 	sectionBreak          = lineBreak + lineBreak
 	listingSeparator      = "<hr/>"
 	richMessageBlockLimit = 500
-	// The first listing is one paragraph; each later listing adds a divider and a paragraph.
-	maxListingsPerChunk = (richMessageBlockLimit + 1) / 2
 )
 
 // ErrMessageTooLong indicates that one listing cannot fit into a message.
 var ErrMessageTooLong = errors.New("digest item exceeds message limit")
 
 // Options controls message size and publication-year highlighting.
+//
+//nolint:govet // Keep the public rendering options grouped by concern.
 type Options struct {
 	LocalTime           time.Time
 	FreshBooksLowerYear *int
 	Limit               int
+	SlinkProfile        string
 }
 
 // Chunk is one Telegram message and the books acknowledged after it is sent.
@@ -62,6 +63,7 @@ func render(books []alib.Book, options Options, skipOversized bool) ([]Chunk, []
 	chunks := make([]Chunk, 0, 1)
 	skippedBuyURLs := make([]string, 0)
 	current := Chunk{Text: header, Books: make([]alib.Book, 0)}
+	currentBlocks := 0
 	for _, book := range books {
 		item := renderBook(book, options)
 		itemLimit := options.Limit
@@ -84,15 +86,25 @@ func render(books []alib.Book, options Options, skipOversized bool) ([]Chunk, []
 			separator = sectionBreak
 		}
 
-		if len(current.Books) >= maxListingsPerChunk ||
+		itemBlocks := richMessageBlocks(book, options)
+		candidateBlocks := currentBlocks + itemBlocks
+		if len(current.Books) > 0 {
+			candidateBlocks++
+		}
+		if candidateBlocks > richMessageBlockLimit ||
 			renderedRuneCount(current.Text+separator+item) > options.Limit {
 			chunks = append(chunks, current)
 			current = Chunk{Books: make([]alib.Book, 0)}
+			currentBlocks = 0
 			separator = ""
 		}
 
 		current.Text += separator + item
 		current.Books = append(current.Books, book)
+		if len(current.Books) > 1 {
+			currentBlocks++
+		}
+		currentBlocks += itemBlocks
 	}
 	if len(current.Books) == 0 {
 		return nil, skippedBuyURLs, nil
@@ -168,19 +180,87 @@ func renderBook(book alib.Book, options Options) string {
 	if condition := strings.TrimSpace(book.Condition); condition != "" {
 		details = append(details, renderMultilineText(condition))
 	}
-	if len(book.Photos) > 0 {
-		photoLinks := make([]string, 0, len(book.Photos))
-		for _, photo := range book.Photos {
-			photoLinks = append(photoLinks, renderLink(photo.URL, "фото"))
-		}
+	photoLinks, slideshowPhotos := renderPhotos(book.Photos, options.SlinkProfile)
+	if len(photoLinks) > 0 {
 		details = append(details, "Смотрите: "+strings.Join(photoLinks, " - "))
 	}
 	if len(details) > 0 {
 		sections = append(sections, strings.Join(details, lineBreak))
 	}
+	if slideshow := renderSlideshow(slideshowPhotos); slideshow != "" {
+		sections = append(sections, slideshow)
+	}
 	sections = append(sections, renderLink(book.BuyURL, "Купить"))
 
 	return strings.Join(sections, sectionBreak)
+}
+
+func renderPhotos(photos []alib.Photo, slinkProfile string) ([]string, []alib.Photo) {
+	photoLinks := make([]string, 0, len(photos))
+	slideshowPhotos := make([]alib.Photo, 0, len(photos))
+	for _, photo := range photos {
+		if isPublishedPhoto(photo, slinkProfile) {
+			slideshowPhotos = append(slideshowPhotos, photo)
+			continue
+		}
+		photoLinks = append(photoLinks, renderLink(photo.URL, photoCaption(photo)))
+	}
+
+	return photoLinks, slideshowPhotos
+}
+
+func isPublishedPhoto(photo alib.Photo, slinkProfile string) bool {
+	return slinkProfile != "" && photo.SlinkURL != "" &&
+		photo.SlinkProfile == slinkProfile && !photo.NonImage
+}
+
+func photoCaption(photo alib.Photo) string {
+	if caption := strings.TrimSpace(photo.Caption); caption != "" {
+		return caption
+	}
+
+	return "фото"
+}
+
+func renderSlideshow(photos []alib.Photo) string {
+	if len(photos) == 0 {
+		return ""
+	}
+
+	parts := []string{"<tg-slideshow>"}
+	seenCaptions := make(map[string]struct{}, len(photos))
+	captions := make([]string, 0, len(photos))
+	for _, photo := range photos {
+		parts = append(parts, `<img src="`+escapeLinkTarget(photo.SlinkURL)+`"/>`)
+		caption := strings.TrimSpace(photo.Caption)
+		if caption == "" {
+			continue
+		}
+		if _, seen := seenCaptions[caption]; seen {
+			continue
+		}
+		seenCaptions[caption] = struct{}{}
+		captions = append(captions, caption)
+	}
+	if len(captions) > 0 {
+		parts = append(parts, "<figcaption>"+renderMultilineText(strings.Join(captions, " — "))+"</figcaption>")
+	}
+	parts = append(parts, "</tg-slideshow>")
+
+	return strings.Join(parts, "")
+}
+
+func richMessageBlocks(book alib.Book, options Options) int {
+	blocks := 1
+	if options.SlinkProfile != "" {
+		for _, photo := range book.Photos {
+			if isPublishedPhoto(photo, options.SlinkProfile) {
+				return blocks + 1
+			}
+		}
+	}
+
+	return blocks
 }
 
 func renderMultilineText(value string) string {
