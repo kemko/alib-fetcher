@@ -11,6 +11,7 @@ import (
 	"github.com/kemko/alib-fetcher/internal/alib"
 	"github.com/kemko/alib-fetcher/internal/app"
 	"github.com/kemko/alib-fetcher/internal/digest"
+	"github.com/kemko/alib-fetcher/internal/slink"
 	"github.com/kemko/alib-fetcher/internal/store"
 
 	"github.com/stretchr/testify/require"
@@ -37,6 +38,79 @@ func Test_Service_reports_fetch_listing_errors(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, result.Failed)
 	require.Equal(t, 1, result.Sent)
+}
+
+func Test_Service_isolates_new_book_failure_before_recording(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	now := time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC)
+	path := filepath.Join(t.TempDir(), "state.db")
+	state, err := store.Open(path, now)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, state.Close()) })
+	good := alib.Book{Title: "Рабочая", BuyURL: "https://example.com/good", Photos: []alib.Photo{{URL: "https://example.com/good.jpg"}}}
+	bad := alib.Book{Title: "Сбойная", BuyURL: "https://example.com/bad", Photos: []alib.Photo{{URL: "https://example.com/bad.jpg"}}}
+	sender := &fakeSender{}
+	service := app.NewService(app.Dependencies{
+		Fetcher:        fakeFetcher{books: []alib.Book{good, bad}},
+		State:          state,
+		Sender:         sender,
+		PhotoProcessor: &selectivePhotoProcessor{failedURL: bad.BuyURL},
+		MessageLimit:   4096,
+		Now:            func() time.Time { return now },
+	})
+
+	// When
+	result, err := service.Run(context.Background())
+	pending, pendingErr := state.Pending(context.Background())
+
+	// Then
+	require.NoError(t, err)
+	require.NoError(t, pendingErr)
+	require.Equal(t, app.Result{Fetched: 2, New: 1, Sent: 1, Failed: 1}, result)
+	require.Empty(t, pending)
+	require.Len(t, sender.messages, 1)
+	require.Contains(t, sender.messages[0], "Рабочая")
+	require.Contains(t, sender.messages[0], "Не удалось обработать книг: 1")
+	existing, existingErr := state.Existing(context.Background(), []alib.Book{good, bad})
+	require.NoError(t, existingErr)
+	require.Equal(t, []bool{true, false}, existing)
+}
+
+func Test_Service_retries_failed_new_book_on_next_cycle(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	now := time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC)
+	path := filepath.Join(t.TempDir(), "state.db")
+	state, err := store.Open(path, now)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, state.Close()) })
+	book := alib.Book{Title: "Повторная", BuyURL: "https://example.com/retry", Photos: []alib.Photo{{URL: "https://example.com/retry.jpg"}}}
+	processor := &selectivePhotoProcessor{failedURL: book.BuyURL}
+	service := app.NewService(app.Dependencies{
+		Fetcher:        fakeFetcher{books: []alib.Book{book}},
+		State:          state,
+		Sender:         &fakeSender{},
+		PhotoProcessor: processor,
+		MessageLimit:   4096,
+		Now:            func() time.Time { return now },
+	})
+
+	// When
+	firstResult, firstErr := service.Run(context.Background())
+	secondResult, secondErr := service.Run(context.Background())
+
+	// Then
+	require.NoError(t, firstErr)
+	require.NoError(t, secondErr)
+	require.Equal(t, app.Result{Fetched: 1, Failed: 1}, firstResult)
+	require.Equal(t, app.Result{Fetched: 1, Failed: 1}, secondResult)
+	require.Equal(t, []string{book.BuyURL, book.BuyURL}, processor.calls)
+	existing, existingErr := state.Existing(context.Background(), []alib.Book{book})
+	require.NoError(t, existingErr)
+	require.Equal(t, []bool{false}, existing)
 }
 
 func Test_Service_marks_each_chunk_only_after_delivery(t *testing.T) {
@@ -775,8 +849,8 @@ func Test_Service_sends_renderable_pending_books_when_one_pending_book_is_too_lo
 	result, err := service.Run(context.Background())
 
 	// Then
-	require.ErrorIs(t, err, digest.ErrMessageTooLong)
-	require.Equal(t, app.Result{Sent: 2}, result)
+	require.NoError(t, err)
+	require.Equal(t, app.Result{Sent: 2, Failed: 1}, result)
 	require.Equal(t, []alib.Book{firstDeliverable, secondDeliverable}, state.marked)
 	require.Len(t, sender.messages, 3)
 	require.Contains(t, sender.messages[0], "Обычная")
@@ -844,7 +918,8 @@ func Test_Service_sends_failure_summary_when_no_books_are_renderable(t *testing.
 	result, err := service.Run(context.Background())
 
 	// Then
-	require.ErrorIs(t, err, digest.ErrMessageTooLong)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Failed)
 	require.Empty(t, result.Sent)
 	require.Equal(t, 1, hookCalls)
 	require.Len(t, sender.messages, 1)
@@ -860,7 +935,7 @@ func Test_Service_does_not_send_when_no_pending_books(t *testing.T) {
 	sender := &fakeSender{}
 	service := app.NewService(app.Dependencies{
 		Fetcher:      fakeFetcher{books: []alib.Book{book}},
-		State:        &fakeState{},
+		State:        &fakeState{existing: []bool{true}},
 		Sender:       sender,
 		MessageLimit: 4096,
 		Now:          time.Now,
@@ -904,6 +979,29 @@ type fakeFetcher struct {
 	failed int
 }
 
+type selectivePhotoProcessor struct {
+	failedURL string
+	calls     []string
+}
+
+func (p *selectivePhotoProcessor) Process(_ context.Context, book alib.Book) (*slink.PreparedBook, error) {
+	p.calls = append(p.calls, book.BuyURL)
+	if book.BuyURL == p.failedURL {
+		return nil, errors.New("photo processing failed")
+	}
+
+	prepared := book
+	prepared.Photos = append([]alib.Photo(nil), book.Photos...)
+	prepared.Photos[0].SlinkURL = "https://slink.example/published"
+	prepared.Photos[0].SlinkProfile = p.Profile()
+
+	return &slink.PreparedBook{Book: prepared}, nil
+}
+
+func (*selectivePhotoProcessor) Profile() string {
+	return "test-profile"
+}
+
 func (f fakeFetcher) Fetch(context.Context) ([]alib.Book, error) {
 	if f.events != nil {
 		*f.events = append(*f.events, "fetch")
@@ -919,15 +1017,16 @@ func (f fakeFetcher) FetchWithResult(context.Context) (alib.FetchResult, error) 
 }
 
 type fakeState struct {
+	pending      []alib.Book
+	marked       []alib.Book
+	recorded     []alib.Book
 	markedAt     time.Time
 	prunedBefore time.Time
 	recordedAt   time.Time
 	recordErr    error
 	pendingErr   error
 	events       *[]string
-	pending      []alib.Book
-	marked       []alib.Book
-	recorded     []alib.Book
+	existing     []bool
 	recordedNew  int
 	pruned       int
 }
@@ -947,6 +1046,14 @@ func (f *fakeState) RecordDiscovered(_ context.Context, books []alib.Book, obser
 		return 0, f.recordErr
 	}
 	return f.recordedNew, nil
+}
+
+func (f *fakeState) Existing(_ context.Context, books []alib.Book) ([]bool, error) {
+	if f.existing == nil {
+		return make([]bool, len(books)), nil
+	}
+
+	return f.existing, nil
 }
 
 func (f *fakeState) Pending(context.Context) ([]alib.Book, error) {

@@ -312,7 +312,7 @@ func Test_ClientWithResult_deduplicates_failure_after_success_on_later_page(t *t
 
 	// Then
 	require.NoError(t, err)
-	require.Equal(t, 1, len(result.Books))
+	require.Len(t, result.Books, 1)
 	require.Zero(t, result.Failed)
 }
 

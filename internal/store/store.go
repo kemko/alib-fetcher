@@ -115,6 +115,30 @@ func (s *Store) RecordDiscovered(ctx context.Context, books []alib.Book, observe
 	return created, nil
 }
 
+// Existing reports which books already have records, preserving input order.
+func (s *Store) Existing(ctx context.Context, books []alib.Book) ([]bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("check existing books: %w", err)
+	}
+
+	existing := make([]bool, len(books))
+	err := s.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(sentBucket)
+		for index, book := range books {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			existing[index] = bucket.Get([]byte(book.BuyURL)) != nil
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("check existing books: %w", err)
+	}
+
+	return existing, nil
+}
+
 func prepareDiscoveredRecord(
 	bucket *bolt.Bucket,
 	key []byte,

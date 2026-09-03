@@ -13,6 +13,7 @@ const (
 	logKeyDeleted    = "deleted"
 	logKeyError      = "error"
 	logKeyFetched    = "fetched"
+	logKeyFailed     = "failed"
 	logKeyNew        = "new"
 	logKeyPruned     = "pruned"
 	logKeyRequested  = "requested"

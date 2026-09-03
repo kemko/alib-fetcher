@@ -103,96 +103,103 @@ func (c *Client) Fetch(ctx context.Context) ([]Book, error) {
 
 // FetchWithResult downloads all configured pages and returns partial listing failures.
 func (c *Client) FetchWithResult(ctx context.Context) (FetchResult, error) {
-	downloaded := make([]downloadedPage, 0, len(c.endpoints))
-	pageErrors := make([]error, 0, len(c.endpoints))
-
-	for index, endpoint := range c.endpoints {
-		page, err := c.downloadPage(ctx, index, endpoint)
-		if err != nil {
-			if ctx.Err() != nil {
-				return FetchResult{}, ctx.Err()
-			}
-
-			pageURL := endpoint.String()
-			pageErr := fmt.Errorf("download alib URL %q: %w", pageURL, err)
-			pageErrors = append(pageErrors, pageErr)
-			c.logger.ErrorContext(ctx, "alib.page_download_failed",
-				slog.Int(logKeyIndex, index),
-				slog.String(logKeyURL, pageURL),
-				slog.Any(logKeyError, err),
-			)
-		} else {
-			downloaded = append(downloaded, page)
-			c.logger.InfoContext(ctx, "alib.page_downloaded",
-				slog.Int(logKeyIndex, index),
-				slog.String(logKeyURL, endpoint.String()),
-			)
-		}
-
-		if index == len(c.endpoints)-1 {
-			break
-		}
-		if waitErr := wait(ctx, c.requestInterval); waitErr != nil {
-			return FetchResult{}, waitErr
-		}
-	}
-
-	books := make([]Book, 0)
-	seen := make(map[string]struct{})
-	failed := make(map[string]struct{})
-	parsedPages := 0
-	for _, page := range downloaded {
-		if err := ctx.Err(); err != nil {
-			return FetchResult{}, err
-		}
-
-		pageResult, err := ParseWithResult(bytes.NewReader(page.body), page.endpoint, page.contentType)
-		if contextErr := ctx.Err(); contextErr != nil {
-			return FetchResult{}, contextErr
-		}
-		if err != nil {
-			pageURL := page.endpoint.String()
-			pageErr := fmt.Errorf("parse alib URL %q: %w", pageURL, err)
-			pageErrors = append(pageErrors, pageErr)
-			c.logger.ErrorContext(ctx, "alib.page_parse_failed",
-				slog.Int(logKeyIndex, page.index),
-				slog.String(logKeyURL, pageURL),
-				slog.Any(logKeyError, err),
-			)
-			continue
-		}
-
-		parsedPages++
-		c.logger.InfoContext(ctx, "alib.page_parsed",
-			slog.Int(logKeyIndex, page.index),
-			slog.String(logKeyURL, page.endpoint.String()),
-			slog.Int(logKeyBooks, len(pageResult.Books)),
-		)
-		for _, buyURL := range pageResult.FailedBuyURLs {
-			if _, succeeded := seen[buyURL]; succeeded {
-				continue
-			}
-			failed[buyURL] = struct{}{}
-		}
-		for _, book := range pageResult.Books {
-			delete(failed, book.BuyURL)
-			if _, exists := seen[book.BuyURL]; exists {
-				continue
-			}
-
-			seen[book.BuyURL] = struct{}{}
-			books = append(books, book)
-		}
-	}
-	if err := ctx.Err(); err != nil {
+	downloaded, pageErrors, err := c.downloadPages(ctx)
+	if err != nil {
 		return FetchResult{}, err
 	}
-
+	books, failed, parsedPages, parseErrors, err := c.parsePages(ctx, downloaded)
+	if err != nil {
+		return FetchResult{}, err
+	}
+	pageErrors = append(pageErrors, parseErrors...)
 	if parsedPages == 0 {
 		return FetchResult{}, errors.Join(pageErrors...)
 	}
 
 	return FetchResult{Books: books, Failed: len(failed)}, nil
+}
+
+func (c *Client) downloadPages(ctx context.Context) ([]downloadedPage, []error, error) {
+	downloaded := make([]downloadedPage, 0, len(c.endpoints))
+	pageErrors := make([]error, 0, len(c.endpoints))
+	for index, endpoint := range c.endpoints {
+		page, err := c.downloadPage(ctx, index, endpoint)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, nil, ctx.Err()
+			}
+			pageURL := endpoint.String()
+			pageErrors = append(pageErrors, fmt.Errorf("download alib URL %q: %w", pageURL, err))
+			c.logger.ErrorContext(ctx, "alib.page_download_failed",
+				slog.Int(logKeyIndex, index), slog.String(logKeyURL, pageURL), slog.Any(logKeyError, err))
+		} else {
+			downloaded = append(downloaded, page)
+			c.logger.InfoContext(ctx, "alib.page_downloaded",
+				slog.Int(logKeyIndex, index), slog.String(logKeyURL, endpoint.String()))
+		}
+		if index < len(c.endpoints)-1 {
+			if waitErr := wait(ctx, c.requestInterval); waitErr != nil {
+				return nil, nil, waitErr
+			}
+		}
+	}
+
+	return downloaded, pageErrors, nil
+}
+
+func (c *Client) parsePages(
+	ctx context.Context,
+	pages []downloadedPage,
+) ([]Book, map[string]struct{}, int, []error, error) {
+	books := make([]Book, 0)
+	failed := make(map[string]struct{})
+	pageErrors := make([]error, 0, len(pages))
+	parsedPages := 0
+	seen := make(map[string]struct{})
+	for _, page := range pages {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, 0, nil, err
+		}
+		pageResult, err := ParseWithResult(bytes.NewReader(page.body), page.endpoint, page.contentType)
+		if contextErr := ctx.Err(); contextErr != nil {
+			return nil, nil, 0, nil, contextErr
+		}
+		if err != nil {
+			pageURL := page.endpoint.String()
+			pageErrors = append(pageErrors, fmt.Errorf("parse alib URL %q: %w", pageURL, err))
+			c.logger.ErrorContext(ctx, "alib.page_parse_failed",
+				slog.Int(logKeyIndex, page.index), slog.String(logKeyURL, pageURL), slog.Any(logKeyError, err))
+			continue
+		}
+		parsedPages++
+		c.logger.InfoContext(ctx, "alib.page_parsed",
+			slog.Int(logKeyIndex, page.index), slog.String(logKeyURL, page.endpoint.String()),
+			slog.Int(logKeyBooks, len(pageResult.Books)))
+		mergePageResult(&books, &failed, &seen, pageResult)
+	}
+
+	return books, failed, parsedPages, pageErrors, nil
+}
+
+func mergePageResult(
+	books *[]Book,
+	failed *map[string]struct{},
+	seen *map[string]struct{},
+	page ParseResult,
+) {
+	for _, buyURL := range page.FailedBuyURLs {
+		if _, succeeded := (*seen)[buyURL]; !succeeded {
+			(*failed)[buyURL] = struct{}{}
+		}
+	}
+	for _, book := range page.Books {
+		delete(*failed, book.BuyURL)
+		if _, exists := (*seen)[book.BuyURL]; exists {
+			continue
+		}
+		(*seen)[book.BuyURL] = struct{}{}
+		*books = append(*books, book)
+	}
 }
 
 func (c *Client) downloadPage(ctx context.Context, index int, endpoint *url.URL) (downloadedPage, error) {

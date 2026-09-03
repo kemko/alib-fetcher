@@ -40,9 +40,9 @@ func Test_Service_savesPreparedBookBeforeCleanupAndRendering(t *testing.T) {
 		Photos: []alib.Photo{{URL: "http://photo.test/photo", Caption: "Обложка"}},
 	}
 	state := &fakeState{
-		pending:     []alib.Book{book},
-		recordedNew: 1,
-		events:      &events,
+		pending:  []alib.Book{book},
+		existing: []bool{true},
+		events:   &events,
 	}
 	photoState := &photoState{fakeState: state}
 	photoState.save = func(_ context.Context, prepared alib.Book) error {
@@ -74,7 +74,7 @@ func Test_Service_savesPreparedBookBeforeCleanupAndRendering(t *testing.T) {
 
 	// Then
 	require.NoError(t, err)
-	require.Equal(t, app.Result{Fetched: 1, New: 1, Sent: 1}, result)
+	require.Equal(t, app.Result{Fetched: 1, Sent: 1}, result)
 	require.Len(t, photoState.saved, 1)
 	require.Contains(t, sender.messages[0], "<tg-slideshow>")
 	require.Equal(t, []string{"fetch", "record", "pending", "prepare", "upload", "save:" + book.BuyURL, "send", "mark:" + book.BuyURL}, events)
@@ -91,7 +91,7 @@ func Test_Service_cleansPreparedFilesWhenStateSaveFails(t *testing.T) {
 	book := alib.Book{Title: "Книга", BuyURL: "https://example.com/book", Photos: []alib.Photo{{URL: "http://photo.test/photo"}}}
 	stateErr := errors.New("state unavailable")
 	state := &photoState{
-		fakeState: &fakeState{pending: []alib.Book{book}, recordedNew: 1},
+		fakeState: &fakeState{pending: []alib.Book{book}, existing: []bool{true}},
 		save: func(context.Context, alib.Book) error {
 			return stateErr
 		},
@@ -111,7 +111,7 @@ func Test_Service_cleansPreparedFilesWhenStateSaveFails(t *testing.T) {
 
 	// Then
 	require.ErrorIs(t, err, stateErr)
-	require.Equal(t, app.Result{Fetched: 1, New: 1}, result)
+	require.Equal(t, app.Result{Fetched: 1}, result)
 	require.Empty(t, sender.messages)
 	require.Len(t, processor.prepared, 1)
 	_, statErr := os.Stat(processor.prepared[0].TemporaryDirectory())
@@ -128,7 +128,7 @@ func Test_Service_cleansPreparedFilesWhenStateSaveIsCanceled(t *testing.T) {
 	book := alib.Book{Title: "Книга", BuyURL: "https://example.com/book", Photos: []alib.Photo{{URL: "http://photo.test/photo"}}}
 	ctx, cancel := context.WithCancel(context.Background())
 	state := &photoState{
-		fakeState: &fakeState{pending: []alib.Book{book}, recordedNew: 1},
+		fakeState: &fakeState{pending: []alib.Book{book}, existing: []bool{true}},
 		save: func(context.Context, alib.Book) error {
 			cancel()
 
@@ -150,7 +150,7 @@ func Test_Service_cleansPreparedFilesWhenStateSaveIsCanceled(t *testing.T) {
 
 	// Then
 	require.ErrorIs(t, err, context.Canceled)
-	require.Equal(t, app.Result{Fetched: 1, New: 1}, result)
+	require.Equal(t, app.Result{Fetched: 1}, result)
 	require.Empty(t, sender.messages)
 	require.Len(t, processor.prepared, 1)
 	_, statErr := os.Stat(processor.prepared[0].TemporaryDirectory())
@@ -260,7 +260,7 @@ func Test_Service_integratesPhotoPreparationAndSlideshow(t *testing.T) {
 	// Then
 	require.NoError(t, err)
 	require.Equal(t, app.Result{Fetched: 1, New: 1, Sent: 1}, result)
-	require.Len(t, state.saved, 1)
+	require.Empty(t, state.saved)
 	require.Contains(t, sender.messages[0], `<tg-slideshow><img src="`+server.URL+`/published/image"/><figcaption>Обложка</figcaption></tg-slideshow>`)
 	require.Contains(t, sender.messages[0], `Смотрите: <a href="http://photo.test/document">Документ</a>`)
 	require.NotContains(t, sender.messages[0], "http://photo.test/meta")

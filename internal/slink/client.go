@@ -717,8 +717,8 @@ type photoFailureDetails struct {
 }
 
 type photoFailureError struct {
-	photoFailureDetails
 	err error
+	photoFailureDetails
 }
 
 func (e *photoFailureError) Error() string {

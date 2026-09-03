@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/kemko/alib-fetcher/internal/alib"
@@ -22,6 +21,10 @@ type Fetcher interface {
 
 type detailedFetcher interface {
 	FetchWithResult(context.Context) (alib.FetchResult, error)
+}
+
+type existingState interface {
+	Existing(context.Context, []alib.Book) ([]bool, error)
 }
 
 // State tracks discovered listings and their delivery status.
@@ -101,33 +104,71 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 	}
 	result.Fetched = len(books)
 	result.Failed = failed
-
-	created, err := s.dependencies.State.RecordDiscovered(ctx, books, cycleTime)
-	if err != nil {
-		return result, fmt.Errorf("record discovered listings: %w", err)
+	if s.dependencies.PhotoProcessor != nil {
+		renderOptions.SlinkProfile = s.dependencies.PhotoProcessor.Profile()
 	}
-	result.New = created
+
+	existing, err := s.existing(ctx, books)
+	if err != nil {
+		return result, err
+	}
+	preparedBooks, preparedBooksByURL, failedURLs, newBooks, bookFailures, err := s.prepareFetched(
+		ctx,
+		books,
+		existing,
+		renderOptions,
+	)
+	if err != nil {
+		return result, err
+	}
+	result.Failed += bookFailures
+	if len(preparedBooks) > 0 {
+		_, err = s.dependencies.State.RecordDiscovered(ctx, preparedBooks, cycleTime)
+		if err != nil {
+			return result, fmt.Errorf("record discovered listings: %w", err)
+		}
+	}
+	result.New = newBooks
 
 	pending, err := s.dependencies.State.Pending(ctx)
 	if err != nil {
 		return result, fmt.Errorf("load pending listings: %w", err)
 	}
-	if len(pending) == 0 {
-		return result, nil
-	}
-
 	pending = sortPending(pending)
-	if prepareErr := s.preparePhotos(ctx, pending, &renderOptions); prepareErr != nil {
-		return result, prepareErr
+	pending, pendingFailures, err := s.preparePending(ctx, pending, preparedBooksByURL, failedURLs, &renderOptions)
+	if err != nil {
+		return result, err
 	}
+	result.Failed += pendingFailures
 
-	sent, err := s.renderAndSend(ctx, pending, renderOptions, cycleTime)
+	sent, renderedFailures, err := s.renderAndSend(ctx, pending, renderOptions, cycleTime, result.Failed)
 	result.Sent = sent
+	result.Failed = renderedFailures
 	if err != nil {
 		return result, err
 	}
 
 	return result, nil
+}
+
+func (s *Service) existing(ctx context.Context, books []alib.Book) ([]bool, error) {
+	if len(books) == 0 {
+		return nil, nil
+	}
+	state, ok := s.dependencies.State.(existingState)
+	if !ok {
+		return make([]bool, len(books)), nil
+	}
+
+	existing, err := state.Existing(ctx, books)
+	if err != nil {
+		return nil, fmt.Errorf("check existing listings: %w", err)
+	}
+	if len(existing) != len(books) {
+		return nil, errors.New("check existing listings: state returned an invalid result")
+	}
+
+	return existing, nil
 }
 
 func (s *Service) fetch(ctx context.Context) ([]alib.Book, int, error) {
@@ -145,14 +186,15 @@ func (s *Service) renderAndSend(
 	pending []alib.Book,
 	options digest.Options,
 	cycleTime time.Time,
-) (int, error) {
-	chunks, skippedBuyURLs, err := digest.RenderSendable(pending, options, 0)
+	previousFailures int,
+) (int, int, error) {
+	chunks, skippedBuyURLs, err := digest.RenderSendable(pending, options, previousFailures)
 	if err != nil {
-		return 0, fmt.Errorf("render digest: %w", err)
+		return 0, previousFailures, fmt.Errorf("render digest: %w", err)
 	}
 	if len(chunks) > 0 && s.dependencies.BeforeDelivery != nil {
 		if hookErr := s.dependencies.BeforeDelivery(ctx); hookErr != nil {
-			return 0, fmt.Errorf("prepare digest delivery: %w", hookErr)
+			return 0, previousFailures + len(skippedBuyURLs), fmt.Errorf("prepare digest delivery: %w", hookErr)
 		}
 	}
 	ackCtx := context.WithoutCancel(ctx)
@@ -161,59 +203,177 @@ func (s *Service) renderAndSend(
 		silent := index > 0
 		attachRefresh := index == len(chunks)-1
 		if sendErr := s.send(ctx, chunk.Text, silent, attachRefresh); sendErr != nil {
-			return sent, fmt.Errorf("send digest: %w", sendErr)
+			return sent, previousFailures + len(skippedBuyURLs), fmt.Errorf("send digest: %w", sendErr)
 		}
 		if len(chunk.Books) == 0 {
 			continue
 		}
 		if markErr := s.dependencies.State.MarkSent(ackCtx, chunk.Books, cycleTime); markErr != nil {
-			return sent, fmt.Errorf("record delivered listings: %w", markErr)
+			return sent, previousFailures + len(skippedBuyURLs), fmt.Errorf("record delivered listings: %w", markErr)
 		}
 		sent += len(chunk.Books)
 	}
-	if len(skippedBuyURLs) > 0 {
-		return sent, fmt.Errorf("render digest: %w: %s", digest.ErrMessageTooLong, strings.Join(skippedBuyURLs, ", "))
-	}
 
-	return sent, nil
+	return sent, previousFailures + len(skippedBuyURLs), nil
 }
 
-func (s *Service) preparePhotos(ctx context.Context, pending []alib.Book, options *digest.Options) error {
-	if s.dependencies.PhotoProcessor == nil {
-		return nil
-	}
-	options.SlinkProfile = s.dependencies.PhotoProcessor.Profile()
-	for index := range pending {
-		book := pending[index]
-		if len(book.Photos) == 0 {
+func (s *Service) prepareFetched(
+	ctx context.Context,
+	books []alib.Book,
+	existing []bool,
+	options digest.Options,
+) ([]alib.Book, map[string]alib.Book, map[string]struct{}, int, int, error) {
+	prepared := make([]alib.Book, 0, len(books))
+	preparedBooks := make(map[string]alib.Book, len(books))
+	failedURLs := make(map[string]struct{})
+	newBooks := 0
+	failed := 0
+	for index, book := range books {
+		if existing[index] {
+			if !renderable(book, options) {
+				failed++
+				failedURLs[book.BuyURL] = struct{}{}
+				continue
+			}
+			prepared = append(prepared, book)
 			continue
 		}
 
-		prepared, err := s.dependencies.PhotoProcessor.Process(ctx, book)
+		preparedBook, cleanup, err := s.prepareBook(ctx, book)
 		if err != nil {
-			if prepared != nil {
-				err = errors.Join(err, prepared.Cleanup())
+			if ctx.Err() != nil {
+				return nil, nil, nil, 0, failed, fmt.Errorf("prepare book %q: %w", book.BuyURL, err)
 			}
-
-			return fmt.Errorf("prepare photos for %q: %w", book.BuyURL, err)
+			failed++
+			failedURLs[book.BuyURL] = struct{}{}
+			continue
 		}
-		if prepared == nil {
-			return fmt.Errorf("prepare photos for %q: processor returned no book", book.BuyURL)
-		}
-
-		preparedBook := prepared.Book
-		if !reflect.DeepEqual(book, preparedBook) {
-			if saveErr := s.dependencies.State.SavePrepared(ctx, preparedBook); saveErr != nil {
-				return fmt.Errorf("save prepared book %q: %w", book.BuyURL, errors.Join(saveErr, prepared.Cleanup()))
+		if !renderable(preparedBook, options) {
+			if cleanupErr := cleanup(); cleanupErr != nil && ctx.Err() != nil {
+				return nil, nil, nil, 0, failed, fmt.Errorf("cleanup prepared book %q: %w", book.BuyURL, cleanupErr)
 			}
+			failed++
+			failedURLs[book.BuyURL] = struct{}{}
+			continue
 		}
-		if cleanupErr := prepared.Cleanup(); cleanupErr != nil {
-			return fmt.Errorf("cleanup prepared photos for %q: %w", book.BuyURL, cleanupErr)
+		if cleanupErr := cleanup(); cleanupErr != nil {
+			if ctx.Err() != nil {
+				return nil, nil, nil, 0, failed, fmt.Errorf("cleanup prepared book %q: %w", book.BuyURL, cleanupErr)
+			}
+			failed++
+			failedURLs[book.BuyURL] = struct{}{}
+			continue
 		}
-		pending[index] = preparedBook
+		prepared = append(prepared, preparedBook)
+		preparedBooks[book.BuyURL] = preparedBook
+		newBooks++
 	}
 
-	return nil
+	return prepared, preparedBooks, failedURLs, newBooks, failed, nil
+}
+
+func (s *Service) preparePending(
+	ctx context.Context,
+	pending []alib.Book,
+	preparedBooks map[string]alib.Book,
+	failedURLs map[string]struct{},
+	options *digest.Options,
+) ([]alib.Book, int, error) {
+	result := make([]alib.Book, 0, len(pending))
+	failed := 0
+	for _, book := range pending {
+		preparedBook, ready, countedFailure, err := s.preparePendingBook(ctx, book, preparedBooks, failedURLs, *options)
+		if err != nil {
+			return nil, failed, err
+		}
+		if countedFailure {
+			failed++
+		}
+		if ready {
+			result = append(result, preparedBook)
+		}
+	}
+
+	return result, failed, nil
+}
+
+func (s *Service) preparePendingBook(
+	ctx context.Context,
+	book alib.Book,
+	preparedBooks map[string]alib.Book,
+	failedURLs map[string]struct{},
+	options digest.Options,
+) (alib.Book, bool, bool, error) {
+	if preparedBook, alreadyProcessed := preparedBooks[book.BuyURL]; alreadyProcessed {
+		return preparedBook, true, false, nil
+	}
+	if _, alreadyFailed := failedURLs[book.BuyURL]; alreadyFailed {
+		return alib.Book{}, false, false, nil
+	}
+
+	preparedBook, cleanup, err := s.prepareBook(ctx, book)
+	if err != nil {
+		if ctx.Err() != nil {
+			return alib.Book{}, false, false, fmt.Errorf("prepare book %q: %w", book.BuyURL, err)
+		}
+		failedURLs[book.BuyURL] = struct{}{}
+		return alib.Book{}, false, true, nil
+	}
+	if !renderable(preparedBook, options) {
+		if cleanupErr := cleanup(); cleanupErr != nil && ctx.Err() != nil {
+			return alib.Book{}, false, false, fmt.Errorf("cleanup prepared book %q: %w", book.BuyURL, cleanupErr)
+		}
+		failedURLs[book.BuyURL] = struct{}{}
+		return alib.Book{}, false, true, nil
+	}
+	if !reflect.DeepEqual(book, preparedBook) {
+		if saveErr := s.dependencies.State.SavePrepared(ctx, preparedBook); saveErr != nil {
+			return alib.Book{}, false, false, fmt.Errorf(
+				"save prepared book %q: %w", book.BuyURL, errors.Join(saveErr, cleanup()))
+		}
+	}
+	if cleanupErr := cleanup(); cleanupErr != nil {
+		if ctx.Err() != nil {
+			return alib.Book{}, false, false, fmt.Errorf("cleanup prepared book %q: %w", book.BuyURL, cleanupErr)
+		}
+		failedURLs[book.BuyURL] = struct{}{}
+		return alib.Book{}, false, true, nil
+	}
+
+	return preparedBook, true, false, nil
+}
+
+func (s *Service) prepareBook(ctx context.Context, book alib.Book) (alib.Book, func() error, error) {
+	if len(book.Photos) == 0 || s.dependencies.PhotoProcessor == nil {
+		return book, func() error { return nil }, nil
+	}
+
+	prepared, err := s.dependencies.PhotoProcessor.Process(ctx, book)
+	if prepared != nil {
+		if err != nil {
+			if cleanupErr := prepared.Cleanup(); cleanupErr != nil {
+				err = errors.Join(err, cleanupErr)
+			}
+			return book, func() error { return nil }, err
+		}
+	}
+	if err != nil {
+		return book, func() error { return nil }, err
+	}
+	if prepared == nil {
+		return book, func() error { return nil }, errors.New("photo processor returned no book")
+	}
+	if prepared.Book.BuyURL == "" {
+		prepared.Book.BuyURL = book.BuyURL
+	}
+
+	return prepared.Book, prepared.Cleanup, nil
+}
+
+func renderable(book alib.Book, options digest.Options) bool {
+	_, skipped, err := digest.RenderSendable([]alib.Book{book}, options, 0)
+
+	return err == nil && len(skipped) == 0
 }
 
 func sortPending(pending []alib.Book) []alib.Book {

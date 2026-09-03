@@ -51,6 +51,33 @@ func Test_Store_records_new_books_as_pending_with_full_payload(t *testing.T) {
 	require.Zero(t, record.SentAt)
 }
 
+func Test_Store_existing_reports_records_without_mutating_queue(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	path := filepath.Join(t.TempDir(), "state.db")
+	now := time.Date(2026, time.August, 5, 12, 0, 0, 0, time.UTC)
+	db, err := store.Open(path, now)
+	require.NoError(t, err)
+	recordDiscovered(t, db, []alib.Book{fullBook("https://example.com/existing")}, now)
+	books := []alib.Book{
+		{BuyURL: "https://example.com/new"},
+		{BuyURL: "https://example.com/existing"},
+	}
+
+	// When
+	existing, err := db.Existing(context.Background(), books)
+	pending, pendingErr := db.Pending(context.Background())
+	require.NoError(t, db.Close())
+
+	// Then
+	require.NoError(t, err)
+	require.NoError(t, pendingErr)
+	require.Equal(t, []bool{false, true}, existing)
+	require.Len(t, pending, 1)
+	require.Equal(t, "https://example.com/existing", pending[0].BuyURL)
+}
+
 func Test_Store_persists_stable_json_schema(t *testing.T) {
 	t.Parallel()
 

@@ -44,6 +44,29 @@ func Test_executeJob_returns_result_and_closes_state_database_after_cycle(t *tes
 	require.NoError(t, reopened.Close())
 }
 
+func Test_executeJob_logs_failed_book_count_on_completed_digest(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	dependencies := app.Dependencies{
+		Fetcher:      resultFetcher{result: alib.FetchResult{Failed: 2}},
+		Sender:       noopSender{},
+		MessageLimit: 4096,
+		Now:          time.Now,
+	}
+
+	// When
+	result, err := executeJob(context.Background(), dependencies, filepath.Join(t.TempDir(), "state.db"), logger)
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, 2, result.Failed)
+	require.Contains(t, logs.String(), `"msg":"digest.completed"`)
+	require.Contains(t, logs.String(), `"failed":2`)
+}
+
 func Test_executeJob_returns_partial_result_when_service_fails(t *testing.T) {
 	t.Parallel()
 
@@ -390,6 +413,18 @@ func (emptyFetcher) Fetch(context.Context) ([]alib.Book, error) {
 
 type bookFetcher struct {
 	books []alib.Book
+}
+
+type resultFetcher struct {
+	result alib.FetchResult
+}
+
+func (f resultFetcher) Fetch(context.Context) ([]alib.Book, error) {
+	return f.result.Books, nil
+}
+
+func (f resultFetcher) FetchWithResult(context.Context) (alib.FetchResult, error) {
+	return f.result, nil
 }
 
 func (f bookFetcher) Fetch(context.Context) ([]alib.Book, error) {

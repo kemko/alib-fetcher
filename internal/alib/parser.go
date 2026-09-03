@@ -67,60 +67,82 @@ func ParseWithResult(reader io.Reader, baseURL *url.URL, contentType string) (Pa
 		return ParseResult{}, fmt.Errorf("parse page: %w", err)
 	}
 
-	books := make([]Book, 0)
-	seen := make(map[string]struct{})
-	failed := make(map[string]struct{})
-	failedOrder := make([]string, 0)
-	recognizedListings := make(map[string]struct{})
+	state := parseState{
+		books:              make([]Book, 0),
+		seen:               make(map[string]struct{}),
+		failed:             make(map[string]struct{}),
+		failedOrder:        make([]string, 0),
+		recognizedListings: make(map[string]struct{}),
+	}
 	unresolvedCandidate := false
 	for node := range document.Descendants() {
 		if node.Type != html.ElementNode || node.Data != "p" {
 			continue
 		}
-
-		book, buyURL, candidate, found := parseListing(node, baseURL)
-		if !candidate {
-			continue
+		if collectListing(&state, node, baseURL) {
+			unresolvedCandidate = true
 		}
-		if !found {
-			if buyURL == "" {
-				unresolvedCandidate = true
-				continue
-			}
-			if _, succeeded := recognizedListings[buyURL]; succeeded {
-				continue
-			}
-			if _, alreadyFailed := failed[buyURL]; !alreadyFailed {
-				failedOrder = append(failedOrder, buyURL)
-				failed[buyURL] = struct{}{}
-			}
-			continue
-		}
-
-		recognizedListings[book.BuyURL] = struct{}{}
-		delete(failed, book.BuyURL)
-		if _, exists := seen[book.BuyURL]; exists {
-			continue
-		}
-
-		seen[book.BuyURL] = struct{}{}
-		books = append(books, book)
 	}
 
-	if len(books) == 0 {
-		if unresolvedCandidate || len(recognizedListings) == 0 && len(failed) == 0 && !isEmptySearchResultsPage(document) {
+	if len(state.books) == 0 {
+		if unresolvedCandidate ||
+			(len(state.recognizedListings) == 0 && len(state.failed) == 0 && !isEmptySearchResultsPage(document)) {
 			return ParseResult{}, ErrNoBooks
 		}
 	}
 
-	failedBuyURLs := make([]string, 0, len(failed))
-	for _, buyURL := range failedOrder {
+	failedBuyURLs := remainingFailures(state.failedOrder, state.failed)
+
+	return ParseResult{Books: state.books, FailedBuyURLs: failedBuyURLs}, nil
+}
+
+type parseState struct {
+	seen               map[string]struct{}
+	failed             map[string]struct{}
+	recognizedListings map[string]struct{}
+	books              []Book
+	failedOrder        []string
+}
+
+func collectListing(state *parseState, node *html.Node, baseURL *url.URL) bool {
+	book, buyURL, candidate, found := parseListing(node, baseURL)
+	if !candidate {
+		return false
+	}
+	if !found {
+		if buyURL == "" {
+			return true
+		}
+		if _, succeeded := state.recognizedListings[buyURL]; succeeded {
+			return false
+		}
+		if _, alreadyFailed := state.failed[buyURL]; !alreadyFailed {
+			state.failedOrder = append(state.failedOrder, buyURL)
+			state.failed[buyURL] = struct{}{}
+		}
+		return false
+	}
+
+	state.recognizedListings[book.BuyURL] = struct{}{}
+	delete(state.failed, book.BuyURL)
+	if _, exists := state.seen[book.BuyURL]; exists {
+		return false
+	}
+	state.seen[book.BuyURL] = struct{}{}
+	state.books = append(state.books, book)
+
+	return false
+}
+
+func remainingFailures(order []string, failed map[string]struct{}) []string {
+	result := make([]string, 0, len(failed))
+	for _, buyURL := range order {
 		if _, stillFailed := failed[buyURL]; stillFailed {
-			failedBuyURLs = append(failedBuyURLs, buyURL)
+			result = append(result, buyURL)
 		}
 	}
 
-	return ParseResult{Books: books, FailedBuyURLs: failedBuyURLs}, nil
+	return result
 }
 
 func parseListing(node *html.Node, baseURL *url.URL) (Book, string, bool, bool) {
