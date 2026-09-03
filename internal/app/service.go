@@ -185,7 +185,7 @@ func (s *Service) renderAndSend(
 	ackCtx := context.WithoutCancel(ctx)
 	sent := 0
 	for index, chunk := range chunks {
-		silent := index > 0
+		silent := index < len(chunks)-1
 		attachRefresh := index == len(chunks)-1
 		if sendErr := s.send(ctx, chunk.Text, silent, attachRefresh); sendErr != nil {
 			return sent, previousFailures + len(skippedBuyURLs), fmt.Errorf("send digest: %w", sendErr)

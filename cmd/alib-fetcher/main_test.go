@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -227,21 +228,16 @@ func Test_run_endToEnd_isolatesSlinkSourceFailure(t *testing.T) {
 	}))
 	t.Cleanup(alibServer.Close)
 
+	var uploads atomic.Int32
 	slinkServer := newIPv4TestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/foto.php4":
-			if request.URL.Query().Get("kind") == "bad" {
-				writer.WriteHeader(http.StatusForbidden)
-				return
-			}
 			assert.Equal(t, http.MethodGet, request.Method)
 			assert.Equal(t, "alib-fetcher/1.0", request.Header.Get("User-Agent"))
-			assert.Equal(t, alibServer.URL+"/good-buy", request.Header.Get("Referer"))
+			assert.Equal(t, alibServer.URL+"/"+request.URL.Query().Get("kind")+"-buy", request.Header.Get("Referer"))
 			writer.Header().Set("Content-Type", "image/png")
 			_, err := writer.Write([]byte("\x89PNG\r\n\x1a\nimage"))
 			assert.NoError(t, err)
-		case "/bad-photo":
-			writer.WriteHeader(http.StatusForbidden)
 		case "/api/external/upload":
 			assert.Equal(t, http.MethodPost, request.Method)
 			assert.Equal(t, "Bearer "+apiKey, request.Header.Get("Authorization"))
@@ -256,8 +252,20 @@ func Test_run_endToEnd_isolatesSlinkSourceFailure(t *testing.T) {
 			}
 			assert.NoError(t, file.Close())
 			assert.Equal(t, tagID, request.FormValue("tagIds[]"))
+			uploadIndex := uploads.Add(1)
 			writer.Header().Set("Content-Type", "application/json")
-			_, err = io.WriteString(writer, `{"url":"/published/good.png"}`)
+			_, err = fmt.Fprintf(writer, `{"url":"/i/%s-share"}`, map[int32]string{1: "good", 2: "bad"}[uploadIndex])
+			assert.NoError(t, err)
+		case "/i/good-share":
+			assert.Equal(t, http.MethodHead, request.Method)
+			http.Redirect(writer, request, "/image/good.png", http.StatusFound)
+		case "/image/good.png":
+			assert.Equal(t, http.MethodHead, request.Method)
+			writer.Header().Set("Content-Type", "image/png")
+		case "/i/bad-share":
+			assert.Equal(t, http.MethodHead, request.Method)
+			writer.WriteHeader(http.StatusBadGateway)
+			_, err := io.WriteString(writer, "private response body")
 			assert.NoError(t, err)
 		default:
 			t.Errorf("unexpected Slink path %q", request.URL.Path)
@@ -302,7 +310,8 @@ func Test_run_endToEnd_isolatesSlinkSourceFailure(t *testing.T) {
 	require.Len(t, telegramRequests, 1)
 	message := (<-telegramRequests).Message
 	require.Contains(t, message.RichMessage.HTML, "Успешная.")
-	require.Contains(t, message.RichMessage.HTML, "http://slink.test/published/good.png")
+	require.Contains(t, message.RichMessage.HTML, `<tg-slideshow><img src="http://slink.test/image/good.png"`)
+	require.NotContains(t, message.RichMessage.HTML, "http://slink.test/i/good-share")
 	require.NotContains(t, message.RichMessage.HTML, "Сбойная.")
 	require.Contains(t, message.RichMessage.HTML, "Не удалось обработать книг: 1")
 	requireRefreshButton(t, message)
@@ -321,12 +330,18 @@ func Test_run_endToEnd_isolatesSlinkSourceFailure(t *testing.T) {
 	require.NoError(t, state.Close())
 
 	logOutput := logs.String()
+	require.Contains(t, logOutput, `"msg":"slink.photo_started","buy_url":"`+alibServer.URL+`/good-buy","index":0,"total":1`)
+	require.Contains(t, logOutput, `"msg":"slink.photo_completed","buy_url":"`+alibServer.URL+`/good-buy","index":0,"total":1,"outcome":"uploaded","media_url":"http://slink.test/image/good.png"`)
 	require.Contains(t, logOutput, `"msg":"slink.photo_failed"`)
-	require.Contains(t, logOutput, `"stage":"source_download"`)
-	require.Contains(t, logOutput, `"http_status":403`)
+	require.Contains(t, logOutput, `"buy_url":"`+alibServer.URL+`/bad-buy","index":0,"total":1`)
+	require.Contains(t, logOutput, `"stage":"slink_media"`)
+	require.Contains(t, logOutput, `"http_status":502`)
 	require.Contains(t, logOutput, `"msg":"digest.completed"`)
 	require.Contains(t, logOutput, `"failed":1`)
 	require.NotContains(t, logOutput, apiKey)
+	require.NotContains(t, logOutput, "i/good-share")
+	require.NotContains(t, logOutput, "private response body")
+	require.NotContains(t, logOutput, "kind=good")
 	require.NotContains(t, logOutput, "kind=bad")
 }
 
@@ -338,7 +353,12 @@ func (transport rewriteHostTransport) RoundTrip(request *http.Request) (*http.Re
 	rewritten := request.Clone(request.Context())
 	rewritten.URL.Host = transport.target
 
-	return http.DefaultTransport.RoundTrip(rewritten)
+	response, err := http.DefaultTransport.RoundTrip(rewritten)
+	if response != nil && response.Request != nil {
+		response.Request = request
+	}
+
+	return response, err
 }
 
 func newIPv4TestServer(t *testing.T, handler http.Handler) *httptest.Server {
@@ -479,7 +499,7 @@ func Test_run_forget_latest_documented_cli_scenario_deletes_latest_records_witho
 	require.Equal(t, []alib.Book{books[0], books[1]}, pending)
 }
 
-func Test_run_sends_only_first_wired_message_with_sound(t *testing.T) {
+func Test_run_sends_only_last_wired_message_with_sound(t *testing.T) {
 	// Given
 	useOnceMode(t)
 
@@ -557,7 +577,7 @@ func Test_run_sends_only_first_wired_message_with_sound(t *testing.T) {
 		} else {
 			require.NotContains(t, payload.RichMessage.HTML, "<b>Новые книги на Alib.ru</b>")
 		}
-		if index == 0 {
+		if index == len(payloads)-1 {
 			require.False(t, payload.DisableNotification)
 		} else {
 			require.True(t, payload.DisableNotification)

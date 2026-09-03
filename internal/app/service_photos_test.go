@@ -253,8 +253,14 @@ func Test_Service_integratesPhotoPreparationAndSlideshow(t *testing.T) {
 			}
 			assert.Equal(t, []string{"integration-tag"}, request.MultipartForm.Value["tagIds[]"])
 			writer.Header().Set("Content-Type", "application/json")
-			_, err := io.WriteString(writer, `{"url":"/published/image"}`)
+			_, err := io.WriteString(writer, `{"url":"/i/share-code"}`)
 			assert.NoError(t, err)
+		case "/i/share-code":
+			assert.Equal(t, http.MethodHead, request.Method)
+			http.Redirect(writer, request, "/published/image", http.StatusFound)
+		case "/published/image":
+			assert.Equal(t, http.MethodHead, request.Method)
+			writer.Header().Set("Content-Type", "image/png")
 		default:
 			writer.WriteHeader(http.StatusNotFound)
 		}
@@ -338,8 +344,14 @@ func Test_Service_integratesParsedPhotosWithPersistentStore(t *testing.T) {
 			assert.Equal(t, "image/png", header.Header.Get("Content-Type"))
 			assert.NoError(t, file.Close())
 			assert.Equal(t, []string{"integration-tag"}, request.MultipartForm.Value["tagIds[]"])
-			_, err = io.WriteString(writer, `{"url":"published/image"}`)
+			_, err = io.WriteString(writer, `{"url":"i/share-code"}`)
 			assert.NoError(t, err)
+		case request.URL.Path == "/base/i/share-code":
+			assert.Equal(t, http.MethodHead, request.Method)
+			http.Redirect(writer, request, "/base/published/image", http.StatusFound)
+		case request.URL.Path == "/base/published/image":
+			assert.Equal(t, http.MethodHead, request.Method)
+			writer.Header().Set("Content-Type", "image/png")
 		default:
 			writer.WriteHeader(http.StatusNotFound)
 		}
@@ -388,6 +400,10 @@ func Test_Service_integratesParsedPhotosWithPersistentStore(t *testing.T) {
 
 	require.ErrorIs(t, firstErr, deliveryErr)
 	require.Equal(t, app.Result{Fetched: 1, New: 1}, firstResult)
+	pendingAfterFirst, pendingErr := firstState.Pending(context.Background())
+	require.NoError(t, pendingErr)
+	require.Len(t, pendingAfterFirst, 1)
+	require.Equal(t, server.URL+"/base/published/image", pendingAfterFirst[0].Photos[0].SlinkURL)
 	require.NoError(t, firstState.Close())
 	secondState, err := store.Open(statePath, now)
 	require.NoError(t, err)
@@ -412,8 +428,74 @@ func Test_Service_integratesParsedPhotosWithPersistentStore(t *testing.T) {
 	require.Len(t, secondSender.messages, 1)
 	require.Contains(t, secondSender.messages[0], `<tg-slideshow><img src="`+server.URL+
 		`/base/published/image"/><figcaption>Обложка</figcaption></tg-slideshow>`)
+	require.NotContains(t, secondSender.messages[0], "/base/i/share-code")
 	require.Contains(t, secondSender.messages[0], `Смотрите: <a href="http://photo.test/foto.php4?kind=document">Документ</a>`)
 	require.NotContains(t, logs.String(), "sk_persistent-api-key")
+}
+
+func Test_Service_updatesPersistedSlinkShareURLBeforeRendering(t *testing.T) {
+	// Given
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/i/old-code":
+			assert.Equal(t, http.MethodHead, request.Method)
+			http.Redirect(writer, request, "/image/direct.png", http.StatusFound)
+		case "/image/direct.png":
+			assert.Equal(t, http.MethodHead, request.Method)
+			writer.Header().Set("Content-Type", "image/png")
+		default:
+			t.Errorf("unexpected Slink request %s %s", request.Method, request.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client, err := slink.NewClientWithOptions(
+		server.URL,
+		"sk_pending-key",
+		"tag-id",
+		time.Second,
+		slog.New(slog.DiscardHandler),
+		slink.Options{},
+	)
+	require.NoError(t, err)
+	now := time.Date(2026, time.September, 3, 12, 0, 0, 0, time.UTC)
+	state, err := store.Open(filepath.Join(t.TempDir(), "state.db"), now)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, state.Close()) })
+	book := alib.Book{
+		Title:  "Ожидающая книга",
+		BuyURL: "https://example.com/pending",
+		Photos: []alib.Photo{{
+			URL:          "http://photo.test/private-source",
+			Caption:      "Обложка",
+			SlinkURL:     server.URL + "/i/old-code",
+			SlinkProfile: client.Profile(),
+		}},
+	}
+	_, err = state.RecordDiscovered(context.Background(), []alib.Book{book}, now)
+	require.NoError(t, err)
+	deliveryErr := errors.New("telegram unavailable")
+	sender := &fakeSender{err: deliveryErr, failAt: 1}
+	service := app.NewService(app.Dependencies{
+		Fetcher:        fakeFetcher{},
+		State:          state,
+		Sender:         sender,
+		PhotoProcessor: client,
+		MessageLimit:   4096,
+		Now:            func() time.Time { return now },
+	})
+
+	// When
+	_, runErr := service.Run(context.Background())
+	pending, pendingErr := state.Pending(context.Background())
+
+	// Then
+	require.ErrorIs(t, runErr, deliveryErr)
+	require.NoError(t, pendingErr)
+	require.Len(t, pending, 1)
+	require.Equal(t, server.URL+"/image/direct.png", pending[0].Photos[0].SlinkURL)
+	require.Len(t, sender.messages, 1)
+	require.Contains(t, sender.messages[0], `<tg-slideshow><img src="`+server.URL+`/image/direct.png"`)
+	require.NotContains(t, sender.messages[0], "/i/old-code")
 }
 
 func requireTemporaryRootEmpty(t *testing.T, temporaryRoot string) {
@@ -500,9 +582,13 @@ func photoServer(events *[]string) *httptest.Server {
 				*events = append(*events, "upload")
 			}
 			writer.Header().Set("Content-Type", "application/json")
-			if _, err := io.WriteString(writer, `{"url":"/published/image"}`); err != nil {
+			if _, err := io.WriteString(writer, `{"url":"/i/share-code"}`); err != nil {
 				return
 			}
+		case "/i/share-code":
+			http.Redirect(writer, request, "/published/image", http.StatusFound)
+		case "/published/image":
+			writer.Header().Set("Content-Type", "image/png")
 		default:
 			writer.WriteHeader(http.StatusNotFound)
 		}
