@@ -83,21 +83,21 @@ func ParseWithResult(reader io.Reader, baseURL *url.URL, contentType string) (Pa
 			unidentifiedFailures++
 		}
 	}
+	failedBuyURLs := remainingFailures(state.failedOrder, state.failed)
+	result := ParseResult{
+		Books:                state.books,
+		FailedBuyURLs:        failedBuyURLs,
+		UnidentifiedFailures: unidentifiedFailures,
+	}
 
 	if len(state.books) == 0 {
 		if unidentifiedFailures > 0 ||
 			(len(state.seen) == 0 && len(state.failed) == 0 && !isEmptySearchResultsPage(document)) {
-			return ParseResult{}, ErrNoBooks
+			return result, ErrNoBooks
 		}
 	}
 
-	failedBuyURLs := remainingFailures(state.failedOrder, state.failed)
-
-	return ParseResult{
-		Books:                state.books,
-		FailedBuyURLs:        failedBuyURLs,
-		UnidentifiedFailures: unidentifiedFailures,
-	}, nil
+	return result, nil
 }
 
 type parseState struct {

@@ -162,6 +162,10 @@ func (c *Client) parsePages(
 			return nil, nil, 0, 0, nil, contextErr
 		}
 		if err != nil {
+			if errors.Is(err, ErrNoBooks) {
+				unidentifiedFailures += pageResult.UnidentifiedFailures
+				mergeFailedListings(failed, seen, &failedOrder, pageResult.FailedBuyURLs)
+			}
 			pageURL := page.endpoint.String()
 			pageErrors = append(pageErrors, fmt.Errorf("parse alib URL %q: %w", pageURL, err))
 			c.logger.ErrorContext(ctx, "alib.page_parse_failed",
@@ -186,15 +190,7 @@ func mergePageResult(
 	failedOrder *[]string,
 	page ParseResult,
 ) {
-	for _, buyURL := range page.FailedBuyURLs {
-		if _, succeeded := seen[buyURL]; succeeded {
-			continue
-		}
-		if _, alreadyFailed := failed[buyURL]; !alreadyFailed {
-			*failedOrder = append(*failedOrder, buyURL)
-			failed[buyURL] = struct{}{}
-		}
-	}
+	mergeFailedListings(failed, seen, failedOrder, page.FailedBuyURLs)
 	for _, book := range page.Books {
 		delete(failed, book.BuyURL)
 		if _, exists := seen[book.BuyURL]; exists {
@@ -202,6 +198,23 @@ func mergePageResult(
 		}
 		seen[book.BuyURL] = struct{}{}
 		*books = append(*books, book)
+	}
+}
+
+func mergeFailedListings(
+	failed map[string]struct{},
+	seen map[string]struct{},
+	failedOrder *[]string,
+	failedBuyURLs []string,
+) {
+	for _, buyURL := range failedBuyURLs {
+		if _, succeeded := seen[buyURL]; succeeded {
+			continue
+		}
+		if _, alreadyFailed := failed[buyURL]; !alreadyFailed {
+			*failedOrder = append(*failedOrder, buyURL)
+			failed[buyURL] = struct{}{}
+		}
 	}
 }
 
