@@ -62,9 +62,9 @@ type Config struct {
 	TelegramToken       string
 	TelegramChatID      string
 	TelegramAPIBase     string
-	AlibURLs            []string
 	StatePath           string
 	cronSpec            string
+	AlibURLs            []string
 	AlibRequestInterval time.Duration
 	HTTPTimeout         time.Duration
 	MessageLimit        int
