@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -55,7 +54,7 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	fetcher, err := alib.NewClient(
-		strings.Join(settings.AlibURLs, ","),
+		settings.AlibURLs,
 		settings.HTTPTimeout,
 		settings.AlibRequestInterval,
 		logger,

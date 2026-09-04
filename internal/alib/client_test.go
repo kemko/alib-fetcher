@@ -28,7 +28,7 @@ func Test_Client_fetches_and_parses_page(t *testing.T) {
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	client, err := alib.NewClient(server.URL, time.Second, 0, slog.New(slog.DiscardHandler))
+	client, err := alib.NewClient([]string{server.URL}, time.Second, 0, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
 	// When
@@ -51,7 +51,7 @@ func Test_Client_rejects_non_success_status(t *testing.T) {
 		writer.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	t.Cleanup(server.Close)
-	client, err := alib.NewClient(server.URL, time.Second, 0, slog.New(slog.DiscardHandler))
+	client, err := alib.NewClient([]string{server.URL}, time.Second, 0, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
 	// When
@@ -72,7 +72,7 @@ func Test_Client_returns_parse_error_for_structurally_changed_page(t *testing.T)
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	client, err := alib.NewClient(server.URL, time.Second, 0, slog.New(slog.DiscardHandler))
+	client, err := alib.NewClient([]string{server.URL}, time.Second, 0, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
 	// When
@@ -88,7 +88,7 @@ func Test_Client_returns_context_error_when_request_is_canceled(t *testing.T) {
 
 	// Given
 	client, err := alib.NewClient(
-		"https://www.alib.ru/tramka.phtml?tnew=7",
+		[]string{"https://www.alib.ru/tramka.phtml?tnew=7"},
 		time.Second,
 		0,
 		slog.New(slog.DiscardHandler),
@@ -121,7 +121,7 @@ func Test_Client_returns_context_error_when_canceled_after_download(t *testing.T
 		message: "alib.page_downloaded",
 		cancel:  cancel,
 	})
-	client, err := alib.NewClient(server.URL, time.Second, 0, logger)
+	client, err := alib.NewClient([]string{server.URL}, time.Second, 0, logger)
 	require.NoError(t, err)
 
 	// When
@@ -138,24 +138,24 @@ func Test_NewClient_validates_configuration(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name   string
-		rawURL string
+		name string
+		urls []string
 	}{
 		{
-			name:   "unsupported scheme",
-			rawURL: "file:///tmp/alib.html",
+			name: "unsupported scheme",
+			urls: []string{"file:///tmp/alib.html"},
 		},
 		{
-			name:   "missing host",
-			rawURL: "https:///tramkaa.phtml",
+			name: "missing host",
+			urls: []string{"https:///tramkaa.phtml"},
 		},
 		{
-			name:   "malformed URL",
-			rawURL: "://",
+			name: "malformed URL",
+			urls: []string{"://"},
 		},
 		{
-			name:   "empty URL item",
-			rawURL: "https://example.com/first,,https://example.com/second",
+			name: "empty URL item",
+			urls: []string{"https://example.com/first", "", "https://example.com/second"},
 		},
 	}
 
@@ -164,7 +164,7 @@ func Test_NewClient_validates_configuration(t *testing.T) {
 			t.Parallel()
 
 			// When
-			client, err := alib.NewClient(tt.rawURL, time.Second, 0, slog.New(slog.DiscardHandler))
+			client, err := alib.NewClient(tt.urls, time.Second, 0, slog.New(slog.DiscardHandler))
 
 			// Then
 			require.Error(t, err)
@@ -173,12 +173,48 @@ func Test_NewClient_validates_configuration(t *testing.T) {
 	}
 }
 
+func Test_NewClient_rejects_empty_endpoint_list(t *testing.T) {
+	t.Parallel()
+
+	// When
+	client, err := alib.NewClient(nil, time.Second, 0, slog.New(slog.DiscardHandler))
+
+	// Then
+	require.Error(t, err)
+	require.Nil(t, client)
+}
+
+func Test_NewClient_copies_endpoint_configuration(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	requests := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests <- request.URL.Path
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, err := writer.Write([]byte(listingPage("Book", "/book.html", "100 руб.")))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+	urls := []string{server.URL + "/original"}
+	client, err := alib.NewClient(urls, time.Second, 0, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	urls[0] = server.URL + "/replaced"
+
+	// When
+	_, err = client.FetchWithResult(context.Background())
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, "/original", <-requests)
+}
+
 func Test_NewClient_rejects_non_positive_timeout(t *testing.T) {
 	t.Parallel()
 
 	// When
 	client, err := alib.NewClient(
-		"https://www.alib.ru/tramka.phtml?tnew=7",
+		[]string{"https://www.alib.ru/tramka.phtml?tnew=7"},
 		0,
 		0,
 		slog.New(slog.DiscardHandler),
@@ -194,7 +230,7 @@ func Test_NewClient_rejects_negative_request_interval(t *testing.T) {
 
 	// When
 	client, err := alib.NewClient(
-		"https://www.alib.ru/tramka.phtml?tnew=7",
+		[]string{"https://www.alib.ru/tramka.phtml?tnew=7"},
 		time.Second,
 		-time.Second,
 		slog.New(slog.DiscardHandler),
@@ -209,7 +245,7 @@ func Test_NewClient_rejects_nil_logger(t *testing.T) {
 	t.Parallel()
 
 	// When
-	client, err := alib.NewClient("https://www.alib.ru/tramka.phtml?tnew=7", time.Second, 0, nil)
+	client, err := alib.NewClient([]string{"https://www.alib.ru/tramka.phtml?tnew=7"}, time.Second, 0, nil)
 
 	// Then
 	require.Error(t, err)
@@ -224,7 +260,7 @@ func Test_NewClient_does_not_expose_credentials_in_validation_errors(t *testing.
 		"https://example.com/%zz?access_token=top-secret",
 	} {
 		// When
-		client, err := alib.NewClient(rawURL, time.Second, 0, slog.New(slog.DiscardHandler))
+		client, err := alib.NewClient([]string{rawURL}, time.Second, 0, slog.New(slog.DiscardHandler))
 
 		// Then
 		require.Error(t, err)
@@ -262,12 +298,12 @@ func Test_Client_fetches_urls_in_order_and_deduplicates_by_buy_url(t *testing.T)
 		}
 	}))
 	t.Cleanup(server.Close)
-	rawURLs := strings.Join([]string{
+	urls := []string{
 		" " + server.URL + "/one/first?one=1&two=2",
 		server.URL + "/two/second?query=a%2Cb ",
 		server.URL + "/three/third?last=true",
-	}, ", ")
-	client, err := alib.NewClient(rawURLs, time.Second, 0, slog.New(slog.DiscardHandler))
+	}
+	client, err := alib.NewClient(urls, time.Second, 0, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
 	// When
@@ -304,7 +340,7 @@ func Test_ClientWithResult_deduplicates_failure_after_success_on_later_page(t *t
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	client, err := alib.NewClient(server.URL+"/first,"+server.URL+"/second", time.Second, 0, slog.New(slog.DiscardHandler))
+	client, err := alib.NewClient([]string{server.URL + "/first", server.URL + "/second"}, time.Second, 0, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
 	// When
@@ -334,7 +370,7 @@ func Test_ClientWithResult_returns_deduplicated_failed_buy_urls(t *testing.T) {
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	client, err := alib.NewClient(server.URL+"/first,"+server.URL+"/second", time.Second, 0, slog.New(slog.DiscardHandler))
+	client, err := alib.NewClient([]string{server.URL + "/first", server.URL + "/second"}, time.Second, 0, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
 	// When
@@ -358,7 +394,7 @@ func Test_ClientWithResult_returns_unidentified_failures_from_mixed_page(t *test
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	client, err := alib.NewClient(server.URL, time.Second, 0, slog.New(slog.DiscardHandler))
+	client, err := alib.NewClient([]string{server.URL}, time.Second, 0, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
 	// When
@@ -385,7 +421,7 @@ func Test_ClientWithResult_keeps_unidentified_failure_from_failed_page(t *testin
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	client, err := alib.NewClient(server.URL+"/failed,"+server.URL+"/valid", time.Second, 0, slog.New(slog.DiscardHandler))
+	client, err := alib.NewClient([]string{server.URL + "/failed", server.URL + "/valid"}, time.Second, 0, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
 	// When
@@ -407,7 +443,7 @@ func Test_Client_logs_full_URL_for_download_failure(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	client, err := alib.NewClient(
-		server.URL+"/failed?scope=download",
+		[]string{server.URL + "/failed?scope=download"},
 		time.Second,
 		0,
 		slog.New(slog.NewTextHandler(&logs, nil)),
@@ -436,7 +472,7 @@ func Test_Client_logs_full_URL_for_parse_failure(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	client, err := alib.NewClient(
-		server.URL+"/changed?scope=parse#results",
+		[]string{server.URL + "/changed?scope=parse#results"},
 		time.Second,
 		0,
 		slog.New(slog.NewTextHandler(&logs, nil)),
@@ -466,7 +502,7 @@ func Test_Client_does_not_expose_query_credentials_from_malformed_redirect(t *te
 	}))
 	t.Cleanup(server.Close)
 	client, err := alib.NewClient(
-		server.URL+"/redirect",
+		[]string{server.URL + "/redirect"},
 		time.Second,
 		0,
 		slog.New(slog.NewTextHandler(&logs, nil)),
@@ -512,13 +548,13 @@ func Test_Client_downloads_all_pages_before_parsing_and_logs_outcomes(t *testing
 	}))
 	t.Cleanup(server.Close)
 	client, err := alib.NewClient(
-		strings.Join([]string{
+		[]string{
 			server.URL + "/before?access_token=top-secret#fragment-secret",
 			server.URL + "/broken?scope=broken",
 			server.URL + "/success?scope=success",
 			server.URL + "/empty?scope=empty",
 			server.URL + "/after?scope=after",
-		}, ","),
+		},
 		time.Second,
 		0,
 		logger,
@@ -569,7 +605,7 @@ func Test_Client_rejects_oversized_response_without_content_length(t *testing.T)
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	client, err := alib.NewClient(server.URL, 5*time.Second, 0, slog.New(slog.DiscardHandler))
+	client, err := alib.NewClient([]string{server.URL}, 5*time.Second, 0, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
 	// When
@@ -598,7 +634,7 @@ func Test_Client_continues_after_response_body_read_failure(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	client, err := alib.NewClient(
-		server.URL+"/truncated,"+server.URL+"/success",
+		[]string{server.URL + "/truncated", server.URL + "/success"},
 		time.Second,
 		0,
 		slog.New(slog.NewTextHandler(&logs, nil)),
@@ -630,7 +666,7 @@ func Test_Client_accepts_all_correct_empty_pages(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	client, err := alib.NewClient(
-		server.URL+"/first,"+server.URL+"/second",
+		[]string{server.URL + "/first", server.URL + "/second"},
 		time.Second,
 		0,
 		slog.New(slog.DiscardHandler),
@@ -658,7 +694,7 @@ func Test_Client_returns_combined_error_when_all_pages_fail(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	client, err := alib.NewClient(
-		server.URL+"/status?status=bad,"+server.URL+"/broken?scope=broken",
+		[]string{server.URL + "/status?status=bad", server.URL + "/broken?scope=broken"},
 		time.Second,
 		0,
 		slog.New(slog.DiscardHandler),
@@ -689,7 +725,7 @@ func Test_Client_waits_between_requests(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	client, err := alib.NewClient(
-		server.URL+"/first,"+server.URL+"/second",
+		[]string{server.URL + "/first", server.URL + "/second"},
 		time.Second,
 		40*time.Millisecond,
 		slog.New(slog.DiscardHandler),
@@ -723,7 +759,7 @@ func Test_Client_waits_between_attempts_after_failure(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	client, err := alib.NewClient(
-		server.URL+"/first,"+server.URL+"/second",
+		[]string{server.URL + "/first", server.URL + "/second"},
 		time.Second,
 		40*time.Millisecond,
 		slog.New(slog.DiscardHandler),
@@ -750,7 +786,7 @@ func Test_Client_does_not_wait_after_single_request(t *testing.T) {
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	client, err := alib.NewClient(server.URL, time.Second, 5*time.Second, slog.New(slog.DiscardHandler))
+	client, err := alib.NewClient([]string{server.URL}, time.Second, 5*time.Second, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	result := make(chan error, 1)
 
@@ -786,7 +822,7 @@ func Test_Client_returns_context_error_when_canceled_during_wait(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	client, err := alib.NewClient(
-		server.URL+"/first,"+server.URL+"/second",
+		[]string{server.URL + "/first", server.URL + "/second"},
 		time.Second,
 		5*time.Second,
 		slog.New(slog.DiscardHandler),
@@ -834,7 +870,7 @@ func Test_Client_returns_context_error_when_canceled_during_body_download(t *tes
 	}))
 	t.Cleanup(server.Close)
 	client, err := alib.NewClient(
-		server.URL+"/first,"+server.URL+"/second",
+		[]string{server.URL + "/first", server.URL + "/second"},
 		5*time.Second,
 		0,
 		slog.New(slog.DiscardHandler),

@@ -49,7 +49,7 @@ type downloadedPage struct {
 }
 
 // NewClient builds an Alib.ru client with a bounded request timeout.
-func NewClient(rawURLs string, timeout, requestInterval time.Duration, logger *slog.Logger) (*Client, error) {
+func NewClient(rawURLs []string, timeout, requestInterval time.Duration, logger *slog.Logger) (*Client, error) {
 	if timeout <= 0 {
 		return nil, errors.New("create alib client: timeout must be positive")
 	}
@@ -59,9 +59,13 @@ func NewClient(rawURLs string, timeout, requestInterval time.Duration, logger *s
 	if logger == nil {
 		return nil, errors.New("create alib client: logger is required")
 	}
+	if len(rawURLs) == 0 {
+		return nil, errors.New("create alib client: at least one URL is required")
+	}
 
-	endpoints := make([]*url.URL, 0)
-	for index, rawURL := range strings.Split(rawURLs, ",") {
+	inputURLs := append([]string(nil), rawURLs...)
+	endpoints := make([]*url.URL, 0, len(inputURLs))
+	for index, rawURL := range inputURLs {
 		rawURL = strings.TrimSpace(rawURL)
 		if rawURL == "" {
 			return nil, fmt.Errorf("parse alib URL item %d: URL is empty", index)
