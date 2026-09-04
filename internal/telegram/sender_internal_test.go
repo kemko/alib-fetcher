@@ -35,6 +35,7 @@ func Test_Sender_classifies_response_body_read_failure(t *testing.T) {
 	// Then
 	require.ErrorIs(t, err, ErrRequest)
 	require.ErrorIs(t, err, context.Canceled)
+	assert.Contains(t, err.Error(), "read ***/bot*** failed")
 	assert.NotContains(t, err.Error(), "test-token")
 	assert.NotContains(t, err.Error(), "api.telegram.org")
 }
@@ -88,7 +89,7 @@ func Test_Sender_accepts_API_response_at_size_limit(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func Test_Sender_hides_transport_error_details(t *testing.T) {
+func Test_Sender_includes_sanitized_transport_error_details(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -103,6 +104,7 @@ func Test_Sender_hides_transport_error_details(t *testing.T) {
 	// Then
 	require.ErrorIs(t, err, ErrRequest)
 	require.ErrorIs(t, err, transportErr)
+	assert.Contains(t, err.Error(), "Post ***/bot***/sendRichMessage failed")
 	assert.NotContains(t, err.Error(), "test-token")
 	assert.NotContains(t, err.Error(), "api.telegram.org")
 }

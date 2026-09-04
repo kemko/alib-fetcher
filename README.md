@@ -282,6 +282,8 @@ zero-based `index`, and `total`. `slink.photo_completed` adds `outcome`
 image. `slink.photo_failed` includes the photo identity, `stage`,
 `error_category`, and optional `http_status`. Source photo URLs, API keys,
 response bodies, and temporary paths are excluded.
+Telegram transport errors include the underlying sanitized cause; the bot token
+and API base URL are redacted.
 
 On first run after upgrading from older timestamp-marker releases, raw legacy
 state entries are migrated to JSON records. Structured records from releases
