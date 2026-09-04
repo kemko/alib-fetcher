@@ -1,11 +1,10 @@
 # alib-fetcher
 
-Always-on Go service that fetches the latest listings from one or more Alib
-pages, defaulting to
-[`alib.ru/tramka.phtml?tnew=7`](https://www.alib.ru/tramka.phtml?tnew=7), and
-delivers unseen books to a Telegram chat as Rich Messages on a configurable cron
-schedule. Delivered listings are tracked by their unique `Купить` link in an
-embedded bbolt database, which also stores the pending send queue.
+Always-on Go service that fetches the latest listings from Alib category and
+series pages, then delivers unseen books to a Telegram chat as Rich Messages on
+a configurable cron schedule. Delivered listings are tracked by their unique
+`Купить` link in an embedded bbolt database, which also stores the pending send
+queue.
 
 ## Configuration
 
@@ -18,7 +17,8 @@ embedded bbolt database, which also stores the pending send queue.
 | `RUN_ON_STARTUP` | no | `true` | Run one digest cycle immediately after scheduler startup |
 | `FRESH_BOOKS` | no | empty | Optional `✨` threshold: `age:N` or `since:YYYY` |
 | `STATE_PATH` | no | `/var/lib/alib-fetcher/state.db` | bbolt state database |
-| `ALIB_URL` | no | source URL above | One HTTP(S) listing page, or a comma-separated list of pages |
+| `ALIB_CATEGORIES` | no | empty | Comma-separated ASCII category names; each creates a `https://www.alib.ru/<category>.phtml?tnew=7` page |
+| `ALIB_SERIES` | no | empty | Comma-separated Unicode series names; each creates a `https://alib.ru/findp.php4?seria=<encoded>&lday=7` page |
 | `ALIB_REQUEST_INTERVAL` | no | `1s` | Non-negative Go duration between sequential Alib page requests; `0s` disables the delay |
 | `TELEGRAM_API_BASE` | no | `https://api.telegram.org` | Bot API base URL; custom/local servers require Bot API 10.1+ |
 | `HTTP_TIMEOUT` | no | `30s` | Positive Go duration applied to each external request |
@@ -27,12 +27,18 @@ embedded bbolt database, which also stores the pending send queue.
 Configuration is validated before process startup. Invalid chat IDs, including
 plain text without `@`, an empty `@` username, whitespace, and numeric overflow,
 fail fast with an error naming `TELEGRAM_CHAT_ID`.
-`ALIB_URL` accepts one URL or a comma-separated list. Surrounding whitespace is
-trimmed, URL order is preserved, and literal commas must be percent-encoded as
-`%2C`. URL userinfo is rejected. For example:
+`ALIB_CATEGORIES` and `ALIB_SERIES` are optional independently, but at least one
+must be non-empty. Each variable is parsed as one CSV record: surrounding
+whitespace is trimmed, empty elements and malformed quotes are rejected, and
+values and repeats retain their source order. Categories must be non-empty
+ASCII letters only. Series accept Unicode and are URL-encoded as the `seria`
+query value, so spaces, `&`, `/`, and commas cannot inject extra parameters.
+Requests always use the fixed seven-day window (`tnew=7` or `lday=7`), in
+category order followed by series order. For example:
 
 ```bash
-ALIB_URL='https://example.com/first?tag=one&sort=new, https://example.com/second?tnew=7' \
+ALIB_CATEGORIES='tramka,detektivy' \
+ALIB_SERIES='"История, тома",Фантастика & фэнтези' \
 ALIB_REQUEST_INTERVAL=2s
 ```
 
@@ -47,9 +53,8 @@ the first copy. Each page has separate download and parse events:
 download by `alib.page_parsed` or `alib.page_parse_failed`. Every event has the
 zero-based `index` and full configured `url`, including GET parameters and
 fragments; parsed events also have `books`, and failed events have `error`. A
-download failure has no parse event. Userinfo is rejected during configuration.
-Because page URLs are also included in errors and written verbatim to stdout,
-`ALIB_URL` must not contain credentials or other secrets.
+download failure has no parse event. Generated page URLs are also included in
+errors and written verbatim to stdout.
 A valid search page with no listings counts as a successful empty result. The
 fetch fails only when no page parses successfully or the context is canceled;
 successful pages still produce a partial result when other pages fail.
@@ -182,6 +187,7 @@ Run one cycle locally:
 ```bash
 TELEGRAM_BOT_TOKEN=... \
 TELEGRAM_CHAT_ID=... \
+ALIB_CATEGORIES=tramka \
 STATE_PATH=./data/state.db \
 go run ./cmd/alib-fetcher -once
 ```
@@ -207,6 +213,7 @@ Run the scheduler:
 ```bash
 TELEGRAM_BOT_TOKEN=... \
 TELEGRAM_CHAT_ID=... \
+ALIB_CATEGORIES=tramka \
 CRON_SCHEDULE='*/30 * * * *' \
 STATE_PATH=./data/state.db \
 go run ./cmd/alib-fetcher
@@ -268,6 +275,7 @@ docker run -d --name alib-fetcher \
   --mount type=volume,src=alib-fetcher-state,dst=/var/lib/alib-fetcher \
   -e TELEGRAM_BOT_TOKEN=... \
   -e TELEGRAM_CHAT_ID=... \
+  -e ALIB_CATEGORIES=tramka \
   ghcr.io/<owner>/<repository>:latest
 ```
 
@@ -276,6 +284,7 @@ Alternatively, start the service with the Compose v3.8 configuration:
 ```bash
 export TELEGRAM_BOT_TOKEN=...
 export TELEGRAM_CHAT_ID=...
+export ALIB_CATEGORIES=tramka
 docker compose up -d
 ```
 
@@ -286,6 +295,7 @@ in the command or Compose file:
 ```bash
 FRESH_BOOKS=age:5 \
 TIMEZONE=Europe/Moscow \
+ALIB_CATEGORIES=tramka,detektivy \
 ALIB_FETCHER_IMAGE=ghcr.io/example/alib-fetcher:latest \
 docker compose up -d
 ```
