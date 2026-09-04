@@ -14,6 +14,7 @@ import (
 	"unicode"
 
 	"github.com/robfig/cron/v3"
+	"golang.org/x/text/encoding/charmap"
 )
 
 // ErrInvalid indicates that one or more environment values are unusable.
@@ -119,9 +120,24 @@ func buildAlibURLs() ([]string, error) {
 		}
 		endpoints = append(endpoints, "https://www.alib.ru/"+category+".phtml?tnew=7")
 	}
+	seenSeries := make(map[string]struct{}, len(series))
 	for _, value := range series {
+		if _, seen := seenSeries[value]; seen {
+			continue
+		}
+		seenSeries[value] = struct{}{}
+
 		endpoint := url.URL{Scheme: "https", Host: "alib.ru", Path: "/findp.php4"}
-		endpoint.RawQuery = "seria=" + url.QueryEscape(value) + "&lday=7"
+		encoded, encodeErr := charmap.Windows1251.NewEncoder().Bytes([]byte(value))
+		if encodeErr != nil {
+			return nil, fmt.Errorf(
+				"%w: ALIB_SERIES item %q cannot be represented in Windows-1251: %w",
+				ErrInvalid,
+				value,
+				encodeErr,
+			)
+		}
+		endpoint.RawQuery = "seria=" + url.QueryEscape(string(encoded)) + "&lday=7"
 		endpoints = append(endpoints, endpoint.String())
 	}
 

@@ -29,6 +29,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	xhtml "golang.org/x/net/html"
+	"golang.org/x/text/encoding/charmap"
 )
 
 type telegramRequest struct {
@@ -542,7 +543,11 @@ func Test_run_once_fetches_categories_and_series_in_order_and_sends_partial_dedu
 			assert.NoError(t, err)
 		case request.URL.Path == "/broken.phtml":
 			writer.WriteHeader(http.StatusBadGateway)
-		case request.URL.Path == "/findp.php4" && request.URL.Query().Get("seria") == "Серия, тома":
+		case request.URL.Path == "/findp.php4" && request.URL.Query().Get("seria") != "changed":
+			assert.Equal(t, "seria=%D1%E5%F0%E8%FF%2C+%F2%EE%EC%E0&lday=7", request.URL.RawQuery)
+			decodedSeries, decodeErr := charmap.Windows1251.NewDecoder().String(request.URL.Query().Get("seria"))
+			assert.NoError(t, decodeErr)
+			assert.Equal(t, "Серия, тома", decodedSeries)
 			_, err := writer.Write([]byte(
 				listingPage("Общий второй", "/shared-book.html", "999 руб.") +
 					listingPage("Последний", "/last-book.html", "300 руб."),
@@ -575,7 +580,7 @@ func Test_run_once_fetches_categories_and_series_in_order_and_sends_partial_dedu
 	require.Equal(t, []string{
 		"https://www.alib.ru/first.phtml?tnew=7",
 		"https://www.alib.ru/broken.phtml?tnew=7",
-		"https://alib.ru/findp.php4?seria=%D0%A1%D0%B5%D1%80%D0%B8%D1%8F%2C+%D1%82%D0%BE%D0%BC%D0%B0&lday=7",
+		"https://alib.ru/findp.php4?seria=%D1%E5%F0%E8%FF%2C+%F2%EE%EC%E0&lday=7",
 		"https://alib.ru/findp.php4?seria=changed&lday=7",
 	}, settings.AlibURLs)
 	settings.AlibURLs = localAlibURLs(t, alibServer.URL, settings.AlibURLs)
@@ -590,7 +595,7 @@ func Test_run_once_fetches_categories_and_series_in_order_and_sends_partial_dedu
 	require.Equal(t, []alibRequest{
 		{Path: "/first.phtml", RawQuery: "tnew=7"},
 		{Path: "/broken.phtml", RawQuery: "tnew=7"},
-		{Path: "/findp.php4", RawQuery: "seria=%D0%A1%D0%B5%D1%80%D0%B8%D1%8F%2C+%D1%82%D0%BE%D0%BC%D0%B0&lday=7"},
+		{Path: "/findp.php4", RawQuery: "seria=%D1%E5%F0%E8%FF%2C+%F2%EE%EC%E0&lday=7"},
 		{Path: "/findp.php4", RawQuery: "seria=changed&lday=7"},
 	}, []alibRequest{<-alibRequests, <-alibRequests, <-alibRequests, <-alibRequests})
 	require.Len(t, telegramRequests, 1)
@@ -614,11 +619,11 @@ func Test_run_once_fetches_categories_and_series_in_order_and_sends_partial_dedu
 	require.Equal(t, 2, strings.Count(logOutput, `"msg":"alib.page_parsed"`))
 	require.Equal(t, 1, strings.Count(logOutput, `"msg":"alib.page_parse_failed"`))
 	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","index":0,"url":"`+alibServer.URL+`/first.phtml?tnew=7"`)
-	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","index":2,"url":"`+alibServer.URL+`/findp.php4?seria=%D0%A1%D0%B5%D1%80%D0%B8%D1%8F%2C+%D1%82%D0%BE%D0%BC%D0%B0&lday=7"`)
+	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","index":2,"url":"`+alibServer.URL+`/findp.php4?seria=%D1%E5%F0%E8%FF%2C+%F2%EE%EC%E0&lday=7"`)
 	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","index":3,"url":"`+alibServer.URL+`/findp.php4?seria=changed&lday=7"`)
 	require.Contains(t, logOutput, `"msg":"alib.page_download_failed","index":1,"url":"`+alibServer.URL+`/broken.phtml?tnew=7"`)
 	require.Contains(t, logOutput, `"msg":"alib.page_parsed","index":0,"url":"`+alibServer.URL+`/first.phtml?tnew=7","books":2`)
-	require.Contains(t, logOutput, `"msg":"alib.page_parsed","index":2,"url":"`+alibServer.URL+`/findp.php4?seria=%D0%A1%D0%B5%D1%80%D0%B8%D1%8F%2C+%D1%82%D0%BE%D0%BC%D0%B0&lday=7","books":2`)
+	require.Contains(t, logOutput, `"msg":"alib.page_parsed","index":2,"url":"`+alibServer.URL+`/findp.php4?seria=%D1%E5%F0%E8%FF%2C+%F2%EE%EC%E0&lday=7","books":2`)
 	require.Contains(t, logOutput, `"msg":"alib.page_parse_failed","index":3,"url":"`+alibServer.URL+`/findp.php4?seria=changed&lday=7"`)
 	require.Less(t,
 		strings.LastIndex(logOutput, `"msg":"alib.page_downloaded"`),

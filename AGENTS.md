@@ -189,7 +189,7 @@ Optional defaults:
 | `FRESH_BOOKS` | empty | optional inclusive `✨` threshold: `age:N` or `since:YYYY`; empty disables only `✨` |
 | `STATE_PATH` | `/var/lib/alib-fetcher/state.db` | bbolt database; parent directories are created with mode `0750`, DB with `0600` |
 | `ALIB_CATEGORIES` | empty | Optional one-record CSV list of non-empty ASCII-letter category names; each becomes `https://www.alib.ru/<category>.phtml?tnew=7` |
-| `ALIB_SERIES` | empty | Optional one-record CSV list of Unicode series names; each becomes `https://alib.ru/findp.php4?seria=<encoded>&lday=7` |
+| `ALIB_SERIES` | empty | Optional one-record CSV list of Unicode series names representable in Windows-1251; each becomes `https://alib.ru/findp.php4?seria=<encoded>&lday=7` |
 | `ALIB_REQUEST_INTERVAL` | `1s` | Non-negative Go duration between sequential Alib requests; `0s` disables the delay |
 | `TELEGRAM_API_BASE` | `https://api.telegram.org` | HTTP(S) API base; override it in tests |
 | `HTTP_TIMEOUT` | `30s` | positive Go duration applied per external request |
@@ -200,10 +200,13 @@ Invalid configuration, including a malformed or overflowing
 `ALIB_CATEGORIES` and `ALIB_SERIES` are optional separately, but at least one
 must contain a non-empty CSV list. Lists reject empty elements and malformed
 quotes; surrounding whitespace is trimmed. Categories accept only ASCII
-letters. Series accept Unicode, including commas when CSV-quoted, and are URL
-encoded as one `seria` query value. Generated endpoints always use the fixed
+letters. Series are entered as Unicode, including commas when CSV-quoted, but
+each value must be representable in Windows-1251. Their Windows-1251 bytes are
+percent-encoded as one `seria` query value; an unrepresentable character is an
+`ALIB_SERIES` configuration error. Generated endpoints always use the fixed
 seven-day window (`tnew=7` for categories and `lday=7` for series), retaining
-all values and repeats in category-then-series order.
+category-then-series order and ignoring repeated series names after their first
+occurrence.
 Never log or expose the bot token; note that the SDK internally puts it in the
 Bot API URL.
 

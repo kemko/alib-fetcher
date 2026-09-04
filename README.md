@@ -18,7 +18,7 @@ queue.
 | `FRESH_BOOKS` | no | empty | Optional `✨` threshold: `age:N` or `since:YYYY` |
 | `STATE_PATH` | no | `/var/lib/alib-fetcher/state.db` | bbolt state database |
 | `ALIB_CATEGORIES` | no | empty | Comma-separated ASCII category names; each creates a `https://www.alib.ru/<category>.phtml?tnew=7` page |
-| `ALIB_SERIES` | no | empty | Comma-separated Unicode series names; each creates a `https://alib.ru/findp.php4?seria=<encoded>&lday=7` page |
+| `ALIB_SERIES` | no | empty | Comma-separated Unicode series names representable in Windows-1251; each creates a `https://alib.ru/findp.php4?seria=<encoded>&lday=7` page |
 | `ALIB_REQUEST_INTERVAL` | no | `1s` | Non-negative Go duration between sequential Alib page requests; `0s` disables the delay |
 | `TELEGRAM_API_BASE` | no | `https://api.telegram.org` | Bot API base URL; custom/local servers require Bot API 10.1+ |
 | `HTTP_TIMEOUT` | no | `30s` | Positive Go duration applied to each external request |
@@ -33,9 +33,13 @@ default category.
 `ALIB_CATEGORIES` and `ALIB_SERIES` are optional independently, but at least one
 must be non-empty. Each variable is parsed as one CSV record: surrounding
 whitespace is trimmed, empty elements and malformed quotes are rejected, and
-values and repeats retain their source order. Categories must be non-empty
-ASCII letters only. Series accept Unicode and are URL-encoded as the `seria`
-query value, so spaces, `&`, `/`, and commas cannot inject extra parameters.
+values retain their source order. Categories must be non-empty ASCII letters
+only. Repeated series names are ignored after their first occurrence. Series
+are entered as Unicode, but each value must be representable in Windows-1251.
+Each value is first encoded to Windows-1251, then those bytes are URL-escaped as
+the `seria` query value, so spaces, `&`, `/`, and commas cannot inject extra
+parameters. An unrepresentable character is a configuration error naming
+`ALIB_SERIES`.
 Requests always use the fixed seven-day window (`tnew=7` or `lday=7`), in
 category order followed by series order. For example:
 
