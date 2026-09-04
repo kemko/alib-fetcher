@@ -25,8 +25,6 @@ const (
 var ErrMessageTooLong = errors.New("digest item exceeds message limit")
 
 // Options controls message size and publication-year highlighting.
-//
-//nolint:govet // Keep the public rendering options grouped by concern.
 type Options struct {
 	LocalTime           time.Time
 	FreshBooksLowerYear *int

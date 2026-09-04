@@ -159,16 +159,16 @@
 
 ### Task 4: Verify acceptance criteria
 
-- [ ] Выполнить `make verify`: format check, строгий lint, race-enabled shuffled tests и build должны пройти.
-- [ ] Выполнить `make coverage`; общее statement coverage должно быть не ниже 80%.
-- [ ] Выполнить `docker compose config`.
-- [ ] Проверить поиском, что production-код, конфигурация и Compose больше не содержат Slink,
+- [x] Выполнить `make verify`: format check, строгий lint, race-enabled shuffled tests и build должны пройти.
+- [x] Выполнить `make coverage`; общее statement coverage должно быть не ниже 80%.
+- [x] Выполнить `docker compose config`.
+- [x] Проверить поиском, что production-код, конфигурация и Compose больше не содержат Slink,
   `tg-slideshow`, image upload/download и `iplib`.
-- [ ] Проверить автоматическими тестами, что все фотоссылки остаются в `Смотрите`,
+- [x] Проверить автоматическими тестами, что все фотоссылки остаются в `Смотрите`,
   сообщения отправляются через `SendRichMessage`, а отображаемый текст каждого chunk не
   превышает настроенный лимит с default `32000`.
-- [ ] Проверить автоматическими тестами, что длинный `Content` сокращается с `…`, а книга
+- [x] Проверить автоматическими тестами, что длинный `Content` сокращается с `…`, а книга
   записывается, отправляется и не учитывается как сбой.
-- [ ] Проверить task-only diff и отсутствие секретов, временных файлов, баз данных и
+- [x] Проверить task-only diff и отсутствие секретов, временных файлов, баз данных и
   бинарников.
-- [ ] Создать сфокусированный Conventional Commit, например `refactor: remove Slink image processing`.
+- [x] Создать сфокусированный Conventional Commit, например `feat: verify Slink removal`.

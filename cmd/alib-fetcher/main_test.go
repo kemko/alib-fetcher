@@ -8,11 +8,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -205,7 +205,7 @@ func Test_run_once_sends_truncated_description_through_rich_message(t *testing.T
 
 	statePath := filepath.Join(t.TempDir(), "state.db")
 	setRunEnvironment(t, alibServer.URL, telegramServer.URL, statePath)
-	t.Setenv("MESSAGE_LIMIT", fmt.Sprint(messageLimit))
+	t.Setenv("MESSAGE_LIMIT", strconv.Itoa(messageLimit))
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
@@ -285,18 +285,6 @@ func Test_run_once_uses_default_rich_message_limit_and_listing_block_chunks(t *t
 		require.LessOrEqual(t, displayedRuneCount(t, request.Message.RichMessage.HTML), 32000)
 		require.NotContains(t, request.Path, "sendMessage")
 	}
-}
-
-func newIPv4TestServer(t *testing.T, handler http.Handler) *httptest.Server {
-	t.Helper()
-	var listenConfig net.ListenConfig
-	listener, err := listenConfig.Listen(context.Background(), "tcp4", "127.0.0.1:0")
-	require.NoError(t, err)
-	server := httptest.NewUnstartedServer(handler)
-	server.Listener = listener
-	server.Start()
-
-	return server
 }
 
 func Test_run_rejects_non_positive_forget_latest(t *testing.T) {
