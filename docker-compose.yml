@@ -13,7 +13,8 @@ services:
       RUN_ON_STARTUP: "${RUN_ON_STARTUP:-true}"
       FRESH_BOOKS: "${FRESH_BOOKS:-}"
       STATE_PATH: /var/lib/alib-fetcher/state.db
-      ALIB_URL: ${ALIB_URL:-https://www.alib.ru/tramka.phtml?tnew=7}
+      ALIB_CATEGORIES: "${ALIB_CATEGORIES:-}"
+      ALIB_SERIES: "${ALIB_SERIES:-}"
       ALIB_REQUEST_INTERVAL: ${ALIB_REQUEST_INTERVAL:-1s}
       TELEGRAM_API_BASE: ${TELEGRAM_API_BASE:-https://api.telegram.org}
       HTTP_TIMEOUT: ${HTTP_TIMEOUT:-30s}

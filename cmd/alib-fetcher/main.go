@@ -53,8 +53,13 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+
+	return runWithConfig(logger, settings, *once)
+}
+
+func runWithConfig(logger *slog.Logger, settings config.Config, once bool) error {
 	fetcher, err := alib.NewClient(
-		settings.AlibURL,
+		settings.AlibURLs,
 		settings.HTTPTimeout,
 		settings.AlibRequestInterval,
 		logger,
@@ -92,7 +97,7 @@ func run(logger *slog.Logger) error {
 		RunOnStartup:   settings.RunOnStartup,
 		StatePath:      settings.StatePath,
 		TelegramChatID: settings.TelegramChatID,
-	}, dependencies, telegramAdapter, *once, logger)
+	}, dependencies, telegramAdapter, once, logger)
 }
 
 type forgetLatestOption struct {

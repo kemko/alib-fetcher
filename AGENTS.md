@@ -16,8 +16,9 @@ installs the pinned golangci-lint v2 release.
 One digest cycle is deliberately ordered as follows:
 
 1. Remove sent records strictly older than 14 days.
-2. Download all configured Alib pages sequentially, retaining successful response
-   bodies and their source order.
+2. Build pages from `ALIB_CATEGORIES` then `ALIB_SERIES`, and download all
+   generated Alib endpoints sequentially, retaining successful response bodies
+   and their source order.
 3. Parse successful responses only after all downloads finish, then combine and
    deduplicate listings by their resolved `BuyURL`, retaining the first occurrence.
 4. Read existing `BuyURL` records without writing new fetched listings.
@@ -131,7 +132,8 @@ Preserve these semantics:
   lifetime, startup and scheduled digest runs, robfig/cron lifecycle, refresh
   callback policy and listener lifecycle, shared digest-runner concurrency, and
   the state-only forget-latest maintenance operation.
-- `internal/config`: environment loading, defaults, and validation.
+- `internal/config`: environment loading, generated category/series endpoints,
+  defaults, and validation.
 - `internal/alib`: HTTP client plus charset-aware, DOM-first HTML parser. The
   real page may be Windows-1251. Listings are recognized inside `<p>` elements
   by a title in `<b>` and a `Купить` link; seller links contain `bs.php4`.
@@ -186,7 +188,8 @@ Optional defaults:
 | `RUN_ON_STARTUP` | `true` | whether service mode runs one digest cycle immediately after startup |
 | `FRESH_BOOKS` | empty | optional inclusive `✨` threshold: `age:N` or `since:YYYY`; empty disables only `✨` |
 | `STATE_PATH` | `/var/lib/alib-fetcher/state.db` | bbolt database; parent directories are created with mode `0750`, DB with `0600` |
-| `ALIB_URL` | `https://www.alib.ru/tramka.phtml?tnew=7` | One HTTP(S) source or comma-separated list; surrounding whitespace is trimmed, literal commas must use `%2C`, URL userinfo is rejected |
+| `ALIB_CATEGORIES` | empty | Optional one-record CSV list of non-empty ASCII-letter category names; each becomes `https://www.alib.ru/<category>.phtml?tnew=7` |
+| `ALIB_SERIES` | empty | Optional one-record CSV list of Unicode series names; each becomes `https://alib.ru/findp.php4?seria=<encoded>&lday=7` |
 | `ALIB_REQUEST_INTERVAL` | `1s` | Non-negative Go duration between sequential Alib requests; `0s` disables the delay |
 | `TELEGRAM_API_BASE` | `https://api.telegram.org` | HTTP(S) API base; override it in tests |
 | `HTTP_TIMEOUT` | `30s` | positive Go duration applied per external request |
@@ -194,6 +197,13 @@ Optional defaults:
 
 Invalid configuration, including a malformed or overflowing
 `TELEGRAM_CHAT_ID`, prevents process startup. Errors name the invalid variable.
+`ALIB_CATEGORIES` and `ALIB_SERIES` are optional separately, but at least one
+must contain a non-empty CSV list. Lists reject empty elements and malformed
+quotes; surrounding whitespace is trimmed. Categories accept only ASCII
+letters. Series accept Unicode, including commas when CSV-quoted, and are URL
+encoded as one `seria` query value. Generated endpoints always use the fixed
+seven-day window (`tnew=7` for categories and `lday=7` for series), retaining
+all values and repeats in category-then-series order.
 Never log or expose the bot token; note that the SDK internally puts it in the
 Bot API URL.
 
@@ -259,9 +269,8 @@ successful, while a cycle fails if no page parses successfully. The client logs
 download, logs `alib.page_parsed` or `alib.page_parse_failed` for its parse.
 Every event has the zero-based `index` and full configured endpoint `url`,
 including GET parameters and fragments; parsed events also have `books`, and
-failed events have `error`. Userinfo is rejected during configuration. The
-configured endpoints are written verbatim to logs and page errors, so
-`ALIB_URL` must not contain credentials or other secrets. The
+failed events have `error`. Generated endpoints are written verbatim to logs
+and page errors. The
 SDK-backed Telegram adapter accepts only HTTP(S), caps
 response decoding at 1 MiB, returns `telegram.ErrRequest` for transport failures
 and `telegram.ErrRejected` for unsuccessful API responses, and includes
@@ -280,9 +289,8 @@ are `fetched`, `new`, `failed`, `pruned`, and `sent`, while forget-latest comple
 are `requested` and `deleted`. Every Alib page event includes the zero-based
 `index` and full configured endpoint `url`, including GET parameters and
 fragments; `alib.page_parsed` also includes `books`, and failed events include
-`error`. Userinfo is rejected during configuration. Keep slog attributes typed,
-snake_case, and free of secrets; full Alib URL logging relies on the
-credential-free `ALIB_URL` contract above.
+`error`. Keep slog attributes typed, snake_case, and free of secrets. Generated
+page URLs are credential-free and are logged in full as configured endpoints.
 
 ## Development and verification
 

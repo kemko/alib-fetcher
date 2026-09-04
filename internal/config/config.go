@@ -2,8 +2,11 @@
 package config
 
 import (
+	"encoding/csv"
 	"errors"
 	"fmt"
+	"io"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -19,7 +22,6 @@ var ErrInvalid = errors.New("invalid configuration")
 var errInvalidFreshBooks = errors.New("must use age:N with a non-negative integer or since:YYYY")
 
 const (
-	defaultAlibURL             = "https://www.alib.ru/tramka.phtml?tnew=7"
 	defaultAlibRequestInterval = time.Second
 	defaultCronSchedule        = "0 0 * * *"
 	defaultHTTPTimeout         = 30 * time.Second
@@ -60,9 +62,9 @@ type Config struct {
 	TelegramToken       string
 	TelegramChatID      string
 	TelegramAPIBase     string
-	AlibURL             string
 	StatePath           string
 	cronSpec            string
+	AlibURLs            []string
 	AlibRequestInterval time.Duration
 	HTTPTimeout         time.Duration
 	MessageLimit        int
@@ -87,10 +89,86 @@ func Load() (Config, error) {
 		TelegramToken:   token,
 		TelegramChatID:  chatID,
 		TelegramAPIBase: valueOrDefault("TELEGRAM_API_BASE", defaultTelegramAPIBase),
-		AlibURL:         valueOrDefault("ALIB_URL", defaultAlibURL),
 		StatePath:       LoadStatePath(),
 	}
+	var err error
+	settings.AlibURLs, err = buildAlibURLs()
+	if err != nil {
+		return Config{}, err
+	}
 	return loadValidatedConfig(settings)
+}
+
+func buildAlibURLs() ([]string, error) {
+	categories, err := parseCSVList("ALIB_CATEGORIES")
+	if err != nil {
+		return nil, err
+	}
+	series, err := parseCSVList("ALIB_SERIES")
+	if err != nil {
+		return nil, err
+	}
+	if len(categories) == 0 && len(series) == 0 {
+		return nil, fmt.Errorf("%w: ALIB_CATEGORIES and ALIB_SERIES must not both be empty", ErrInvalid)
+	}
+
+	endpoints := make([]string, 0, len(categories)+len(series))
+	for _, category := range categories {
+		if !isASCIIWord(category) {
+			return nil, fmt.Errorf("%w: ALIB_CATEGORIES contains invalid category %q", ErrInvalid, category)
+		}
+		endpoints = append(endpoints, "https://www.alib.ru/"+category+".phtml?tnew=7")
+	}
+	for _, value := range series {
+		endpoint := url.URL{Scheme: "https", Host: "alib.ru", Path: "/findp.php4"}
+		endpoint.RawQuery = "seria=" + url.QueryEscape(value) + "&lday=7"
+		endpoints = append(endpoints, endpoint.String())
+	}
+
+	return endpoints, nil
+}
+
+func parseCSVList(name string) ([]string, error) {
+	value := os.Getenv(name)
+	if value == "" {
+		return nil, nil
+	}
+
+	reader := csv.NewReader(strings.NewReader(value))
+	reader.FieldsPerRecord = -1
+	reader.TrimLeadingSpace = true
+	items, err := reader.Read()
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s must be a valid CSV list: %w", ErrInvalid, name, err)
+	}
+	if _, err = reader.Read(); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("%w: %s must contain one CSV record", ErrInvalid, name)
+		}
+		return nil, fmt.Errorf("%w: %s must be a valid CSV list: %w", ErrInvalid, name, err)
+	}
+
+	for index := range items {
+		items[index] = strings.TrimSpace(items[index])
+		if items[index] == "" {
+			return nil, fmt.Errorf("%w: %s item %d must not be empty", ErrInvalid, name, index)
+		}
+	}
+
+	return items, nil
+}
+
+func isASCIIWord(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, character := range value {
+		if (character < 'a' || character > 'z') && (character < 'A' || character > 'Z') {
+			return false
+		}
+	}
+
+	return true
 }
 
 func loadValidatedConfig(settings Config) (Config, error) {
