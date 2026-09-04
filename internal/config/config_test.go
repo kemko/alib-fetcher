@@ -311,7 +311,7 @@ func Test_Load_builds_AlibURLs_from_categories_and_series(t *testing.T) {
 		"series only": {
 			series: `"Фантастика, новинки"`,
 			want: []string{
-				"https://alib.ru/findp.php4?seria=%D0%A4%D0%B0%D0%BD%D1%82%D0%B0%D1%81%D1%82%D0%B8%D0%BA%D0%B0%2C+%D0%BD%D0%BE%D0%B2%D0%B8%D0%BD%D0%BA%D0%B8&lday=7",
+				"https://alib.ru/findp.php4?seria=%D4%E0%ED%F2%E0%F1%F2%E8%EA%E0%2C+%ED%EE%E2%E8%ED%EA%E8&lday=7",
 			},
 		},
 		"both preserve order": {
@@ -320,14 +320,20 @@ func Test_Load_builds_AlibURLs_from_categories_and_series(t *testing.T) {
 			want: []string{
 				"https://www.alib.ru/tramka.phtml?tnew=7",
 				"https://www.alib.ru/deti.phtml?tnew=7",
-				"https://alib.ru/findp.php4?seria=%D1%81%D0%B5%D1%80%D0%B8%D1%8F&lday=7",
-				"https://alib.ru/findp.php4?seria=%D0%B4%D1%80%D1%83%D0%B3%D0%B0%D1%8F%2C+%D1%82%D0%BE%D0%BC&lday=7",
+				"https://alib.ru/findp.php4?seria=%F1%E5%F0%E8%FF&lday=7",
+				"https://alib.ru/findp.php4?seria=%E4%F0%F3%E3%E0%FF%2C+%F2%EE%EC&lday=7",
+			},
+		},
+		"Alib example": {
+			series: "отцы основатели",
+			want: []string{
+				"https://alib.ru/findp.php4?seria=%EE%F2%F6%FB+%EE%F1%ED%EE%E2%E0%F2%E5%EB%E8&lday=7",
 			},
 		},
 		"quoted comma and special characters": {
 			series: `"Серия, тома", A&B / C`,
 			want: []string{
-				"https://alib.ru/findp.php4?seria=%D0%A1%D0%B5%D1%80%D0%B8%D1%8F%2C+%D1%82%D0%BE%D0%BC%D0%B0&lday=7",
+				"https://alib.ru/findp.php4?seria=%D1%E5%F0%E8%FF%2C+%F2%EE%EC%E0&lday=7",
 				"https://alib.ru/findp.php4?seria=A%26B+%2F+C&lday=7",
 			},
 		},
@@ -348,6 +354,25 @@ func Test_Load_builds_AlibURLs_from_categories_and_series(t *testing.T) {
 			require.Equal(t, testCase.want, loaded.AlibURLs)
 		})
 	}
+}
+
+func Test_Load_rejects_series_not_representable_in_Windows1251(t *testing.T) {
+	// Given
+	setEnvironment(t, map[string]string{
+		"TELEGRAM_BOT_TOKEN": "token",
+		"TELEGRAM_CHAT_ID":   "-100123",
+		"ALIB_CATEGORIES":    "tramka",
+		"ALIB_SERIES":        "серия 😀",
+	})
+
+	// When
+	loaded, err := config.Load()
+
+	// Then
+	require.ErrorIs(t, err, config.ErrInvalid)
+	require.ErrorContains(t, err, "ALIB_SERIES")
+	require.ErrorContains(t, err, "серия 😀")
+	require.Empty(t, loaded)
 }
 
 func Test_Load_rejects_invalid_Alib_tracking_configuration(t *testing.T) {
