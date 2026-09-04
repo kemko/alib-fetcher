@@ -21,24 +21,20 @@ One digest cycle is deliberately ordered as follows:
 3. Parse successful responses only after all downloads finish, then combine and
    deduplicate listings by their resolved `BuyURL`, retaining the first occurrence.
 4. Read existing `BuyURL` records without writing new fetched listings.
-5. Sequentially prepare new books, isolating book-specific errors and cleaning
-   each temporary directory before continuing.
-6. Record only fully prepared, renderable new listings in bbolt, preserving sent status.
-7. Load all pending records from bbolt in first-discovery order, including
+5. Record renderable new listings in bbolt, preserving sent status.
+6. Load all pending records from bbolt in first-discovery order, including
    books from earlier failed cycles.
-8. Sort pending books with year `0` first, then publication year descending,
+7. Sort pending books with year `0` first, then publication year descending,
    preserving first-discovery order within each group.
-9. Sequentially prepare pending books, isolating book-specific errors and
-   cleaning each temporary directory before continuing.
-10. Render pending books into Telegram-sized chunks, adding the book-failure
+8. Render pending books into Telegram-sized chunks, adding the book-failure
    summary when needed.
-11. Send each chunk and mark only that chunk's books as delivered, only after
+9. Send each chunk and mark only that chunk's books as delivered, only after
    Telegram accepts it.
 
 Preserve these semantics:
 
 - The first successful run records and sends every listing currently on the
-  configured source pages that can be prepared and rendered. A book-specific
+  configured source pages that can be rendered. A book-specific
   failure is counted once, omitted from the current digest, and a new failed
   book is not recorded so the next cycle can rediscover it.
 - `BuyURL` is the persistent identity of a listing; titles and other metadata
@@ -55,10 +51,8 @@ Preserve these semantics:
   runes. If mandatory displayed fields plus minimal content still cannot fit,
   it remains pending and must not block other renderable pending listings;
   `digest.ErrMessageTooLong` is reported.
-- Chunks split before Telegram's 500-block limit, including nested slideshow
-  images, or 50-media limit. Ordinary chunks contain at most 250 listings.
-- A slideshow contains at most 50 images; successful images beyond that limit
-  remain source links so one listing stays atomic and deliverable.
+- Chunks split before Telegram's 500-block limit. Ordinary chunks contain at most
+  250 listings.
 - The final digest chunk includes `Не удалось обработать книг: N` when one or
   more book-specific failures occurred. It follows an `<hr/>` when the chunk
   also contains books; with no renderable books, the digest contains the heading
@@ -148,14 +142,11 @@ Preserve these semantics:
   preserved. Publication year is
   the last four-digit year in the bibliography followed by `г` or `г.`; content
   years are ignored.
-- `internal/app`: use-case orchestration through small `Fetcher`, `State`,
-  `PhotoProcessor`, and `Sender` interfaces. It saves prepared pending books and
-  completes temporary-file cleanup before rendering. Keep policy here and
-  transport/storage details in their adapter packages.
+- `internal/app`: use-case orchestration through small `Fetcher`, `State`, and
+  `Sender` interfaces. Keep policy here and transport/storage details in their
+  adapter packages.
 - `internal/digest`: full-listing Telegram Rich HTML block rendering and
-  chunking only between complete listings, including slideshow block/media limits.
-- `internal/slink`: SSRF-safe source downloader, HTTP/META redirect handling,
-  content-based image detection, temporary files, and Slink multipart uploads.
+  chunking only between complete listings, with displayed-rune and block limits.
 - `internal/store`: bbolt storage in bucket `sent_books`; keys are buy URLs and
   values are JSON records containing the full semantic `alib.Book`, observed
   timestamp, pending queue order, sent status, and sent timestamp for delivered
@@ -200,18 +191,11 @@ Optional defaults:
 | `TELEGRAM_API_BASE` | `https://api.telegram.org` | HTTP(S) API base; override it in tests |
 | `HTTP_TIMEOUT` | `30s` | positive Go duration applied per external request |
 | `MESSAGE_LIMIT` | `32000` | displayed Rich Message text rune count after HTML parsing, allowed range 64..32768 |
-| `SLINK_URL` | empty | HTTP(S) Slink base URL without userinfo, query, or fragment; empty disables Slink when all Slink variables are empty |
-| `SLINK_API_KEY` | empty | Slink API key beginning with `sk_`; required with the other Slink variables and never logged |
-| `SLINK_TAG_ID` | empty | UUID of the pre-created Slink `alib` tag owned by the API-key account; required with the other Slink variables |
 
 Invalid configuration, including a malformed or overflowing
 `TELEGRAM_CHAT_ID`, prevents process startup. Errors name the invalid variable.
 Never log or expose the bot token; note that the SDK internally puts it in the
 Bot API URL.
-Slink is disabled only when all three `SLINK_*` values are empty. Partial
-configuration fails with the missing variable name. Changing `SLINK_URL` or
-`SLINK_TAG_ID` changes the persisted processing profile and reprocesses pending
-photos; API-key rotation alone does not.
 
 `FRESH_BOOKS=age:N` accepts a non-negative integer and sets the inclusive lower
 year to `current local year - N`; `age:0` therefore includes only the current
@@ -230,7 +214,7 @@ the listing do not participate.
 
 The first message starts with `<b>Новые книги на Alib.ru</b>`; when a listing
 follows in the same chunk, `<br/><br/>` separates it from the heading. Later
-chunks start with a listing. Messages split on text, block, and media limits. If
+chunks start with a listing. Messages split on text and block limits. If
 the header and first listing do not fit together
 but the listing fits alone, the first chunk contains only the header. Rich HTML
 uses `<br/>` for every encoded line break and `<br/><br/>` between sections to
@@ -240,21 +224,16 @@ independent optional sections between `main` and the final `Купить` sectio
 When both are absent, the block is exactly `main → <br/><br/> → Купить`. The
 heading and final `Купить` section use the same separator. Adjacent listings
 within one chunk use `<hr/>`, with no divider at chunk edges. Chunks contain at
-most 500 blocks including nested slideshow images and 50 media attachments;
-ordinary chunks therefore contain at most 250 listings.
+most 500 listing blocks; ordinary chunks therefore contain at most 250 listings.
 Each listing renders, in order: emoji plus bold title and bibliography; optional
-content as a separate section; seller, price, condition/other details, and photo
-links on separate lines; an optional Slink slideshow; then a final `Купить` link
-in its own section.
+content as a separate section; seller, price, condition/other details, and source
+photo links on separate lines; then a final `Купить` link in its own section.
 The seller format is
 `Продавец: <a href="...">Name</a>, Location.`; without seller URL, the name is
 plain text. Missing optional fields must not create extra empty sections. Photo
 links use normalized source captions and fall back to `фото` when empty, in source
-order including repeats; the line is omitted when no photos exist. Published
-images for the active Slink profile render as `<img>` children of one
-`<tg-slideshow>` with unique captions in one `<figcaption>`. A slideshow contains
-at most 50 images; additional successful images remain source links. All
-dynamic text and URLs must be HTML-escaped. Limits are counted in Unicode runes
+order including repeats; the line is omitted when no photos exist. All dynamic
+text and URLs must be HTML-escaped. Limits are counted in Unicode runes
 of displayed Rich Message text after HTML parsing: formatting tags and URL
 attribute values do not consume the limit, while encoded text and `<br/>` line
 breaks do. Chunks may split only between listings. Content that exceeds the
@@ -263,30 +242,9 @@ fits within `MESSAGE_LIMIT - 1`; only `Content` is shortened. If mandatory
 displayed fields plus minimal content still cannot fit, the listing returns
 `digest.ErrMessageTooLong`.
 
-When Slink is enabled, source photos are downloaded sequentially through limited
-HTTP and HTML META refresh redirects into one system-temp directory per book.
-Targets must use HTTP(S) and omit userinfo. Before every connection, every
-address returned for the target by DNS is checked; the connection is rejected if
-any address belongs to at least one range in the pinned `iplib/iana.Registry`.
-This applies to the initial URL, HTTP redirects, and META refresh redirects.
-Addresses outside that registry are not blocked by additional address-range
-rules. The registry data is bundled with the pinned iplib version, is not fetched
-at runtime, and changes only when that dependency is updated. Downloads are capped
-at 15 MiB and Slink responses at 1 MiB. Image type is detected from content. Uploads use `POST
-/api/external/upload` with multipart field `image`, repeated `tagIds[]`, Bearer
-authentication, and an `Origin` derived from `SLINK_URL`. The API key must use
-the `sk_` prefix, the tag must belong to that key's owner, and Slink
-external-upload auto-publish must be enabled. The returned share URL is
-resolved with a same-origin `HEAD` request; only the final 2xx `image/*` URL is
-persisted and sent to Telegram. Persisted Slink image URLs, including direct
-media URLs, are revalidated with the same checks without downloading or
-uploading the source image. A failed resolution or revalidation isolates the
-book and leaves it pending. Individual photo failures log a
-safe stage/status/category and isolate the whole book; new failed books are not
-recorded and pending failed books remain pending. Context cancellation stops the digest.
-New prepared results are cleaned before their batch insert; changed pending
-results are saved before cleanup. Persisted results are reused only for the same
-Slink URL/tag profile.
+Source photos are never downloaded or transformed. Every photo renders in one
+`Смотрите` section with its source URL and normalized caption, preserving source
+order and repeats; empty captions use `фото`.
 
 The Alib client accepts one or more HTTP(S) endpoints, sends
 `User-Agent: alib-fetcher/1.0`, and requires HTTP 200. Endpoints are downloaded
@@ -316,9 +274,7 @@ flood-control retry, chat filtering, refresh ordering, and runner-lock policy.
 Structured logs go to stdout. Stable event names are `scheduler.started`,
 `scheduler.stopped`, `digest.started`, `digest.completed`, `digest.failed`,
 `alib.page_downloaded`, `alib.page_download_failed`, `alib.page_parsed`,
-`alib.page_parse_failed`, `slink.photo_started`, `slink.photo_completed`,
-`slink.photo_failed`, `slink.response_close_failed`,
-`callback.poll_failed`, `callback.answer_failed`,
+`alib.page_parse_failed`, `callback.poll_failed`, `callback.answer_failed`,
 `state.forget_latest.completed`, and `service.failed`; digest completion fields
 are `fetched`, `new`, `failed`, `pruned`, and `sent`, while forget-latest completion fields
 are `requested` and `deleted`. Every Alib page event includes the zero-based
@@ -428,11 +384,6 @@ expected to run with a read-only root filesystem and a writable persistent
 volume mounted at `/var/lib/alib-fetcher`; do not move mutable state elsewhere
 without updating the image, Compose, and README together. Preserve the nonroot
 runtime, capability drop, and `no-new-privileges` hardening.
-
-Slink-enabled read-only containers require a writable `/tmp`; Compose provides a
-`noexec,nosuid,nodev` tmpfs. Compose passes `SLINK_URL`, `SLINK_API_KEY`, and
-`SLINK_TAG_ID` from the environment. Keep the API key out of the image and
-tracked files.
 
 For Compose, `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` must come from the
 environment. `FRESH_BOOKS`, `TIMEZONE`, and `ALIB_FETCHER_IMAGE` are

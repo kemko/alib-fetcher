@@ -26,6 +26,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	xhtml "golang.org/x/net/html"
 )
 
 type telegramRequest struct {
@@ -81,7 +82,7 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 (До заказа внимательно прочтите условия продажи продавца <a href="/bs.php4?bs=BotSad">BS - BotSad</a>, Москва.)
 Цена: 3 900 руб. <a href="/hot.html"><b>Купить</b></a><br>
 Первая строка содержания.<br>Вторая строка содержания.<br>Состояние: Отличное.<br>
-Смотрите: <a href="/foto.php4?id=1">фото</a></p>
+Смотрите: <a href="/foto.php4?id=1">Обложка</a> - <a href="foto.php4?id=2"></a> - <a href="/foto.php4?id=1">Повтор</a></p>
 <p><b>Свежая книга.</b> М., %d г.<br>
 Цена: 500 руб. <a href="/fresh.html"><b>Купить</b></a></p>
 <p><b>Будущая книга.</b> М., %d г.<br>
@@ -153,7 +154,12 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 				futureYear,
 			))
 			require.Contains(t, richHTML, fmt.Sprintf(
-				`<br/>Цена: 3 900 руб.<br/>Состояние: Отличное.<br/>Смотрите: <a href="%s/foto.php4?id=1">фото</a>`,
+				`<br/>Цена: 3 900 руб.<br/>Состояние: Отличное.<br/>Смотрите: `+
+					`<a href="%s/foto.php4?id=1">Обложка</a> - `+
+					`<a href="%s/foto.php4?id=2">фото</a> - `+
+					`<a href="%s/foto.php4?id=1">Повтор</a>`,
+				alibServer.URL,
+				alibServer.URL,
 				alibServer.URL,
 			))
 			require.NotContains(t, richHTML, "<tg-slideshow>")
@@ -169,6 +175,115 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 			require.Contains(t, logs.String(), "digest.completed")
 			require.NotContains(t, logs.String(), "test-token")
 		})
+	}
+}
+
+func Test_run_once_sends_truncated_description_through_rich_message(t *testing.T) {
+	// Given
+	useOnceMode(t)
+	const messageLimit = 180
+	const buyPath = "/long-description.html"
+	longDescription := strings.Repeat("длинное описание ", 100)
+	alibServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		assert.Equal(t, http.MethodGet, request.Method)
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, err := fmt.Fprintf(writer, `<p><b>Книга с длинным описанием.</b> М., 2026 г.<br>
+Цена: 500 руб. <a href="%s"><b>Купить</b></a><br>
+%s</p>`, buyPath, longDescription)
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(alibServer.Close)
+
+	telegramRequests := make(chan telegramRequest, 2)
+	telegramServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		telegramRequests <- telegramRequest{Message: decodeTelegramMessage(t, request), Path: request.URL.Path}
+		writer.Header().Set("Content-Type", "application/json")
+		_, err := writer.Write([]byte(`{"ok":true,"result":{}}`))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(telegramServer.Close)
+
+	statePath := filepath.Join(t.TempDir(), "state.db")
+	setRunEnvironment(t, alibServer.URL, telegramServer.URL, statePath)
+	t.Setenv("MESSAGE_LIMIT", fmt.Sprint(messageLimit))
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	// When
+	err := run(logger)
+
+	// Then
+	require.NoError(t, err)
+	require.Len(t, telegramRequests, 2)
+	requests := []telegramRequest{<-telegramRequests, <-telegramRequests}
+	var listingMessage telegramRequest
+	for _, request := range requests {
+		require.Equal(t, "/bottest-token/sendRichMessage", request.Path)
+		require.LessOrEqual(t, displayedRuneCount(t, request.Message.RichMessage.HTML), messageLimit)
+		if strings.Contains(request.Message.RichMessage.HTML, "…") {
+			listingMessage = request
+		}
+	}
+	require.NotEmpty(t, listingMessage.Message.RichMessage.HTML)
+	require.Contains(t, listingMessage.Message.RichMessage.HTML, "…")
+	require.NotContains(t, listingMessage.Message.RichMessage.HTML, longDescription)
+	require.Contains(t, logs.String(), `"fetched":1`)
+	require.Contains(t, logs.String(), `"new":1`)
+	require.Contains(t, logs.String(), `"failed":0`)
+	require.Contains(t, logs.String(), `"sent":1`)
+
+	book := alib.Book{BuyURL: alibServer.URL + buyPath}
+	state, err := store.Open(statePath, time.Now())
+	require.NoError(t, err)
+	existing, err := state.Existing(context.Background(), []alib.Book{book})
+	require.NoError(t, err)
+	require.Equal(t, []bool{true}, existing)
+	pending, err := state.Pending(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, pending)
+	require.NoError(t, state.Close())
+}
+
+func Test_run_once_uses_default_rich_message_limit_and_listing_block_chunks(t *testing.T) {
+	// Given
+	useOnceMode(t)
+	alibServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		assert.Equal(t, http.MethodGet, request.Method)
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		for index := range 251 {
+			_, err := fmt.Fprintf(writer, `<p><b>Книга %d.</b> Цена: 100 руб. <a href="/book-%d.html"><b>Купить</b></a></p>`, index, index)
+			assert.NoError(t, err)
+		}
+	}))
+	t.Cleanup(alibServer.Close)
+
+	telegramRequests := make(chan telegramRequest, 2)
+	telegramServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		telegramRequests <- telegramRequest{Message: decodeTelegramMessage(t, request), Path: request.URL.Path}
+		writer.Header().Set("Content-Type", "application/json")
+		_, err := writer.Write([]byte(`{"ok":true,"result":{}}`))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(telegramServer.Close)
+
+	statePath := filepath.Join(t.TempDir(), "state.db")
+	setRunEnvironment(t, alibServer.URL, telegramServer.URL, statePath)
+	unsetEnvironment(t, "MESSAGE_LIMIT")
+
+	// When
+	err := run(slog.New(slog.DiscardHandler))
+
+	// Then
+	require.NoError(t, err)
+	require.Len(t, telegramRequests, 2)
+	requests := []telegramRequest{<-telegramRequests, <-telegramRequests}
+	require.Equal(t, "/bottest-token/sendRichMessage", requests[0].Path)
+	require.Equal(t, "/bottest-token/sendRichMessage", requests[1].Path)
+	require.Equal(t, 250, strings.Count(requests[0].Message.RichMessage.HTML, "<hr/>")+1)
+	require.Equal(t, 1, strings.Count(requests[1].Message.RichMessage.HTML, "<b>Книга 250.</b>"))
+	for _, request := range requests {
+		require.LessOrEqual(t, displayedRuneCount(t, request.Message.RichMessage.HTML), 32000)
+		require.NotContains(t, request.Path, "sendMessage")
 	}
 }
 
@@ -692,6 +807,30 @@ func decodeTelegramMessage(t *testing.T, request *http.Request) telegrambot.Send
 	}
 
 	return payload
+}
+
+func displayedRuneCount(t *testing.T, value string) int {
+	t.Helper()
+	document, err := xhtml.Parse(strings.NewReader(value))
+	require.NoError(t, err)
+
+	var count func(*xhtml.Node) int
+	count = func(node *xhtml.Node) int {
+		total := 0
+		if node.Type == xhtml.TextNode {
+			total += len([]rune(node.Data))
+		}
+		if node.Type == xhtml.ElementNode && node.Data == "br" {
+			total++
+		}
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			total += count(child)
+		}
+
+		return total
+	}
+
+	return count(document)
 }
 
 func setRunEnvironment(t *testing.T, alibURL, telegramAPIBase, statePath string) {
