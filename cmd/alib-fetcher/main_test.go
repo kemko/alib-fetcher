@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -21,6 +22,7 @@ import (
 	"github.com/go-telegram/bot/models"
 
 	"github.com/kemko/alib-fetcher/internal/alib"
+	"github.com/kemko/alib-fetcher/internal/config"
 	"github.com/kemko/alib-fetcher/internal/store"
 	"github.com/kemko/alib-fetcher/internal/telegram"
 
@@ -105,12 +107,12 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 			}))
 			t.Cleanup(telegramServer.Close)
 
-			setRunEnvironment(t, alibServer.URL, telegramServer.URL, filepath.Join(t.TempDir(), "state.db"))
+			setRunEnvironment(t, telegramServer.URL, filepath.Join(t.TempDir(), "state.db"))
 			var logs bytes.Buffer
 			logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 			// When
-			err := run(logger)
+			err := runWithAlibURLs(t, logger, alibServer.URL+"/tramka.phtml?tnew=7")
 
 			// Then
 			require.NoError(t, err)
@@ -204,13 +206,13 @@ func Test_run_once_sends_truncated_description_through_rich_message(t *testing.T
 	t.Cleanup(telegramServer.Close)
 
 	statePath := filepath.Join(t.TempDir(), "state.db")
-	setRunEnvironment(t, alibServer.URL, telegramServer.URL, statePath)
+	setRunEnvironment(t, telegramServer.URL, statePath)
 	t.Setenv("MESSAGE_LIMIT", strconv.Itoa(messageLimit))
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	// When
-	err := run(logger)
+	err := runWithAlibURLs(t, logger, alibServer.URL)
 
 	// Then
 	require.NoError(t, err)
@@ -267,11 +269,11 @@ func Test_run_once_uses_default_rich_message_limit_and_listing_block_chunks(t *t
 	t.Cleanup(telegramServer.Close)
 
 	statePath := filepath.Join(t.TempDir(), "state.db")
-	setRunEnvironment(t, alibServer.URL, telegramServer.URL, statePath)
+	setRunEnvironment(t, telegramServer.URL, statePath)
 	unsetEnvironment(t, "MESSAGE_LIMIT")
 
 	// When
-	err := run(slog.New(slog.DiscardHandler))
+	err := runWithAlibURLs(t, slog.New(slog.DiscardHandler), alibServer.URL)
 
 	// Then
 	require.NoError(t, err)
@@ -384,9 +386,8 @@ func Test_run_forget_latest_documented_cli_scenario_deletes_latest_records_witho
 	statePath := filepath.Join(t.TempDir(), "state.db")
 	setEnvironmentAbsentDigestConfiguration(t)
 	t.Setenv("STATE_PATH", statePath)
-	// These endpoints are intentionally unreachable: maintenance mode must not
-	// construct the Alib or Telegram adapters that would use them.
-	t.Setenv("ALIB_URL", "http://127.0.0.1:1")
+	// The Telegram API is intentionally unreachable: maintenance mode must not
+	// construct the Alib or Telegram adapters that would use it.
 	t.Setenv("TELEGRAM_API_BASE", "http://127.0.0.1:1")
 
 	books := make([]alib.Book, 8)
@@ -411,6 +412,23 @@ func Test_run_forget_latest_documented_cli_scenario_deletes_latest_records_witho
 	require.NoError(t, err)
 	require.NoError(t, reopened.Close())
 	require.Equal(t, []alib.Book{books[0], books[1]}, pending)
+}
+
+func Test_run_rejects_missing_Alib_tracking_configuration_before_http(t *testing.T) {
+	// Given
+	useOnceMode(t)
+	setEnvironmentAbsentDigestConfiguration(t)
+	t.Setenv("TELEGRAM_BOT_TOKEN", "test-token")
+	t.Setenv("TELEGRAM_CHAT_ID", "-100123")
+	t.Setenv("TELEGRAM_API_BASE", "http://127.0.0.1:1")
+
+	// When
+	err := run(slog.New(slog.DiscardHandler))
+
+	// Then
+	require.ErrorIs(t, err, config.ErrInvalid)
+	require.ErrorContains(t, err, "ALIB_CATEGORIES")
+	require.ErrorContains(t, err, "ALIB_SERIES")
 }
 
 func Test_run_sends_only_last_wired_message_with_sound(t *testing.T) {
@@ -449,7 +467,8 @@ func Test_run_sends_only_last_wired_message_with_sound(t *testing.T) {
 	t.Setenv("TIMEZONE", "UTC")
 	t.Setenv("RUN_ON_STARTUP", "true")
 	t.Setenv("STATE_PATH", filepath.Join(t.TempDir(), "state.db"))
-	t.Setenv("ALIB_URL", alibServer.URL+"/tramka.phtml?tnew=7")
+	t.Setenv("ALIB_CATEGORIES", "tramka")
+	t.Setenv("ALIB_SERIES", "")
 	t.Setenv("TELEGRAM_API_BASE", telegramServer.URL)
 	t.Setenv("HTTP_TIMEOUT", "2s")
 	t.Setenv("ALIB_REQUEST_INTERVAL", "0s")
@@ -458,7 +477,7 @@ func Test_run_sends_only_last_wired_message_with_sound(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	// When
-	err := run(logger)
+	err := runWithAlibURLs(t, logger, alibServer.URL+"/tramka.phtml?tnew=7")
 
 	// Then
 	require.NoError(t, err)
@@ -506,29 +525,29 @@ func Test_run_sends_only_last_wired_message_with_sound(t *testing.T) {
 	require.NotContains(t, logs.String(), "test-token")
 }
 
-func Test_run_once_fetches_multiple_urls_and_sends_partial_deduplicated_result(t *testing.T) {
+func Test_run_once_fetches_categories_and_series_in_order_and_sends_partial_deduplicated_result(t *testing.T) {
 	// Given
 	useOnceMode(t)
 	alibRequests := make(chan alibRequest, 4)
 	alibServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		alibRequests <- alibRequest{Path: request.URL.Path, RawQuery: request.URL.RawQuery}
 		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-		switch request.URL.Path {
-		case "/first":
+		switch {
+		case request.URL.Path == "/first.phtml":
 			_, err := writer.Write([]byte(
 				listingPage("Первый", "/first-book.html", "100 руб.") +
 					listingPage("Общий первый", "/shared-book.html", "200 руб."),
 			))
 			assert.NoError(t, err)
-		case "/broken":
+		case request.URL.Path == "/broken.phtml":
 			writer.WriteHeader(http.StatusBadGateway)
-		case "/second":
+		case request.URL.Path == "/findp.php4" && request.URL.Query().Get("seria") == "Серия, тома":
 			_, err := writer.Write([]byte(
 				listingPage("Общий второй", "/shared-book.html", "999 руб.") +
 					listingPage("Последний", "/last-book.html", "300 руб."),
 			))
 			assert.NoError(t, err)
-		case "/changed":
+		case request.URL.Path == "/findp.php4" && request.URL.Query().Get("seria") == "changed":
 			_, err := writer.Write([]byte("<html><body>changed</body></html>"))
 			assert.NoError(t, err)
 		default:
@@ -547,26 +566,31 @@ func Test_run_once_fetches_multiple_urls_and_sends_partial_deduplicated_result(t
 	t.Cleanup(telegramServer.Close)
 
 	statePath := filepath.Join(t.TempDir(), "state.db")
-	setRunEnvironment(t, alibServer.URL, telegramServer.URL, statePath)
-	t.Setenv("ALIB_URL", strings.Join([]string{
-		alibServer.URL + "/first?scope=one&format=full",
-		alibServer.URL + "/broken?scope=two",
-		alibServer.URL + "/second?topic=one%2Ctwo&format=full",
-		alibServer.URL + "/changed?scope=broken",
-	}, ", "))
+	setRunEnvironment(t, telegramServer.URL, statePath)
+	t.Setenv("ALIB_CATEGORIES", "first,broken")
+	t.Setenv("ALIB_SERIES", `"Серия, тома",changed`)
+	settings, err := config.Load()
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"https://www.alib.ru/first.phtml?tnew=7",
+		"https://www.alib.ru/broken.phtml?tnew=7",
+		"https://alib.ru/findp.php4?seria=%D0%A1%D0%B5%D1%80%D0%B8%D1%8F%2C+%D1%82%D0%BE%D0%BC%D0%B0&lday=7",
+		"https://alib.ru/findp.php4?seria=changed&lday=7",
+	}, settings.AlibURLs)
+	settings.AlibURLs = localAlibURLs(t, alibServer.URL, settings.AlibURLs)
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	// When
-	err := run(logger)
+	err = runWithConfig(logger, settings, true)
 
 	// Then
 	require.NoError(t, err)
 	require.Equal(t, []alibRequest{
-		{Path: "/first", RawQuery: "scope=one&format=full"},
-		{Path: "/broken", RawQuery: "scope=two"},
-		{Path: "/second", RawQuery: "topic=one%2Ctwo&format=full"},
-		{Path: "/changed", RawQuery: "scope=broken"},
+		{Path: "/first.phtml", RawQuery: "tnew=7"},
+		{Path: "/broken.phtml", RawQuery: "tnew=7"},
+		{Path: "/findp.php4", RawQuery: "seria=%D0%A1%D0%B5%D1%80%D0%B8%D1%8F%2C+%D1%82%D0%BE%D0%BC%D0%B0&lday=7"},
+		{Path: "/findp.php4", RawQuery: "seria=changed&lday=7"},
 	}, []alibRequest{<-alibRequests, <-alibRequests, <-alibRequests, <-alibRequests})
 	require.Len(t, telegramRequests, 1)
 	message := (<-telegramRequests).Message
@@ -588,13 +612,13 @@ func Test_run_once_fetches_multiple_urls_and_sends_partial_deduplicated_result(t
 	require.Equal(t, 1, strings.Count(logOutput, `"msg":"alib.page_download_failed"`))
 	require.Equal(t, 2, strings.Count(logOutput, `"msg":"alib.page_parsed"`))
 	require.Equal(t, 1, strings.Count(logOutput, `"msg":"alib.page_parse_failed"`))
-	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","index":0,"url":"`+alibServer.URL+`/first?scope=one&format=full"`)
-	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","index":2,"url":"`+alibServer.URL+`/second?topic=one%2Ctwo&format=full"`)
-	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","index":3,"url":"`+alibServer.URL+`/changed?scope=broken"`)
-	require.Contains(t, logOutput, `"msg":"alib.page_download_failed","index":1,"url":"`+alibServer.URL+`/broken?scope=two"`)
-	require.Contains(t, logOutput, `"msg":"alib.page_parsed","index":0,"url":"`+alibServer.URL+`/first?scope=one&format=full","books":2`)
-	require.Contains(t, logOutput, `"msg":"alib.page_parsed","index":2,"url":"`+alibServer.URL+`/second?topic=one%2Ctwo&format=full","books":2`)
-	require.Contains(t, logOutput, `"msg":"alib.page_parse_failed","index":3,"url":"`+alibServer.URL+`/changed?scope=broken"`)
+	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","index":0,"url":"`+alibServer.URL+`/first.phtml?tnew=7"`)
+	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","index":2,"url":"`+alibServer.URL+`/findp.php4?seria=%D0%A1%D0%B5%D1%80%D0%B8%D1%8F%2C+%D1%82%D0%BE%D0%BC%D0%B0&lday=7"`)
+	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","index":3,"url":"`+alibServer.URL+`/findp.php4?seria=changed&lday=7"`)
+	require.Contains(t, logOutput, `"msg":"alib.page_download_failed","index":1,"url":"`+alibServer.URL+`/broken.phtml?tnew=7"`)
+	require.Contains(t, logOutput, `"msg":"alib.page_parsed","index":0,"url":"`+alibServer.URL+`/first.phtml?tnew=7","books":2`)
+	require.Contains(t, logOutput, `"msg":"alib.page_parsed","index":2,"url":"`+alibServer.URL+`/findp.php4?seria=%D0%A1%D0%B5%D1%80%D0%B8%D1%8F%2C+%D1%82%D0%BE%D0%BC%D0%B0&lday=7","books":2`)
+	require.Contains(t, logOutput, `"msg":"alib.page_parse_failed","index":3,"url":"`+alibServer.URL+`/findp.php4?seria=changed&lday=7"`)
 	require.Less(t,
 		strings.LastIndex(logOutput, `"msg":"alib.page_downloaded"`),
 		strings.Index(logOutput, `"msg":"alib.page_parsed"`),
@@ -634,13 +658,15 @@ func Test_run_once_accepts_all_correct_empty_pages_without_telegram_delivery(t *
 	t.Cleanup(telegramServer.Close)
 
 	statePath := filepath.Join(t.TempDir(), "state.db")
-	setRunEnvironment(t, alibServer.URL, telegramServer.URL, statePath)
-	t.Setenv("ALIB_URL", alibServer.URL+"/empty-one?first=true, "+alibServer.URL+"/empty-two?second=true")
+	setRunEnvironment(t, telegramServer.URL, statePath)
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	// When
-	err = run(logger)
+	err = runWithAlibURLs(t, logger,
+		alibServer.URL+"/empty-one?first=true",
+		alibServer.URL+"/empty-two?second=true",
+	)
 
 	// Then
 	require.NoError(t, err)
@@ -689,17 +715,16 @@ func Test_run_once_fails_after_requesting_and_logging_all_failed_pages(t *testin
 	t.Cleanup(telegramServer.Close)
 
 	statePath := filepath.Join(t.TempDir(), "state.db")
-	setRunEnvironment(t, alibServer.URL, telegramServer.URL, statePath)
-	t.Setenv("ALIB_URL", strings.Join([]string{
-		alibServer.URL + "/status-one?status=one",
-		alibServer.URL + "/broken?scope=broken",
-		alibServer.URL + "/status-two?status=two",
-	}, ","))
+	setRunEnvironment(t, telegramServer.URL, statePath)
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	// When
-	err := run(logger)
+	err := runWithAlibURLs(t, logger,
+		alibServer.URL+"/status-one?status=one",
+		alibServer.URL+"/broken?scope=broken",
+		alibServer.URL+"/status-two?status=two",
+	)
 
 	// Then
 	require.Error(t, err)
@@ -731,6 +756,31 @@ func useOnceMode(t *testing.T) {
 	useCommandLine(t, "-once")
 }
 
+func runWithAlibURLs(t *testing.T, logger *slog.Logger, endpoints ...string) error {
+	t.Helper()
+	settings, err := config.Load()
+	require.NoError(t, err)
+	settings.AlibURLs = append([]string(nil), endpoints...)
+
+	return runWithConfig(logger, settings, true)
+}
+
+func localAlibURLs(t *testing.T, base string, endpoints []string) []string {
+	t.Helper()
+	baseURL, err := url.Parse(base)
+	require.NoError(t, err)
+	localEndpoints := make([]string, 0, len(endpoints))
+	for _, endpoint := range endpoints {
+		parsed, parseErr := url.Parse(endpoint)
+		require.NoError(t, parseErr)
+		parsed.Scheme = baseURL.Scheme
+		parsed.Host = baseURL.Host
+		localEndpoints = append(localEndpoints, parsed.String())
+	}
+
+	return localEndpoints
+}
+
 func useCommandLine(t *testing.T, arguments ...string) {
 	t.Helper()
 
@@ -752,7 +802,8 @@ func setEnvironmentAbsentDigestConfiguration(t *testing.T) {
 		"TELEGRAM_CHAT_ID",
 		"CRON_SCHEDULE",
 		"TIMEZONE",
-		"ALIB_URL",
+		"ALIB_CATEGORIES",
+		"ALIB_SERIES",
 		"TELEGRAM_API_BASE",
 		"HTTP_TIMEOUT",
 		"MESSAGE_LIMIT",
@@ -821,7 +872,7 @@ func displayedRuneCount(t *testing.T, value string) int {
 	return count(document)
 }
 
-func setRunEnvironment(t *testing.T, alibURL, telegramAPIBase, statePath string) {
+func setRunEnvironment(t *testing.T, telegramAPIBase, statePath string) {
 	t.Helper()
 
 	t.Setenv("TELEGRAM_BOT_TOKEN", "test-token")
@@ -830,7 +881,8 @@ func setRunEnvironment(t *testing.T, alibURL, telegramAPIBase, statePath string)
 	t.Setenv("TIMEZONE", "UTC")
 	t.Setenv("RUN_ON_STARTUP", "true")
 	t.Setenv("STATE_PATH", statePath)
-	t.Setenv("ALIB_URL", alibURL+"/tramka.phtml?tnew=7")
+	t.Setenv("ALIB_CATEGORIES", "tramka")
+	t.Setenv("ALIB_SERIES", "")
 	t.Setenv("TELEGRAM_API_BASE", telegramAPIBase)
 	t.Setenv("HTTP_TIMEOUT", "2s")
 	t.Setenv("ALIB_REQUEST_INTERVAL", "0s")
