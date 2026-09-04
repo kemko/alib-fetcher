@@ -77,10 +77,10 @@
 
 ### Task 3: Verify acceptance criteria
 
-- [ ] Выполнить `make verify`; форматирование, strict lint, race-enabled shuffled tests и build должны пройти.
-- [ ] Выполнить `make coverage`; statement coverage должна остаться не ниже 80%.
-- [ ] Проверить task-related diff: production-код не формирует UTF-8 query для кириллических `ALIB_SERIES`.
-- [ ] Подтвердить тестами точный Windows-1251 query для `отцы основатели`, прежнее поведение ASCII и спецсимволов,
+- [x] Выполнить `make verify`; форматирование, strict lint, race-enabled shuffled tests и build должны пройти.
+- [x] Выполнить `make coverage`; statement coverage должна остаться не ниже 80%.
+- [x] Проверить task-related diff: production-код не формирует UTF-8 query для кириллических `ALIB_SERIES`.
+- [x] Подтвердить тестами точный Windows-1251 query для `отцы основатели`, прежнее поведение ASCII и спецсимволов,
   а также отказ для непредставимых символов.
-- [ ] Подтвердить отсутствие изменений в `ALIB_CATEGORIES`, CSV-разборе, порядке endpoints, логировании и
+- [x] Подтвердить отсутствие изменений в `ALIB_CATEGORIES`, CSV-разборе, порядке endpoints, логировании и
   декодировании HTML-ответов.
