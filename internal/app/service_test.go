@@ -43,6 +43,44 @@ func Test_Service_reports_fetch_listing_errors(t *testing.T) {
 	require.Equal(t, 1, result.Sent)
 }
 
+func Test_Service_skips_pending_book_that_failed_in_current_parse(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	now := time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC)
+	state, err := store.Open(filepath.Join(t.TempDir(), "state.db"), now)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, state.Close()) })
+	failed := alib.Book{Title: "Сбойная из очереди", BuyURL: "https://example.com/failed"}
+	good := alib.Book{Title: "Рабочая", BuyURL: "https://example.com/good"}
+	_, err = state.RecordDiscovered(context.Background(), []alib.Book{failed}, now.Add(-time.Hour))
+	require.NoError(t, err)
+	sender := &fakeSender{}
+	service := app.NewService(app.Dependencies{
+		Fetcher: fakeFetcher{
+			books:         []alib.Book{good},
+			failedBuyURLs: []string{failed.BuyURL},
+		},
+		State:        state,
+		Sender:       sender,
+		MessageLimit: 4096,
+		Now:          func() time.Time { return now },
+	})
+
+	// When
+	result, err := service.Run(context.Background())
+	pending, pendingErr := state.Pending(context.Background())
+
+	// Then
+	require.NoError(t, err)
+	require.NoError(t, pendingErr)
+	require.Equal(t, app.Result{Fetched: 1, New: 1, Sent: 1, Failed: 1}, result)
+	require.Equal(t, []alib.Book{failed}, pending)
+	require.Contains(t, strings.Join(sender.messages, ""), "Рабочая")
+	require.NotContains(t, strings.Join(sender.messages, ""), "Сбойная из очереди")
+	require.Contains(t, strings.Join(sender.messages, ""), "Не удалось обработать книг: 1")
+}
+
 func Test_Service_retries_unrenderable_new_book_without_recording(t *testing.T) {
 	t.Parallel()
 

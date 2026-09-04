@@ -162,6 +162,7 @@ func prepareDiscoveredRecord(
 		return bookRecord{}, false, err
 	}
 	record.Book = book
+	record.ObservedAt = existing.ObservedAt
 	record.Sent = existing.Sent
 	record.SentAt = existing.SentAt
 	record.QueueOrder = existing.QueueOrder

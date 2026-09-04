@@ -149,7 +149,7 @@ func Test_Store_updates_sent_book_metadata_without_requeueing(t *testing.T) {
 	require.Equal(t, uint64(1), record.QueueOrder)
 	require.NotZero(t, record.SentAt)
 	require.True(t, decodeStoredTime(record.SentAt).Equal(sentAt.UTC()))
-	require.True(t, decodeStoredTime(record.ObservedAt).Equal(rediscoveredAt.UTC()))
+	require.True(t, decodeStoredTime(record.ObservedAt).Equal(observedAt.UTC()))
 }
 
 func Test_Store_rediscovery_replaces_photos_and_fresh_captions(t *testing.T) {
@@ -614,7 +614,7 @@ func Test_Store_reads_legacy_Slink_photo_fields_and_cleans_them_on_rediscovery(t
 	}}, pending)
 	require.Zero(t, created)
 	require.Equal(t, updated, record.Book)
-	require.Equal(t, observedAt.Add(time.Hour).UnixNano(), record.ObservedAt)
+	require.Equal(t, observedAt.UnixNano(), record.ObservedAt)
 	require.Equal(t, uint64(19), record.QueueOrder)
 	require.False(t, record.Sent)
 	require.NotContains(t, rawRecord, "slink_url")
@@ -873,7 +873,7 @@ func Test_Store_rediscovered_legacy_sent_book_gets_full_payload_without_requeuei
 	require.Equal(t, rediscovered, record.Book)
 	require.True(t, record.Sent)
 	require.True(t, decodeStoredTime(record.SentAt).Equal(migratedAt.UTC()))
-	require.True(t, decodeStoredTime(record.ObservedAt).Equal(rediscoveredAt.UTC()))
+	require.True(t, decodeStoredTime(record.ObservedAt).Equal(migratedAt.UTC()))
 }
 
 func fullBook(buyURL string) alib.Book {

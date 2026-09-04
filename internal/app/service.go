@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -98,10 +99,10 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 	if err != nil {
 		return result, err
 	}
-	preparedBooks, preparedBooksByURL, newBooks := s.prepareFetched(books, existing, failedURLs, renderOptions)
+	recordableBooks, newBooks := recordableFetched(books, existing, failedURLs, renderOptions)
 	result.Failed = unidentifiedFailures + len(failedURLs)
-	if len(preparedBooks) > 0 {
-		_, err = s.dependencies.State.RecordDiscovered(ctx, preparedBooks, cycleTime)
+	if len(recordableBooks) > 0 {
+		_, err = s.dependencies.State.RecordDiscovered(ctx, recordableBooks, cycleTime)
 		if err != nil {
 			return result, fmt.Errorf("record discovered listings: %w", err)
 		}
@@ -112,9 +113,11 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 	if err != nil {
 		return result, fmt.Errorf("load pending listings: %w", err)
 	}
-	pending = sortPending(pending)
-	pending = s.preparePending(pending, preparedBooksByURL, failedURLs, renderOptions)
-	result.Failed = unidentifiedFailures + len(failedURLs)
+	pending = slices.DeleteFunc(sortPending(pending), func(book alib.Book) bool {
+		_, failed := failedURLs[book.BuyURL]
+
+		return failed
+	})
 
 	sent, renderedFailures, err := s.renderAndSend(ctx, pending, renderOptions, cycleTime, result.Failed)
 	result.Sent = sent
@@ -177,18 +180,17 @@ func (s *Service) renderAndSend(
 	return sent, previousFailures + len(skippedBuyURLs), nil
 }
 
-func (s *Service) prepareFetched(
+func recordableFetched(
 	books []alib.Book,
 	existing []bool,
 	failedURLs map[string]struct{},
 	options digest.Options,
-) ([]alib.Book, map[string]alib.Book, int) {
-	prepared := make([]alib.Book, 0, len(books))
-	preparedBooks := make(map[string]alib.Book, len(books))
+) ([]alib.Book, int) {
+	recordable := make([]alib.Book, 0, len(books))
 	newBooks := 0
 	for index, book := range books {
 		if existing[index] {
-			prepared = append(prepared, book)
+			recordable = append(recordable, book)
 			continue
 		}
 
@@ -196,50 +198,11 @@ func (s *Service) prepareFetched(
 			failedURLs[book.BuyURL] = struct{}{}
 			continue
 		}
-		prepared = append(prepared, book)
-		preparedBooks[book.BuyURL] = book
+		recordable = append(recordable, book)
 		newBooks++
 	}
 
-	return prepared, preparedBooks, newBooks
-}
-
-func (s *Service) preparePending(
-	pending []alib.Book,
-	preparedBooks map[string]alib.Book,
-	failedURLs map[string]struct{},
-	options digest.Options,
-) []alib.Book {
-	result := make([]alib.Book, 0, len(pending))
-	for _, book := range pending {
-		preparedBook, ready := s.preparePendingBook(book, preparedBooks, failedURLs, options)
-		if ready {
-			result = append(result, preparedBook)
-		}
-	}
-
-	return result
-}
-
-func (s *Service) preparePendingBook(
-	book alib.Book,
-	preparedBooks map[string]alib.Book,
-	failedURLs map[string]struct{},
-	options digest.Options,
-) (alib.Book, bool) {
-	if preparedBook, alreadyProcessed := preparedBooks[book.BuyURL]; alreadyProcessed {
-		return preparedBook, true
-	}
-	if _, alreadyFailed := failedURLs[book.BuyURL]; alreadyFailed {
-		return alib.Book{}, false
-	}
-
-	if !renderable(book, options) {
-		failedURLs[book.BuyURL] = struct{}{}
-		return alib.Book{}, false
-	}
-
-	return book, true
+	return recordable, newBooks
 }
 
 func renderable(book alib.Book, options digest.Options) bool {

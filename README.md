@@ -86,7 +86,7 @@ other details, purchase URL, and ordered photo URLs with normalized captions. Th
 from DOM nodes and logical `<br>`-delimited lines; it does not parse HTML with
 regular expressions. Existing records keep their sent status while refreshing
 the parsed payload from the latest source pages. The first successful run sends
-every listing that can be prepared and rendered; failed listings remain
+every listing that can be rendered; failed listings remain
 undelivered for rediscovery.
 
 `Store.Pending` returns every pending record in first-discovery order, not only
