@@ -33,12 +33,13 @@ default category.
 `ALIB_CATEGORIES` and `ALIB_SERIES` are optional independently, but at least one
 must be non-empty. Each variable is parsed as one CSV record: surrounding
 whitespace is trimmed, empty elements and malformed quotes are rejected, and
-values and repeats retain their source order. Categories must be non-empty
-ASCII letters only. Series are entered as Unicode, but each value must be
-representable in Windows-1251. Each value is first encoded to Windows-1251,
-then those bytes are URL-escaped as the `seria` query value, so spaces, `&`,
-`/`, and commas cannot inject extra parameters. An unrepresentable character
-is a configuration error naming `ALIB_SERIES`.
+values retain their source order. Categories must be non-empty ASCII letters
+only. Repeated series names are ignored after their first occurrence. Series
+are entered as Unicode, but each value must be representable in Windows-1251.
+Each value is first encoded to Windows-1251, then those bytes are URL-escaped as
+the `seria` query value, so spaces, `&`, `/`, and commas cannot inject extra
+parameters. An unrepresentable character is a configuration error naming
+`ALIB_SERIES`.
 Requests always use the fixed seven-day window (`tnew=7` or `lday=7`), in
 category order followed by series order. For example:
 

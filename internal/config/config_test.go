@@ -314,11 +314,11 @@ func Test_Load_builds_AlibURLs_from_categories_and_series(t *testing.T) {
 				"https://alib.ru/findp.php4?seria=%D4%E0%ED%F2%E0%F1%F2%E8%EA%E0%2C+%ED%EE%E2%E8%ED%EA%E8&lday=7",
 			},
 		},
-		"series preserve repeats": {
-			series: "серия,серия",
+		"series deduplicate repeats": {
+			series: "серия,другая,серия",
 			want: []string{
 				"https://alib.ru/findp.php4?seria=%F1%E5%F0%E8%FF&lday=7",
-				"https://alib.ru/findp.php4?seria=%F1%E5%F0%E8%FF&lday=7",
+				"https://alib.ru/findp.php4?seria=%E4%F0%F3%E3%E0%FF&lday=7",
 			},
 		},
 		"both preserve order": {

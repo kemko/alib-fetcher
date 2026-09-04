@@ -205,7 +205,8 @@ each value must be representable in Windows-1251. Their Windows-1251 bytes are
 percent-encoded as one `seria` query value; an unrepresentable character is an
 `ALIB_SERIES` configuration error. Generated endpoints always use the fixed
 seven-day window (`tnew=7` for categories and `lday=7` for series), retaining
-all values and repeats in category-then-series order.
+category-then-series order and ignoring repeated series names after their first
+occurrence.
 Never log or expose the bot token; note that the SDK internally puts it in the
 Bot API URL.
 

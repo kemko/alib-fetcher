@@ -120,7 +120,13 @@ func buildAlibURLs() ([]string, error) {
 		}
 		endpoints = append(endpoints, "https://www.alib.ru/"+category+".phtml?tnew=7")
 	}
+	seenSeries := make(map[string]struct{}, len(series))
 	for _, value := range series {
+		if _, seen := seenSeries[value]; seen {
+			continue
+		}
+		seenSeries[value] = struct{}{}
+
 		endpoint := url.URL{Scheme: "https", Host: "alib.ru", Path: "/findp.php4"}
 		encoded, encodeErr := charmap.Windows1251.NewEncoder().Bytes([]byte(value))
 		if encodeErr != nil {
