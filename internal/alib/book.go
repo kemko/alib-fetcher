@@ -21,13 +21,10 @@ type Book struct {
 	PublicationYear int     `json:"publication_year,omitempty"`
 }
 
-// Photo is a source photo link and its optional Slink processing result.
+// Photo is a source photo link and its optional caption.
 type Photo struct {
-	URL          string `json:"url"`
-	Caption      string `json:"caption,omitempty"`
-	SlinkURL     string `json:"slink_url,omitempty"`
-	SlinkProfile string `json:"slink_profile,omitempty"`
-	NonImage     bool   `json:"non_image,omitempty"`
+	URL     string `json:"url"`
+	Caption string `json:"caption,omitempty"`
 }
 
 type legacyBookJSON struct {
@@ -72,37 +69,6 @@ func legacyPhotos(urls []string) []Photo {
 	}
 
 	return photos
-}
-
-// MergePhotoResults carries processing results from matching source links to a fresh book.
-func MergePhotoResults(book, previous Book) Book {
-	photos := append([]Photo(nil), book.Photos...)
-	previousByURL := make(map[string]Photo)
-	for _, previousPhoto := range previous.Photos {
-		if previousPhoto.URL == "" {
-			continue
-		}
-		storedPhoto, found := previousByURL[previousPhoto.URL]
-		if !found || !hasPhotoResult(storedPhoto) && hasPhotoResult(previousPhoto) {
-			previousByURL[previousPhoto.URL] = previousPhoto
-		}
-	}
-	for photoIndex := range photos {
-		previousPhoto, found := previousByURL[photos[photoIndex].URL]
-		if !found {
-			continue
-		}
-		photos[photoIndex].SlinkURL = previousPhoto.SlinkURL
-		photos[photoIndex].SlinkProfile = previousPhoto.SlinkProfile
-		photos[photoIndex].NonImage = previousPhoto.NonImage
-	}
-	book.Photos = photos
-
-	return book
-}
-
-func hasPhotoResult(photo Photo) bool {
-	return photo.SlinkURL != "" || photo.SlinkProfile != "" || photo.NonImage
 }
 
 func (b *Book) convertLegacyFragments(textBeforeSeller, textBeforeBuy, textAfterBuy string) {

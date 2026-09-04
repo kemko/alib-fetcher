@@ -19,20 +19,16 @@ const (
 	sectionBreak          = lineBreak + lineBreak
 	listingSeparator      = "<hr/>"
 	richMessageBlockLimit = 500
-	richMessageMediaLimit = 50
 )
 
 // ErrMessageTooLong indicates that one listing cannot fit into a message.
 var ErrMessageTooLong = errors.New("digest item exceeds message limit")
 
 // Options controls message size and publication-year highlighting.
-//
-//nolint:govet // Keep the public rendering options grouped by concern.
 type Options struct {
 	LocalTime           time.Time
 	FreshBooksLowerYear *int
 	Limit               int
-	SlinkProfile        string
 }
 
 // Chunk is one Telegram message and the books acknowledged after it is sent.
@@ -71,7 +67,6 @@ func render(books []alib.Book, options Options, skipOversized bool, previousFail
 	skippedBuyURLs := make([]string, 0)
 	current := Chunk{Text: header, Books: make([]alib.Book, 0)}
 	currentBlocks := 0
-	currentMedia := 0
 	for _, book := range books {
 		item, fits := renderItem(book, options)
 		if !fits {
@@ -82,8 +77,8 @@ func render(books []alib.Book, options Options, skipOversized bool, previousFail
 
 			return nil, nil, fmt.Errorf("%w: %s", ErrMessageTooLong, book.BuyURL)
 		}
-		chunks, current, currentBlocks, currentMedia = appendBook(
-			chunks, current, currentBlocks, currentMedia, book, item, options,
+		chunks, current, currentBlocks = appendBook(
+			chunks, current, currentBlocks, book, item, options,
 		)
 	}
 	failed := previousFailures + len(skippedBuyURLs)
@@ -103,7 +98,6 @@ func render(books []alib.Book, options Options, skipOversized bool, previousFail
 	summary := failureSummary(failed)
 	if !chunkExceedsLimits(
 		currentBlocks+2,
-		currentMedia,
 		current.Text+listingSeparator+summary,
 		options.Limit,
 	) {
@@ -129,28 +123,26 @@ func renderItem(book alib.Book, options Options) (string, bool) {
 func appendBook(
 	chunks []Chunk,
 	current Chunk,
-	currentBlocks, currentMedia int,
+	currentBlocks int,
 	book alib.Book,
 	item string,
 	options Options,
-) ([]Chunk, Chunk, int, int) {
+) ([]Chunk, Chunk, int) {
 	separator := ""
 	if len(current.Books) > 0 {
 		separator = listingSeparator
 	} else if current.Text != "" {
 		separator = sectionBreak
 	}
-	itemBlocks := richMessageBlocks(book, options)
-	itemMedia := richMessageMedia(book, options)
+	itemBlocks := 1
 	candidateBlocks := currentBlocks + itemBlocks
 	if len(current.Books) > 0 {
 		candidateBlocks++
 	}
-	if chunkExceedsLimits(candidateBlocks, currentMedia+itemMedia, current.Text+separator+item, options.Limit) {
+	if chunkExceedsLimits(candidateBlocks, current.Text+separator+item, options.Limit) {
 		chunks = append(chunks, current)
 		current = Chunk{Books: make([]alib.Book, 0)}
 		currentBlocks = 0
-		currentMedia = 0
 		separator = ""
 	}
 
@@ -160,9 +152,8 @@ func appendBook(
 		currentBlocks++
 	}
 	currentBlocks += itemBlocks
-	currentMedia += itemMedia
 
-	return chunks, current, currentBlocks, currentMedia
+	return chunks, current, currentBlocks
 }
 
 func renderFailureSummary(failed int, options Options) ([]Chunk, error) {
@@ -170,7 +161,7 @@ func renderFailureSummary(failed int, options Options) ([]Chunk, error) {
 	if renderedRuneCount(summary) > options.Limit {
 		return nil, fmt.Errorf("%w: failure summary", ErrMessageTooLong)
 	}
-	if !chunkExceedsLimits(1, 0, header+sectionBreak+summary, options.Limit) {
+	if !chunkExceedsLimits(1, header+sectionBreak+summary, options.Limit) {
 		return []Chunk{{Text: header + sectionBreak + summary, Books: make([]alib.Book, 0)}}, nil
 	}
 	if renderedRuneCount(header) > options.Limit {
@@ -187,8 +178,8 @@ func failureSummary(failed int) string {
 	return fmt.Sprintf("Не удалось обработать книг: %d", failed)
 }
 
-func chunkExceedsLimits(blocks, media int, text string, textLimit int) bool {
-	return blocks > richMessageBlockLimit || media > richMessageMediaLimit || renderedRuneCount(text) > textLimit
+func chunkExceedsLimits(blocks int, text string, textLimit int) bool {
+	return blocks > richMessageBlockLimit || renderedRuneCount(text) > textLimit
 }
 
 func truncateContent(book alib.Book, options Options) string {
@@ -258,38 +249,25 @@ func renderBook(book alib.Book, options Options) string {
 	if condition := strings.TrimSpace(book.Condition); condition != "" {
 		details = append(details, renderMultilineText(condition))
 	}
-	photoLinks, slideshowPhotos := renderPhotos(book.Photos, options.SlinkProfile)
+	photoLinks := renderPhotos(book.Photos)
 	if len(photoLinks) > 0 {
 		details = append(details, "Смотрите: "+strings.Join(photoLinks, " - "))
 	}
 	if len(details) > 0 {
 		sections = append(sections, strings.Join(details, lineBreak))
 	}
-	if slideshow := renderSlideshow(slideshowPhotos); slideshow != "" {
-		sections = append(sections, slideshow)
-	}
 	sections = append(sections, renderLink(book.BuyURL, "Купить"))
 
 	return strings.Join(sections, sectionBreak)
 }
 
-func renderPhotos(photos []alib.Photo, slinkProfile string) ([]string, []alib.Photo) {
+func renderPhotos(photos []alib.Photo) []string {
 	photoLinks := make([]string, 0, len(photos))
-	slideshowPhotos := make([]alib.Photo, 0, len(photos))
 	for _, photo := range photos {
-		if isPublishedPhoto(photo, slinkProfile) && len(slideshowPhotos) < richMessageMediaLimit {
-			slideshowPhotos = append(slideshowPhotos, photo)
-			continue
-		}
 		photoLinks = append(photoLinks, renderLink(photo.URL, photoCaption(photo)))
 	}
 
-	return photoLinks, slideshowPhotos
-}
-
-func isPublishedPhoto(photo alib.Photo, slinkProfile string) bool {
-	return slinkProfile != "" && photo.SlinkURL != "" &&
-		photo.SlinkProfile == slinkProfile && !photo.NonImage
+	return photoLinks
 }
 
 func photoCaption(photo alib.Photo) string {
@@ -298,57 +276,6 @@ func photoCaption(photo alib.Photo) string {
 	}
 
 	return "фото"
-}
-
-func renderSlideshow(photos []alib.Photo) string {
-	if len(photos) == 0 {
-		return ""
-	}
-
-	parts := []string{"<tg-slideshow>"}
-	seenCaptions := make(map[string]struct{}, len(photos))
-	captions := make([]string, 0, len(photos))
-	for _, photo := range photos {
-		parts = append(parts, `<img src="`+escapeLinkTarget(photo.SlinkURL)+`"/>`)
-		caption := strings.TrimSpace(photo.Caption)
-		if caption == "" {
-			continue
-		}
-		if _, seen := seenCaptions[caption]; seen {
-			continue
-		}
-		seenCaptions[caption] = struct{}{}
-		captions = append(captions, caption)
-	}
-	if len(captions) > 0 {
-		parts = append(parts, "<figcaption>"+renderMultilineText(strings.Join(captions, " — "))+"</figcaption>")
-	}
-	parts = append(parts, "</tg-slideshow>")
-
-	return strings.Join(parts, "")
-}
-
-func richMessageBlocks(book alib.Book, options Options) int {
-	media := richMessageMedia(book, options)
-	if media == 0 {
-		return 1
-	}
-
-	return media + 3
-}
-
-func richMessageMedia(book alib.Book, options Options) int {
-	media := 0
-	for _, photo := range book.Photos {
-		if isPublishedPhoto(photo, options.SlinkProfile) {
-			media++
-			if media == richMessageMediaLimit {
-				return media
-			}
-		}
-	}
-
-	return media
 }
 
 func renderMultilineText(value string) string {

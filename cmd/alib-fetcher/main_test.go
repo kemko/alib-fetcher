@@ -8,13 +8,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,12 +21,12 @@ import (
 	"github.com/go-telegram/bot/models"
 
 	"github.com/kemko/alib-fetcher/internal/alib"
-	"github.com/kemko/alib-fetcher/internal/slink"
 	"github.com/kemko/alib-fetcher/internal/store"
 	"github.com/kemko/alib-fetcher/internal/telegram"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	xhtml "golang.org/x/net/html"
 )
 
 type telegramRequest struct {
@@ -83,7 +82,7 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 (До заказа внимательно прочтите условия продажи продавца <a href="/bs.php4?bs=BotSad">BS - BotSad</a>, Москва.)
 Цена: 3 900 руб. <a href="/hot.html"><b>Купить</b></a><br>
 Первая строка содержания.<br>Вторая строка содержания.<br>Состояние: Отличное.<br>
-Смотрите: <a href="/foto.php4?id=1">фото</a></p>
+Смотрите: <a href="/foto.php4?id=1">Обложка</a> - <a href="foto.php4?id=2"></a> - <a href="/foto.php4?id=1">Повтор</a></p>
 <p><b>Свежая книга.</b> М., %d г.<br>
 Цена: 500 руб. <a href="/fresh.html"><b>Купить</b></a></p>
 <p><b>Будущая книга.</b> М., %d г.<br>
@@ -155,9 +154,16 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 				futureYear,
 			))
 			require.Contains(t, richHTML, fmt.Sprintf(
-				`<br/>Цена: 3 900 руб.<br/>Состояние: Отличное.<br/>Смотрите: <a href="%s/foto.php4?id=1">фото</a>`,
+				`<br/>Цена: 3 900 руб.<br/>Состояние: Отличное.<br/>Смотрите: `+
+					`<a href="%s/foto.php4?id=1">Обложка</a> - `+
+					`<a href="%s/foto.php4?id=2">фото</a> - `+
+					`<a href="%s/foto.php4?id=1">Повтор</a>`,
+				alibServer.URL,
+				alibServer.URL,
 				alibServer.URL,
 			))
+			require.NotContains(t, richHTML, "<tg-slideshow>")
+			require.NotContains(t, richHTML, "<img ")
 			require.NotContains(t, richHTML, "<p>")
 			require.NotContains(t, richHTML, "<br>")
 			require.NotRegexp(t, `[\r\n]`, richHTML)
@@ -172,205 +178,113 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 	}
 }
 
-func Test_run_isolatesSlinkPhotoProcessorFailure(t *testing.T) {
+func Test_run_once_sends_truncated_description_through_rich_message(t *testing.T) {
 	// Given
 	useOnceMode(t)
-	alibServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	const messageLimit = 180
+	const buyPath = "/long-description.html"
+	longDescription := strings.Repeat("длинное описание ", 100)
+	alibServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		assert.Equal(t, http.MethodGet, request.Method)
 		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, err := io.WriteString(writer, `<p><b>Книга.</b> М., 2026 г.<br>
-Цена: 100 руб. <a href="/book"><b>Купить</b></a><br>
-Смотрите: <a href="http://127.0.0.1/foto.php4">Обложка</a></p>`)
+		_, err := fmt.Fprintf(writer, `<p><b>Книга с длинным описанием.</b> М., 2026 г.<br>
+Цена: 500 руб. <a href="%s"><b>Купить</b></a><br>
+%s</p>`, buyPath, longDescription)
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(alibServer.Close)
-	telegramRequests := make(chan telegramRequest, 1)
+
+	telegramRequests := make(chan telegramRequest, 2)
 	telegramServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		telegramRequests <- telegramRequest{Message: decodeTelegramMessage(t, request), Path: request.URL.Path}
-		_, err := io.WriteString(writer, `{"ok":true,"result":{}}`)
-		assert.NoError(t, err)
-	}))
-	t.Cleanup(telegramServer.Close)
-	setRunEnvironment(t, alibServer.URL, telegramServer.URL, filepath.Join(t.TempDir(), "state.db"))
-	t.Setenv("SLINK_URL", "https://slink.example")
-	t.Setenv("SLINK_API_KEY", "sk_main-wiring-secret")
-	t.Setenv("SLINK_TAG_ID", "550e8400-e29b-41d4-a716-446655440000")
-	var logs bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&logs, nil))
-
-	// When
-	err := run(logger)
-
-	// Then
-	require.NoError(t, err)
-	request := <-telegramRequests
-	require.Contains(t, request.Message.RichMessage.HTML, "Не удалось обработать книг: 1")
-	require.Contains(t, logs.String(), `"msg":"slink.photo_failed"`)
-	require.NotContains(t, logs.String(), "sk_main-wiring-secret")
-}
-
-func Test_run_endToEnd_isolatesSlinkSourceFailure(t *testing.T) {
-	// Given
-	useOnceMode(t)
-	const (
-		apiKey = "sk_acceptance-secret"
-		tagID  = "550e8400-e29b-41d4-a716-446655440000"
-	)
-
-	alibServer := newIPv4TestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, err := fmt.Fprintf(writer, `<p><b>Успешная.</b> М., 2026 г.<br>
-Цена: 100 руб. <a href="/good-buy"><b>Купить</b></a><br>
-Смотрите: <a href="http://slink.test/foto.php4?kind=good">Обложка</a></p>
-<p><b>Сбойная.</b> М., 2026 г.<br>
-Цена: 200 руб. <a href="/bad-buy"><b>Купить</b></a><br>
-Смотрите: <a href="http://slink.test/foto.php4?kind=bad">Обложка</a></p>`)
-		assert.NoError(t, err)
-	}))
-	t.Cleanup(alibServer.Close)
-
-	var uploads atomic.Int32
-	slinkServer := newIPv4TestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		switch request.URL.Path {
-		case "/foto.php4":
-			assert.Equal(t, http.MethodGet, request.Method)
-			assert.Equal(t, "alib-fetcher/1.0", request.Header.Get("User-Agent"))
-			assert.Equal(t, alibServer.URL+"/"+request.URL.Query().Get("kind")+"-buy", request.Header.Get("Referer"))
-			writer.Header().Set("Content-Type", "image/png")
-			_, err := writer.Write([]byte("\x89PNG\r\n\x1a\nimage"))
-			assert.NoError(t, err)
-		case "/api/external/upload":
-			assert.Equal(t, http.MethodPost, request.Method)
-			assert.Equal(t, "Bearer "+apiKey, request.Header.Get("Authorization"))
-			assert.Equal(t, "http://slink.test", request.Header.Get("Origin"))
-			assert.Equal(t, "alib-fetcher/1.0", request.Header.Get("User-Agent"))
-			if !assert.NoError(t, request.ParseMultipartForm(1<<20)) {
-				return
-			}
-			file, _, err := request.FormFile("image")
-			if !assert.NoError(t, err) {
-				return
-			}
-			assert.NoError(t, file.Close())
-			assert.Equal(t, tagID, request.FormValue("tagIds[]"))
-			uploadIndex := uploads.Add(1)
-			writer.Header().Set("Content-Type", "application/json")
-			_, err = fmt.Fprintf(writer, `{"url":"/i/%s-share"}`, map[int32]string{1: "good", 2: "bad"}[uploadIndex])
-			assert.NoError(t, err)
-		case "/i/good-share":
-			assert.Equal(t, http.MethodHead, request.Method)
-			http.Redirect(writer, request, "/image/good.png", http.StatusFound)
-		case "/image/good.png":
-			assert.Equal(t, http.MethodHead, request.Method)
-			writer.Header().Set("Content-Type", "image/png")
-		case "/i/bad-share":
-			assert.Equal(t, http.MethodHead, request.Method)
-			writer.WriteHeader(http.StatusBadGateway)
-			_, err := io.WriteString(writer, "private response body")
-			assert.NoError(t, err)
-		default:
-			t.Errorf("unexpected Slink path %q", request.URL.Path)
-		}
-	}))
-	t.Cleanup(slinkServer.Close)
-
-	telegramRequests := make(chan telegramRequest, 1)
-	telegramServer := newIPv4TestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		telegramRequests <- telegramRequest{Message: decodeTelegramMessage(t, request), Path: request.URL.Path}
-		_, err := io.WriteString(writer, `{"ok":true,"result":{}}`)
+		writer.Header().Set("Content-Type", "application/json")
+		_, err := writer.Write([]byte(`{"ok":true,"result":{}}`))
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(telegramServer.Close)
 
 	statePath := filepath.Join(t.TempDir(), "state.db")
 	setRunEnvironment(t, alibServer.URL, telegramServer.URL, statePath)
-	t.Setenv("SLINK_URL", "http://slink.test")
-	t.Setenv("SLINK_API_KEY", apiKey)
-	t.Setenv("SLINK_TAG_ID", tagID)
+	t.Setenv("MESSAGE_LIMIT", strconv.Itoa(messageLimit))
 	var logs bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&logs, nil))
-
-	newSlinkClient := func(rawURL, key, tag string, timeout time.Duration, clientLogger *slog.Logger) (*slink.Client, error) {
-		dialer := &net.Dialer{}
-		return slink.NewClientWithOptions(rawURL, key, tag, timeout, clientLogger, slink.Options{
-			HTTPClient: &http.Client{Transport: rewriteHostTransport{target: slinkServer.Listener.Addr().String()}},
-			LookupIP: func(context.Context, string) ([]net.IP, error) {
-				return []net.IP{net.ParseIP("93.184.216.34")}, nil
-			},
-			DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
-				return dialer.DialContext(ctx, network, slinkServer.Listener.Addr().String())
-			},
-		})
-	}
+	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	// When
-	err := runWithSlinkFactory(logger, newSlinkClient)
+	err := run(logger)
 
 	// Then
 	require.NoError(t, err)
-	require.Len(t, telegramRequests, 1)
-	message := (<-telegramRequests).Message
-	require.Contains(t, message.RichMessage.HTML, "Успешная.")
-	require.Contains(t, message.RichMessage.HTML, `<tg-slideshow><img src="http://slink.test/image/good.png"`)
-	require.NotContains(t, message.RichMessage.HTML, "http://slink.test/i/good-share")
-	require.NotContains(t, message.RichMessage.HTML, "Сбойная.")
-	require.Contains(t, message.RichMessage.HTML, "Не удалось обработать книг: 1")
-	requireRefreshButton(t, message)
+	require.Len(t, telegramRequests, 2)
+	requests := []telegramRequest{<-telegramRequests, <-telegramRequests}
+	var listingMessage telegramRequest
+	for _, request := range requests {
+		require.Equal(t, "/bottest-token/sendRichMessage", request.Path)
+		require.LessOrEqual(t, displayedRuneCount(t, request.Message.RichMessage.HTML), messageLimit)
+		if strings.Contains(request.Message.RichMessage.HTML, "…") {
+			listingMessage = request
+		}
+	}
+	require.NotEmpty(t, listingMessage.Message.RichMessage.HTML)
+	require.Contains(t, listingMessage.Message.RichMessage.HTML, "…")
+	require.NotContains(t, listingMessage.Message.RichMessage.HTML, longDescription)
+	require.Contains(t, logs.String(), `"fetched":1`)
+	require.Contains(t, logs.String(), `"new":1`)
+	require.Contains(t, logs.String(), `"failed":0`)
+	require.Contains(t, logs.String(), `"sent":1`)
 
+	book := alib.Book{BuyURL: alibServer.URL + buyPath}
 	state, err := store.Open(statePath, time.Now())
 	require.NoError(t, err)
-	existing, err := state.Existing(context.Background(), []alib.Book{
-		{BuyURL: alibServer.URL + "/good-buy"},
-		{BuyURL: alibServer.URL + "/bad-buy"},
-	})
+	existing, err := state.Existing(context.Background(), []alib.Book{book})
 	require.NoError(t, err)
-	require.Equal(t, []bool{true, false}, existing)
+	require.Equal(t, []bool{true}, existing)
 	pending, err := state.Pending(context.Background())
 	require.NoError(t, err)
 	require.Empty(t, pending)
 	require.NoError(t, state.Close())
-
-	logOutput := logs.String()
-	require.Contains(t, logOutput, `"msg":"slink.photo_started","buy_url":"`+alibServer.URL+`/good-buy","index":0,"total":1`)
-	require.Contains(t, logOutput, `"msg":"slink.photo_completed","buy_url":"`+alibServer.URL+`/good-buy","index":0,"total":1,"outcome":"uploaded","media_url":"http://slink.test/image/good.png"`)
-	require.Contains(t, logOutput, `"msg":"slink.photo_failed"`)
-	require.Contains(t, logOutput, `"buy_url":"`+alibServer.URL+`/bad-buy","index":0,"total":1`)
-	require.Contains(t, logOutput, `"stage":"slink_media"`)
-	require.Contains(t, logOutput, `"http_status":502`)
-	require.Contains(t, logOutput, `"msg":"digest.completed"`)
-	require.Contains(t, logOutput, `"failed":1`)
-	require.NotContains(t, logOutput, apiKey)
-	require.NotContains(t, logOutput, "i/good-share")
-	require.NotContains(t, logOutput, "private response body")
-	require.NotContains(t, logOutput, "kind=good")
-	require.NotContains(t, logOutput, "kind=bad")
 }
 
-type rewriteHostTransport struct {
-	target string
-}
+func Test_run_once_uses_default_rich_message_limit_and_listing_block_chunks(t *testing.T) {
+	// Given
+	useOnceMode(t)
+	alibServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		assert.Equal(t, http.MethodGet, request.Method)
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		for index := range 251 {
+			_, err := fmt.Fprintf(writer, `<p><b>Книга %d.</b> Цена: 100 руб. <a href="/book-%d.html"><b>Купить</b></a></p>`, index, index)
+			assert.NoError(t, err)
+		}
+	}))
+	t.Cleanup(alibServer.Close)
 
-func (transport rewriteHostTransport) RoundTrip(request *http.Request) (*http.Response, error) {
-	rewritten := request.Clone(request.Context())
-	rewritten.URL.Host = transport.target
+	telegramRequests := make(chan telegramRequest, 2)
+	telegramServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		telegramRequests <- telegramRequest{Message: decodeTelegramMessage(t, request), Path: request.URL.Path}
+		writer.Header().Set("Content-Type", "application/json")
+		_, err := writer.Write([]byte(`{"ok":true,"result":{}}`))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(telegramServer.Close)
 
-	response, err := http.DefaultTransport.RoundTrip(rewritten)
-	if response != nil && response.Request != nil {
-		response.Request = request
-	}
+	statePath := filepath.Join(t.TempDir(), "state.db")
+	setRunEnvironment(t, alibServer.URL, telegramServer.URL, statePath)
+	unsetEnvironment(t, "MESSAGE_LIMIT")
 
-	return response, err
-}
+	// When
+	err := run(slog.New(slog.DiscardHandler))
 
-func newIPv4TestServer(t *testing.T, handler http.Handler) *httptest.Server {
-	t.Helper()
-	var listenConfig net.ListenConfig
-	listener, err := listenConfig.Listen(context.Background(), "tcp4", "127.0.0.1:0")
+	// Then
 	require.NoError(t, err)
-	server := httptest.NewUnstartedServer(handler)
-	server.Listener = listener
-	server.Start()
-
-	return server
+	require.Len(t, telegramRequests, 2)
+	requests := []telegramRequest{<-telegramRequests, <-telegramRequests}
+	require.Equal(t, "/bottest-token/sendRichMessage", requests[0].Path)
+	require.Equal(t, "/bottest-token/sendRichMessage", requests[1].Path)
+	require.Equal(t, 250, strings.Count(requests[0].Message.RichMessage.HTML, "<hr/>")+1)
+	require.Equal(t, 1, strings.Count(requests[1].Message.RichMessage.HTML, "<b>Книга 250.</b>"))
+	for _, request := range requests {
+		require.LessOrEqual(t, displayedRuneCount(t, request.Message.RichMessage.HTML), 32000)
+		require.NotContains(t, request.Path, "sendMessage")
+	}
 }
 
 func Test_run_rejects_non_positive_forget_latest(t *testing.T) {
@@ -845,9 +759,6 @@ func setEnvironmentAbsentDigestConfiguration(t *testing.T) {
 		"RUN_ON_STARTUP",
 		"FRESH_BOOKS",
 		"ALIB_REQUEST_INTERVAL",
-		"SLINK_URL",
-		"SLINK_API_KEY",
-		"SLINK_TAG_ID",
 	} {
 		unsetEnvironment(t, key)
 	}
@@ -886,6 +797,30 @@ func decodeTelegramMessage(t *testing.T, request *http.Request) telegrambot.Send
 	return payload
 }
 
+func displayedRuneCount(t *testing.T, value string) int {
+	t.Helper()
+	document, err := xhtml.Parse(strings.NewReader(value))
+	require.NoError(t, err)
+
+	var count func(*xhtml.Node) int
+	count = func(node *xhtml.Node) int {
+		total := 0
+		if node.Type == xhtml.TextNode {
+			total += len([]rune(node.Data))
+		}
+		if node.Type == xhtml.ElementNode && node.Data == "br" {
+			total++
+		}
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			total += count(child)
+		}
+
+		return total
+	}
+
+	return count(document)
+}
+
 func setRunEnvironment(t *testing.T, alibURL, telegramAPIBase, statePath string) {
 	t.Helper()
 
@@ -900,9 +835,6 @@ func setRunEnvironment(t *testing.T, alibURL, telegramAPIBase, statePath string)
 	t.Setenv("HTTP_TIMEOUT", "2s")
 	t.Setenv("ALIB_REQUEST_INTERVAL", "0s")
 	t.Setenv("MESSAGE_LIMIT", "4000")
-	t.Setenv("SLINK_URL", "")
-	t.Setenv("SLINK_API_KEY", "")
-	t.Setenv("SLINK_TAG_ID", "")
 }
 
 func unsetEnvironment(t *testing.T, key string) {
