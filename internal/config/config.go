@@ -109,35 +109,52 @@ func buildAlibURLs() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(categories) == 0 && len(series) == 0 {
-		return nil, fmt.Errorf("%w: ALIB_CATEGORIES and ALIB_SERIES must not both be empty", ErrInvalid)
+	publishers, err := parseCSVList("ALIB_PUBLISHERS")
+	if err != nil {
+		return nil, err
+	}
+	if len(categories) == 0 && len(series) == 0 && len(publishers) == 0 {
+		return nil, fmt.Errorf(
+			"%w: ALIB_CATEGORIES, ALIB_SERIES, and ALIB_PUBLISHERS must not all be empty",
+			ErrInvalid,
+		)
 	}
 
-	endpoints := make([]string, 0, len(categories)+len(series))
+	endpoints := make([]string, 0, len(categories)+len(series)+len(publishers))
 	for _, category := range categories {
 		if !isASCIIWord(category) {
 			return nil, fmt.Errorf("%w: ALIB_CATEGORIES contains invalid category %q", ErrInvalid, category)
 		}
 		endpoints = append(endpoints, "https://www.alib.ru/"+category+".phtml?tnew=7")
 	}
-	seenSeries := make(map[string]struct{}, len(series))
-	for _, value := range series {
-		if _, seen := seenSeries[value]; seen {
+	endpoints, err = appendAlibSearchURLs(endpoints, "ALIB_SERIES", "seria", series)
+	if err != nil {
+		return nil, err
+	}
+
+	return appendAlibSearchURLs(endpoints, "ALIB_PUBLISHERS", "izdat", publishers)
+}
+
+func appendAlibSearchURLs(endpoints []string, variable, parameter string, values []string) ([]string, error) {
+	seenValues := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if _, seen := seenValues[value]; seen {
 			continue
 		}
-		seenSeries[value] = struct{}{}
+		seenValues[value] = struct{}{}
 
 		endpoint := url.URL{Scheme: "https", Host: "alib.ru", Path: "/findp.php4"}
 		encoded, encodeErr := charmap.Windows1251.NewEncoder().Bytes([]byte(value))
 		if encodeErr != nil {
 			return nil, fmt.Errorf(
-				"%w: ALIB_SERIES item %q cannot be represented in Windows-1251: %w",
+				"%w: %s item %q cannot be represented in Windows-1251: %w",
 				ErrInvalid,
+				variable,
 				value,
 				encodeErr,
 			)
 		}
-		endpoint.RawQuery = "seria=" + url.QueryEscape(string(encoded)) + "&lday=7"
+		endpoint.RawQuery = parameter + "=" + url.QueryEscape(string(encoded)) + "&lday=7"
 		endpoints = append(endpoints, endpoint.String())
 	}
 

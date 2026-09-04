@@ -431,6 +431,7 @@ func Test_run_rejects_missing_Alib_tracking_configuration_before_http(t *testing
 	require.ErrorIs(t, err, config.ErrInvalid)
 	require.ErrorContains(t, err, "ALIB_CATEGORIES")
 	require.ErrorContains(t, err, "ALIB_SERIES")
+	require.ErrorContains(t, err, "ALIB_PUBLISHERS")
 }
 
 func Test_run_sends_only_last_wired_message_with_sound(t *testing.T) {
@@ -471,6 +472,7 @@ func Test_run_sends_only_last_wired_message_with_sound(t *testing.T) {
 	t.Setenv("STATE_PATH", filepath.Join(t.TempDir(), "state.db"))
 	t.Setenv("ALIB_CATEGORIES", "tramka")
 	t.Setenv("ALIB_SERIES", "")
+	t.Setenv("ALIB_PUBLISHERS", "")
 	t.Setenv("TELEGRAM_API_BASE", telegramServer.URL)
 	t.Setenv("HTTP_TIMEOUT", "2s")
 	t.Setenv("ALIB_REQUEST_INTERVAL", "0s")
@@ -839,6 +841,7 @@ func setEnvironmentAbsentDigestConfiguration(t *testing.T) {
 		"TIMEZONE",
 		"ALIB_CATEGORIES",
 		"ALIB_SERIES",
+		"ALIB_PUBLISHERS",
 		"TELEGRAM_API_BASE",
 		"HTTP_TIMEOUT",
 		"MESSAGE_LIMIT",
@@ -918,6 +921,7 @@ func setRunEnvironment(t *testing.T, telegramAPIBase, statePath string) {
 	t.Setenv("STATE_PATH", statePath)
 	t.Setenv("ALIB_CATEGORIES", "tramka")
 	t.Setenv("ALIB_SERIES", "")
+	t.Setenv("ALIB_PUBLISHERS", "")
 	t.Setenv("TELEGRAM_API_BASE", telegramAPIBase)
 	t.Setenv("HTTP_TIMEOUT", "2s")
 	t.Setenv("ALIB_REQUEST_INTERVAL", "0s")
