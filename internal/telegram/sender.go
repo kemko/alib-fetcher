@@ -165,6 +165,13 @@ func (s *Sender) normalizeSDKError(ctx context.Context, err error) error {
 	if err == nil {
 		return nil
 	}
+
+	var requestErr *sdkRequestError
+	if errors.As(err, &requestErr) {
+		operation := "call Telegram SDK: " + s.sanitizeError(requestErr.cause.Error())
+
+		return requestError(ctx, operation, err)
+	}
 	if contextErr := ctx.Err(); contextErr != nil {
 		return errors.Join(
 			ErrRequest,
@@ -193,11 +200,6 @@ func (s *Sender) normalizeSDKError(ctx context.Context, err error) error {
 	}
 	if strings.Contains(err.Error(), "error decode response") {
 		return &safeCauseError{message: "decode Telegram response", cause: err}
-	}
-
-	var requestErr *sdkRequestError
-	if errors.As(err, &requestErr) {
-		return requestError(ctx, "call Telegram SDK", err)
 	}
 
 	return &safeCauseError{message: s.sanitizeError(err.Error()), cause: err}
