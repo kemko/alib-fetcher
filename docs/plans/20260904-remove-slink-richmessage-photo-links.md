@@ -117,19 +117,19 @@
 - Modify: `go.sum`
 - Modify: `docker-compose.yml`
 
-- [ ] Сократить `alib.Photo` до исходных `URL` и `Caption`; удалить `SlinkURL`, `SlinkProfile`, `NonImage` и перенос
+- [x] Сократить `alib.Photo` до исходных `URL` и `Caption`; удалить `SlinkURL`, `SlinkProfile`, `NonImage` и перенос
   результатов обработки при rediscovery.
-- [ ] Сохранить чтение legacy `photo_urls` и добавить регрессию чтения текущих bbolt-записей с
+- [x] Сохранить чтение legacy `photo_urls` и добавить регрессию чтения текущих bbolt-записей с
   устаревшими Slink-полями: исходные URL и подписи не теряются, неизвестные поля не мешают
   открытию БД.
-- [ ] Удалить `Store.SavePrepared`; при rediscovery записывать свежие исходные фотоссылки и подписи,
+- [x] Удалить `Store.SavePrepared`; при rediscovery записывать свежие исходные фотоссылки и подписи,
   сохраняя sent status, timestamps и queue order.
-- [ ] Полностью удалить package `internal/slink` и относящиеся к нему test doubles и fixtures.
-- [ ] Удалить `SLINK_URL`, `SLINK_API_KEY`, `SLINK_TAG_ID` и их валидацию из конфигурации.
-- [ ] Удалить Slink-переменные и ставший ненужным `/tmp` tmpfs из Compose.
-- [ ] Удалить `iplib` и неиспользуемые транзитивные записи из `go.mod` и `go.sum`.
-- [ ] Обновить model/store/config tests для новой схемы и удаления Slink-контракта.
-- [ ] Выполнить `make test`; все тесты должны пройти до Task 3.
+- [x] Полностью удалить package `internal/slink` и относящиеся к нему test doubles и fixtures.
+- [x] Удалить `SLINK_URL`, `SLINK_API_KEY`, `SLINK_TAG_ID` и их валидацию из конфигурации.
+- [x] Удалить Slink-переменные и ставший ненужным `/tmp` tmpfs из Compose.
+- [x] Удалить `iplib` и неиспользуемые транзитивные записи из `go.mod` и `go.sum`.
+- [x] Обновить model/store/config tests для новой схемы и удаления Slink-контракта.
+- [x] Выполнить `make test`; все тесты должны пройти до Task 3.
 
 ### Task 3: Закрепить публичный контракт и документацию
 

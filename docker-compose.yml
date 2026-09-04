@@ -18,13 +18,8 @@ services:
       TELEGRAM_API_BASE: ${TELEGRAM_API_BASE:-https://api.telegram.org}
       HTTP_TIMEOUT: ${HTTP_TIMEOUT:-30s}
       MESSAGE_LIMIT: ${MESSAGE_LIMIT:-32000}
-      SLINK_URL: ${SLINK_URL:-}
-      SLINK_API_KEY: ${SLINK_API_KEY:-}
-      SLINK_TAG_ID: ${SLINK_TAG_ID:-}
     volumes:
       - alib-fetcher-state:/var/lib/alib-fetcher
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,mode=1777
     cap_drop:
       - ALL
     security_opt:

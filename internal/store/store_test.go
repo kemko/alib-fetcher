@@ -152,7 +152,7 @@ func Test_Store_updates_sent_book_metadata_without_requeueing(t *testing.T) {
 	require.True(t, decodeStoredTime(record.ObservedAt).Equal(rediscoveredAt.UTC()))
 }
 
-func Test_Store_rediscovery_preserves_photo_results_and_fresh_captions(t *testing.T) {
+func Test_Store_rediscovery_replaces_photos_and_fresh_captions(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -161,10 +161,7 @@ func Test_Store_rediscovery_preserves_photo_results_and_fresh_captions(t *testin
 	db, err := store.Open(path, observedAt)
 	require.NoError(t, err)
 	original := fullBook("https://example.com/photo-results")
-	original.Photos = []alib.Photo{
-		{URL: "https://example.com/photo-1", Caption: "Old caption", SlinkURL: "https://slink/1", SlinkProfile: "profile", NonImage: true},
-		{URL: "https://example.com/photo-1", Caption: "Old repeat", SlinkURL: "https://slink/1"},
-	}
+	original.Photos = []alib.Photo{{URL: "https://example.com/photo-1", Caption: "Old caption"}}
 	updated := original
 	updated.Title = "Fresh title"
 	updated.Photos = []alib.Photo{
@@ -185,40 +182,8 @@ func Test_Store_rediscovery_preserves_photo_results_and_fresh_captions(t *testin
 	require.Equal(t, updated.Title, pending[0].Title)
 	require.Equal(t, updated.Photos[0].Caption, pending[0].Photos[0].Caption)
 	require.Equal(t, updated.Photos[1].Caption, pending[0].Photos[1].Caption)
-	require.Equal(t, original.Photos[0].SlinkURL, pending[0].Photos[0].SlinkURL)
-	require.Equal(t, original.Photos[0].SlinkProfile, pending[0].Photos[0].SlinkProfile)
-	require.True(t, pending[0].Photos[0].NonImage)
-	require.Equal(t, original.Photos[0].SlinkURL, pending[0].Photos[1].SlinkURL)
 	require.Equal(t, "Fresh caption", pending[0].Photos[0].Caption)
 	require.Equal(t, "Fresh repeat", pending[0].Photos[1].Caption)
-}
-
-func Test_Store_save_prepared_preserves_delivery_metadata(t *testing.T) {
-	t.Parallel()
-
-	// Given
-	path := filepath.Join(t.TempDir(), "state.db")
-	observedAt := time.Date(2026, time.August, 5, 12, 0, 0, 0, time.UTC)
-	db, err := store.Open(path, observedAt)
-	require.NoError(t, err)
-	original := fullBook("https://example.com/prepared")
-	recordDiscovered(t, db, []alib.Book{original}, observedAt)
-	prepared := original
-	prepared.Title = "Prepared title"
-	prepared.Photos = []alib.Photo{{URL: "https://example.com/photo", Caption: "Photo", SlinkURL: "https://slink/photo"}}
-
-	// When
-	err = db.SavePrepared(context.Background(), prepared)
-	require.NoError(t, db.Close())
-	record := readStoredRecord(t, path, original.BuyURL)
-
-	// Then
-	require.NoError(t, err)
-	require.Equal(t, prepared, record.Book)
-	require.Equal(t, observedAt.UnixNano(), record.ObservedAt)
-	require.Equal(t, uint64(1), record.QueueOrder)
-	require.False(t, record.Sent)
-	require.Zero(t, record.SentAt)
 }
 
 func Test_Store_returns_pending_books_from_previous_failed_cycle(t *testing.T) {
@@ -597,6 +562,65 @@ func Test_Open_leaves_valid_json_records_unchanged(t *testing.T) {
 
 	// Then
 	require.JSONEq(t, record, string(readRawRecord(t, path, buyURL)))
+}
+
+func Test_Store_reads_legacy_Slink_photo_fields_and_cleans_them_on_rediscovery(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	path := filepath.Join(t.TempDir(), "state.db")
+	buyURL := "https://example.com/legacy-slink-photo"
+	observedAt := time.Date(2026, time.August, 4, 12, 0, 0, 0, time.UTC)
+	legacyRecord := fmt.Sprintf(`{
+		"book": {
+			"title": "Stored title",
+			"buy_url": %q,
+			"photos": [{
+				"url": "https://example.com/source-photo",
+				"caption": "Stored caption",
+				"slink_url": "https://slink.example/published",
+				"slink_profile": "slink:old",
+				"non_image": true
+			}],
+			"removed_field": "ignored"
+		},
+		"observed_at": %d,
+		"queue_order": 19,
+		"sent": false
+	}`, buyURL, observedAt.UnixNano())
+	require.NoError(t, writeLegacyMarker(path, buyURL, []byte(legacyRecord)))
+	db, err := store.Open(path, time.Now())
+	require.NoError(t, err)
+	updated := alib.Book{
+		Title:  "Fresh title",
+		BuyURL: buyURL,
+		Photos: []alib.Photo{{URL: "https://example.com/source-photo", Caption: "Fresh caption"}},
+	}
+
+	// When
+	pending, err := db.Pending(context.Background())
+	require.NoError(t, err)
+	created, err := db.RecordDiscovered(context.Background(), []alib.Book{updated}, observedAt.Add(time.Hour))
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+	record := readStoredRecord(t, path, buyURL)
+	rawRecord := string(readRawRecord(t, path, buyURL))
+
+	// Then
+	require.Equal(t, []alib.Book{{
+		Title:  "Stored title",
+		BuyURL: buyURL,
+		Photos: []alib.Photo{{URL: "https://example.com/source-photo", Caption: "Stored caption"}},
+	}}, pending)
+	require.Zero(t, created)
+	require.Equal(t, updated, record.Book)
+	require.Equal(t, observedAt.Add(time.Hour).UnixNano(), record.ObservedAt)
+	require.Equal(t, uint64(19), record.QueueOrder)
+	require.False(t, record.Sent)
+	require.NotContains(t, rawRecord, "slink_url")
+	require.NotContains(t, rawRecord, "slink_profile")
+	require.NotContains(t, rawRecord, "non_image")
+	require.NotContains(t, rawRecord, "removed_field")
 }
 
 func Test_Open_ignores_legacy_has_photos_without_fabricating_photo_url(t *testing.T) {

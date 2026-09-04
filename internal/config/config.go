@@ -4,7 +4,6 @@ package config
 import (
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -61,9 +60,6 @@ type Config struct {
 	TelegramToken       string
 	TelegramChatID      string
 	TelegramAPIBase     string
-	SlinkURL            string
-	SlinkAPIKey         string
-	SlinkTagID          string
 	AlibURL             string
 	StatePath           string
 	cronSpec            string
@@ -94,17 +90,10 @@ func Load() (Config, error) {
 		AlibURL:         valueOrDefault("ALIB_URL", defaultAlibURL),
 		StatePath:       LoadStatePath(),
 	}
-	settings.SlinkURL = os.Getenv("SLINK_URL")
-	settings.SlinkAPIKey = os.Getenv("SLINK_API_KEY")
-	settings.SlinkTagID = os.Getenv("SLINK_TAG_ID")
-
 	return loadValidatedConfig(settings)
 }
 
 func loadValidatedConfig(settings Config) (Config, error) {
-	if err := validateSlinkSettings(settings); err != nil {
-		return Config{}, err
-	}
 	settings.cronSpec = valueOrDefault("CRON_SCHEDULE", defaultCronSchedule)
 	if _, err := cron.ParseStandard(settings.cronSpec); err != nil {
 		return Config{}, fmt.Errorf("%w: CRON_SCHEDULE must be a valid cron expression: %w", ErrInvalid, err)
@@ -143,76 +132,6 @@ func loadValidatedConfig(settings Config) (Config, error) {
 	}
 
 	return settings, nil
-}
-
-func validateSlinkSettings(settings Config) error {
-	configured := settings.SlinkURL != "" || settings.SlinkAPIKey != "" || settings.SlinkTagID != ""
-	if !configured {
-		return nil
-	}
-	if missing := missingSlinkSetting(settings); missing != "" {
-		return fmt.Errorf("%w: %s is required when Slink is configured", ErrInvalid, missing)
-	}
-
-	if !validSlinkURL(settings.SlinkURL) {
-		return fmt.Errorf("%w: SLINK_URL must be an HTTP(S) base URL without userinfo, query, or fragment", ErrInvalid)
-	}
-	if !validUUID(settings.SlinkTagID) {
-		return fmt.Errorf("%w: SLINK_TAG_ID must be a UUID", ErrInvalid)
-	}
-	if !strings.HasPrefix(settings.SlinkAPIKey, "sk_") {
-		return fmt.Errorf("%w: SLINK_API_KEY must start with sk_", ErrInvalid)
-	}
-
-	return nil
-}
-
-func missingSlinkSetting(settings Config) string {
-	if settings.SlinkURL == "" {
-		return "SLINK_URL"
-	}
-	if settings.SlinkAPIKey == "" {
-		return "SLINK_API_KEY"
-	}
-	if settings.SlinkTagID == "" {
-		return "SLINK_TAG_ID"
-	}
-
-	return ""
-}
-
-func validSlinkURL(value string) bool {
-	parsed, err := url.Parse(value)
-	if err != nil {
-		return false
-	}
-
-	return (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != "" && parsed.User == nil &&
-		parsed.RawQuery == "" && !parsed.ForceQuery && parsed.Fragment == ""
-}
-
-func validUUID(value string) bool {
-	if len(value) != 36 {
-		return false
-	}
-	for index, character := range value {
-		if index == 8 || index == 13 || index == 18 || index == 23 {
-			if character != '-' {
-				return false
-			}
-			continue
-		}
-		if !isHexDigit(character) {
-			return false
-		}
-	}
-
-	return true
-}
-
-func isHexDigit(character rune) bool {
-	return character >= '0' && character <= '9' || character >= 'a' && character <= 'f' ||
-		character >= 'A' && character <= 'F'
 }
 
 func parsePositiveDuration(name string, defaultValue time.Duration) (time.Duration, error) {
