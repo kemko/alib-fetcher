@@ -1,10 +1,10 @@
 # alib-fetcher
 
-Always-on Go service that fetches the latest listings from Alib category and
-series pages, then delivers unseen books to a Telegram chat as Rich Messages on
-a configurable cron schedule. Delivered listings are tracked by their unique
-`Купить` link in an embedded bbolt database, which also stores the pending send
-queue.
+Always-on Go service that fetches the latest listings from Alib category,
+series, and publisher pages, then delivers unseen books to a Telegram chat as
+Rich Messages on a configurable cron schedule. Delivered listings are tracked
+by their unique `Купить` link in an embedded bbolt database, which also stores
+the pending send queue.
 
 ## Configuration
 
@@ -19,6 +19,7 @@ queue.
 | `STATE_PATH` | no | `/var/lib/alib-fetcher/state.db` | bbolt state database |
 | `ALIB_CATEGORIES` | no | empty | Comma-separated ASCII category names; each creates a `https://www.alib.ru/<category>.phtml?tnew=7` page |
 | `ALIB_SERIES` | no | empty | Comma-separated Unicode series names representable in Windows-1251; each creates a `https://alib.ru/findp.php4?seria=<encoded>&lday=7` page |
+| `ALIB_PUBLISHERS` | no | empty | Comma-separated Unicode publisher names representable in Windows-1251; each creates a `https://alib.ru/findp.php4?izdat=<encoded>&lday=7` page |
 | `ALIB_REQUEST_INTERVAL` | no | `1s` | Non-negative Go duration between sequential Alib page requests; `0s` disables the delay |
 | `TELEGRAM_API_BASE` | no | `https://api.telegram.org` | Bot API base URL; custom/local servers require Bot API 10.1+ |
 | `HTTP_TIMEOUT` | no | `30s` | Positive Go duration applied to each external request |
@@ -28,24 +29,25 @@ Configuration is validated before process startup. Invalid chat IDs, including
 plain text without `@`, an empty `@` username, whitespace, and numeric overflow,
 fail fast with an error naming `TELEGRAM_CHAT_ID`.
 `ALIB_URL` is no longer supported. Before upgrading, replace it with
-`ALIB_CATEGORIES`, `ALIB_SERIES`, or both; there is no compatibility fallback or
-default category.
-`ALIB_CATEGORIES` and `ALIB_SERIES` are optional independently, but at least one
-must be non-empty. Each variable is parsed as one CSV record: surrounding
-whitespace is trimmed, empty elements and malformed quotes are rejected, and
-values retain their source order. Categories must be non-empty ASCII letters
-only. Repeated series names are ignored after their first occurrence. Series
-are entered as Unicode, but each value must be representable in Windows-1251.
-Each value is first encoded to Windows-1251, then those bytes are URL-escaped as
-the `seria` query value, so spaces, `&`, `/`, and commas cannot inject extra
-parameters. An unrepresentable character is a configuration error naming
-`ALIB_SERIES`.
+`ALIB_CATEGORIES`, `ALIB_SERIES`, `ALIB_PUBLISHERS`, or a combination; there is
+no compatibility fallback or default category.
+All three variables are optional independently, but at least one must be
+non-empty. Each variable is parsed as one CSV record: surrounding whitespace is
+trimmed, empty elements and malformed quotes are rejected, and values retain
+their source order. Categories must be non-empty ASCII letters only. Repeated
+series and publisher names are ignored after their first occurrence. Series and
+publishers are entered as Unicode, but each value must be representable in
+Windows-1251. Each value is first encoded to Windows-1251, then those bytes are
+URL-escaped as the `seria` or `izdat` query value, so spaces, `&`, `/`, and
+commas cannot inject extra parameters. An unrepresentable character is a
+configuration error naming the source variable.
 Requests always use the fixed seven-day window (`tnew=7` or `lday=7`), in
-category order followed by series order. For example:
+category, series, then publisher order. For example:
 
 ```bash
 ALIB_CATEGORIES='tramka,detektivy' \
 ALIB_SERIES='"История, тома",Фантастика & фэнтези' \
+ALIB_PUBLISHERS='Эксмо,"Международный центр фантастики"' \
 ALIB_REQUEST_INTERVAL=2s
 ```
 

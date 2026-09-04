@@ -294,10 +294,11 @@ func Test_Load_ignores_removed_Slink_configuration(t *testing.T) {
 	require.Equal(t, "token", loaded.TelegramToken)
 }
 
-func Test_Load_builds_AlibURLs_from_categories_and_series(t *testing.T) {
+func Test_Load_builds_AlibURLs_from_categories_series_and_publishers(t *testing.T) {
 	testCases := map[string]struct {
 		categories string
 		series     string
+		publishers string
 		want       []string
 	}{
 		"categories only": {
@@ -321,14 +322,23 @@ func Test_Load_builds_AlibURLs_from_categories_and_series(t *testing.T) {
 				"https://alib.ru/findp.php4?seria=%E4%F0%F3%E3%E0%FF&lday=7",
 			},
 		},
-		"both preserve order": {
+		"publishers only": {
+			publishers: `"Международный центр фантастики",Эксмо`,
+			want: []string{
+				"https://alib.ru/findp.php4?izdat=%CC%E5%E6%E4%F3%ED%E0%F0%EE%E4%ED%FB%E9+%F6%E5%ED%F2%F0+%F4%E0%ED%F2%E0%F1%F2%E8%EA%E8&lday=7",
+				"https://alib.ru/findp.php4?izdat=%DD%EA%F1%EC%EE&lday=7",
+			},
+		},
+		"all preserve order": {
 			categories: " tramka, deti ",
 			series:     `серия,"другая, том"`,
+			publishers: "издатель,издатель",
 			want: []string{
 				"https://www.alib.ru/tramka.phtml?tnew=7",
 				"https://www.alib.ru/deti.phtml?tnew=7",
 				"https://alib.ru/findp.php4?seria=%F1%E5%F0%E8%FF&lday=7",
 				"https://alib.ru/findp.php4?seria=%E4%F0%F3%E3%E0%FF%2C+%F2%EE%EC&lday=7",
+				"https://alib.ru/findp.php4?izdat=%E8%E7%E4%E0%F2%E5%EB%FC&lday=7",
 			},
 		},
 		"Alib example": {
@@ -353,6 +363,7 @@ func Test_Load_builds_AlibURLs_from_categories_and_series(t *testing.T) {
 				"TELEGRAM_CHAT_ID":   "-100123",
 				"ALIB_CATEGORIES":    testCase.categories,
 				"ALIB_SERIES":        testCase.series,
+				"ALIB_PUBLISHERS":    testCase.publishers,
 			})
 
 			loaded, err := config.Load()
@@ -363,36 +374,43 @@ func Test_Load_builds_AlibURLs_from_categories_and_series(t *testing.T) {
 	}
 }
 
-func Test_Load_rejects_series_not_representable_in_Windows1251(t *testing.T) {
-	// Given
-	setEnvironment(t, map[string]string{
-		"TELEGRAM_BOT_TOKEN": "token",
-		"TELEGRAM_CHAT_ID":   "-100123",
-		"ALIB_CATEGORIES":    "tramka",
-		"ALIB_SERIES":        "серия 😀",
-	})
+func Test_Load_rejects_search_value_not_representable_in_Windows1251(t *testing.T) {
+	for name, variable := range map[string]string{
+		"series":    "ALIB_SERIES",
+		"publisher": "ALIB_PUBLISHERS",
+	} {
+		t.Run(name, func(t *testing.T) {
+			// Given
+			setEnvironment(t, map[string]string{
+				"TELEGRAM_BOT_TOKEN": "token",
+				"TELEGRAM_CHAT_ID":   "-100123",
+				variable:             "значение 😀",
+			})
 
-	// When
-	loaded, err := config.Load()
+			// When
+			loaded, err := config.Load()
 
-	// Then
-	require.ErrorIs(t, err, config.ErrInvalid)
-	require.ErrorContains(t, err, "ALIB_SERIES")
-	require.ErrorContains(t, err, "серия 😀")
-	require.Empty(t, loaded)
+			// Then
+			require.ErrorIs(t, err, config.ErrInvalid)
+			require.ErrorContains(t, err, variable)
+			require.ErrorContains(t, err, "значение 😀")
+			require.Empty(t, loaded)
+		})
+	}
 }
 
 func Test_Load_rejects_invalid_Alib_tracking_configuration(t *testing.T) {
 	testCases := map[string]struct {
 		categories string
 		series     string
+		publishers string
 		variable   string
 	}{
-		"both absent": {
-			variable: "ALIB_CATEGORIES and ALIB_SERIES",
+		"all absent": {
+			variable: "ALIB_CATEGORIES, ALIB_SERIES, and ALIB_PUBLISHERS",
 		},
 		"old URL only": {
-			variable: "ALIB_CATEGORIES and ALIB_SERIES",
+			variable: "ALIB_CATEGORIES, ALIB_SERIES, and ALIB_PUBLISHERS",
 		},
 		"empty category item": {
 			categories: "tramka,,deti",
@@ -405,6 +423,10 @@ func Test_Load_rejects_invalid_Alib_tracking_configuration(t *testing.T) {
 		"malformed CSV": {
 			series:   `"unterminated`,
 			variable: "ALIB_SERIES",
+		},
+		"empty publisher item": {
+			publishers: "publisher, ,other",
+			variable:   "ALIB_PUBLISHERS",
 		},
 		"multiple CSV records": {
 			categories: "tramka\ndeti",
@@ -427,6 +449,7 @@ func Test_Load_rejects_invalid_Alib_tracking_configuration(t *testing.T) {
 				"TELEGRAM_CHAT_ID":   "-100123",
 				"ALIB_CATEGORIES":    testCase.categories,
 				"ALIB_SERIES":        testCase.series,
+				"ALIB_PUBLISHERS":    testCase.publishers,
 				"ALIB_URL":           "https://example.com/old",
 			})
 			if testCase.categories == "" {
@@ -435,9 +458,13 @@ func Test_Load_rejects_invalid_Alib_tracking_configuration(t *testing.T) {
 			if testCase.series == "" {
 				unsetEnvironment(t, "ALIB_SERIES")
 			}
+			if testCase.publishers == "" {
+				unsetEnvironment(t, "ALIB_PUBLISHERS")
+			}
 			if name == "old URL only" {
 				unsetEnvironment(t, "ALIB_CATEGORIES")
 				unsetEnvironment(t, "ALIB_SERIES")
+				unsetEnvironment(t, "ALIB_PUBLISHERS")
 			}
 
 			loaded, err := config.Load()
@@ -631,6 +658,7 @@ func setEnvironment(t *testing.T, values map[string]string) {
 	t.Helper()
 	t.Setenv("ALIB_CATEGORIES", "tramka")
 	t.Setenv("ALIB_SERIES", "")
+	t.Setenv("ALIB_PUBLISHERS", "")
 	for key, value := range values {
 		t.Setenv(key, value)
 	}

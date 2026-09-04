@@ -16,9 +16,9 @@ installs the pinned golangci-lint v2 release.
 One digest cycle is deliberately ordered as follows:
 
 1. Remove sent records strictly older than 14 days.
-2. Build pages from `ALIB_CATEGORIES` then `ALIB_SERIES`, and download all
-   generated Alib endpoints sequentially, retaining successful response bodies
-   and their source order.
+2. Build pages from `ALIB_CATEGORIES`, `ALIB_SERIES`, then `ALIB_PUBLISHERS`,
+   and download all generated Alib endpoints sequentially, retaining successful
+   response bodies and their source order.
 3. Parse successful responses only after all downloads finish, then combine and
    deduplicate listings by their resolved `BuyURL`, retaining the first occurrence.
 4. Read existing `BuyURL` records without writing new fetched listings.
@@ -132,8 +132,8 @@ Preserve these semantics:
   lifetime, startup and scheduled digest runs, robfig/cron lifecycle, refresh
   callback policy and listener lifecycle, shared digest-runner concurrency, and
   the state-only forget-latest maintenance operation.
-- `internal/config`: environment loading, generated category/series endpoints,
-  defaults, and validation.
+- `internal/config`: environment loading, generated category/series/publisher
+  endpoints, defaults, and validation.
 - `internal/alib`: HTTP client plus charset-aware, DOM-first HTML parser. The
   real page may be Windows-1251. Listings are recognized inside `<p>` elements
   by a title in `<b>` and a `Купить` link; seller links contain `bs.php4`.
@@ -190,6 +190,7 @@ Optional defaults:
 | `STATE_PATH` | `/var/lib/alib-fetcher/state.db` | bbolt database; parent directories are created with mode `0750`, DB with `0600` |
 | `ALIB_CATEGORIES` | empty | Optional one-record CSV list of non-empty ASCII-letter category names; each becomes `https://www.alib.ru/<category>.phtml?tnew=7` |
 | `ALIB_SERIES` | empty | Optional one-record CSV list of Unicode series names representable in Windows-1251; each becomes `https://alib.ru/findp.php4?seria=<encoded>&lday=7` |
+| `ALIB_PUBLISHERS` | empty | Optional one-record CSV list of Unicode publisher names representable in Windows-1251; each becomes `https://alib.ru/findp.php4?izdat=<encoded>&lday=7` |
 | `ALIB_REQUEST_INTERVAL` | `1s` | Non-negative Go duration between sequential Alib requests; `0s` disables the delay |
 | `TELEGRAM_API_BASE` | `https://api.telegram.org` | HTTP(S) API base; override it in tests |
 | `HTTP_TIMEOUT` | `30s` | positive Go duration applied per external request |
@@ -197,16 +198,17 @@ Optional defaults:
 
 Invalid configuration, including a malformed or overflowing
 `TELEGRAM_CHAT_ID`, prevents process startup. Errors name the invalid variable.
-`ALIB_CATEGORIES` and `ALIB_SERIES` are optional separately, but at least one
-must contain a non-empty CSV list. Lists reject empty elements and malformed
-quotes; surrounding whitespace is trimmed. Categories accept only ASCII
-letters. Series are entered as Unicode, including commas when CSV-quoted, but
-each value must be representable in Windows-1251. Their Windows-1251 bytes are
-percent-encoded as one `seria` query value; an unrepresentable character is an
-`ALIB_SERIES` configuration error. Generated endpoints always use the fixed
-seven-day window (`tnew=7` for categories and `lday=7` for series), retaining
-category-then-series order and ignoring repeated series names after their first
-occurrence.
+`ALIB_CATEGORIES`, `ALIB_SERIES`, and `ALIB_PUBLISHERS` are optional separately,
+but at least one must contain a non-empty CSV list. Lists reject empty elements
+and malformed quotes; surrounding whitespace is trimmed. Categories accept only
+ASCII letters. Series and publishers are entered as Unicode, including commas
+when CSV-quoted, but each value must be representable in Windows-1251. Their
+Windows-1251 bytes are percent-encoded as one `seria` or `izdat` query value; an
+unrepresentable character is a configuration error naming the source variable.
+Generated endpoints always use the fixed seven-day window (`tnew=7` for
+categories and `lday=7` for series and publishers), retaining
+category-then-series-then-publisher order and ignoring repeated series or
+publisher names after their first occurrence.
 Never log or expose the bot token; note that the SDK internally puts it in the
 Bot API URL.
 

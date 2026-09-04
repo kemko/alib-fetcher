@@ -15,6 +15,7 @@ services:
       STATE_PATH: /var/lib/alib-fetcher/state.db
       ALIB_CATEGORIES: "${ALIB_CATEGORIES:-}"
       ALIB_SERIES: "${ALIB_SERIES:-}"
+      ALIB_PUBLISHERS: "${ALIB_PUBLISHERS:-}"
       ALIB_REQUEST_INTERVAL: ${ALIB_REQUEST_INTERVAL:-1s}
       TELEGRAM_API_BASE: ${TELEGRAM_API_BASE:-https://api.telegram.org}
       HTTP_TIMEOUT: ${HTTP_TIMEOUT:-30s}
