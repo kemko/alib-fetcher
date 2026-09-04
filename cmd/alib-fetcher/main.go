@@ -17,7 +17,6 @@ import (
 	"github.com/kemko/alib-fetcher/internal/app"
 	"github.com/kemko/alib-fetcher/internal/config"
 	"github.com/kemko/alib-fetcher/internal/process"
-	"github.com/kemko/alib-fetcher/internal/slink"
 	"github.com/kemko/alib-fetcher/internal/telegram"
 )
 
@@ -32,13 +31,6 @@ func main() {
 }
 
 func run(logger *slog.Logger) error {
-	return runWithSlinkFactory(logger, slink.NewClient)
-}
-
-func runWithSlinkFactory(
-	logger *slog.Logger,
-	newSlinkClient func(string, string, string, time.Duration, *slog.Logger) (*slink.Client, error),
-) error {
 	once := flag.Bool("once", false, "fetch and send one digest, then exit")
 	var forgetLatest forgetLatestOption
 	flag.Var(&forgetLatest, "forget-latest", "delete the latest state records, then exit")
@@ -83,27 +75,13 @@ func runWithSlinkFactory(
 	if settings.FreshBooks != nil {
 		freshBooks = settings.FreshBooks
 	}
-	var photoProcessor app.PhotoProcessor
-	if settings.SlinkURL != "" {
-		photoProcessor, err = newSlinkClient(
-			settings.SlinkURL,
-			settings.SlinkAPIKey,
-			settings.SlinkTagID,
-			settings.HTTPTimeout,
-			logger,
-		)
-		if err != nil {
-			return err
-		}
-	}
 	dependencies := app.Dependencies{
-		Fetcher:        fetcher,
-		Sender:         telegramAdapter,
-		FreshBooks:     freshBooks,
-		Location:       settings.Location,
-		MessageLimit:   settings.MessageLimit,
-		PhotoProcessor: photoProcessor,
-		Now:            time.Now,
+		Fetcher:      fetcher,
+		Sender:       telegramAdapter,
+		FreshBooks:   freshBooks,
+		Location:     settings.Location,
+		MessageLimit: settings.MessageLimit,
+		Now:          time.Now,
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

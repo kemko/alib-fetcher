@@ -5,13 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"sort"
 	"time"
 
 	"github.com/kemko/alib-fetcher/internal/alib"
 	"github.com/kemko/alib-fetcher/internal/digest"
-	"github.com/kemko/alib-fetcher/internal/slink"
 )
 
 // Fetcher obtains the latest source listings.
@@ -25,14 +23,7 @@ type State interface {
 	Existing(context.Context, []alib.Book) ([]bool, error)
 	RecordDiscovered(context.Context, []alib.Book, time.Time) (int, error)
 	Pending(context.Context) ([]alib.Book, error)
-	SavePrepared(context.Context, alib.Book) error
 	MarkSent(context.Context, []alib.Book, time.Time) error
-}
-
-// PhotoProcessor prepares a book's source photos for digest rendering.
-type PhotoProcessor interface {
-	Process(context.Context, alib.Book) (*slink.PreparedBook, error)
-	Profile() string
 }
 
 // Sender delivers one rendered message.
@@ -51,7 +42,6 @@ type Dependencies struct {
 	State          State
 	Sender         Sender
 	FreshBooks     FreshBooksPolicy
-	PhotoProcessor PhotoProcessor
 	Location       *time.Location
 	Now            func() time.Time
 	Wait           func(context.Context, time.Duration) error
@@ -103,25 +93,13 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 	}
 	unidentifiedFailures := fetchResult.UnidentifiedFailures
 	result.Failed = unidentifiedFailures + len(failedURLs)
-	if s.dependencies.PhotoProcessor != nil {
-		renderOptions.SlinkProfile = s.dependencies.PhotoProcessor.Profile()
-	}
 
 	existing, err := s.existing(ctx, books)
 	if err != nil {
 		return result, err
 	}
-	preparedBooks, preparedBooksByURL, newBooks, err := s.prepareFetched(
-		ctx,
-		books,
-		existing,
-		failedURLs,
-		renderOptions,
-	)
+	preparedBooks, preparedBooksByURL, newBooks := s.prepareFetched(books, existing, failedURLs, renderOptions)
 	result.Failed = unidentifiedFailures + len(failedURLs)
-	if err != nil {
-		return result, err
-	}
 	if len(preparedBooks) > 0 {
 		_, err = s.dependencies.State.RecordDiscovered(ctx, preparedBooks, cycleTime)
 		if err != nil {
@@ -135,11 +113,8 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 		return result, fmt.Errorf("load pending listings: %w", err)
 	}
 	pending = sortPending(pending)
-	pending, err = s.preparePending(ctx, pending, preparedBooksByURL, failedURLs, &renderOptions)
+	pending = s.preparePending(pending, preparedBooksByURL, failedURLs, renderOptions)
 	result.Failed = unidentifiedFailures + len(failedURLs)
-	if err != nil {
-		return result, err
-	}
 
 	sent, renderedFailures, err := s.renderAndSend(ctx, pending, renderOptions, cycleTime, result.Failed)
 	result.Sent = sent
@@ -203,12 +178,11 @@ func (s *Service) renderAndSend(
 }
 
 func (s *Service) prepareFetched(
-	ctx context.Context,
 	books []alib.Book,
 	existing []bool,
 	failedURLs map[string]struct{},
 	options digest.Options,
-) ([]alib.Book, map[string]alib.Book, int, error) {
+) ([]alib.Book, map[string]alib.Book, int) {
 	prepared := make([]alib.Book, 0, len(books))
 	preparedBooks := make(map[string]alib.Book, len(books))
 	newBooks := 0
@@ -218,128 +192,54 @@ func (s *Service) prepareFetched(
 			continue
 		}
 
-		preparedBook, cleanup, err := s.prepareBook(ctx, book)
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, nil, 0, fmt.Errorf("prepare book %q: %w", book.BuyURL, err)
-			}
+		if !renderable(book, options) {
 			failedURLs[book.BuyURL] = struct{}{}
 			continue
 		}
-		if !renderable(preparedBook, options) {
-			if cleanupErr := cleanup(); cleanupErr != nil && ctx.Err() != nil {
-				return nil, nil, 0, fmt.Errorf("cleanup prepared book %q: %w", book.BuyURL, cleanupErr)
-			}
-			failedURLs[book.BuyURL] = struct{}{}
-			continue
-		}
-		if cleanupErr := cleanup(); cleanupErr != nil {
-			if ctx.Err() != nil {
-				return nil, nil, 0, fmt.Errorf("cleanup prepared book %q: %w", book.BuyURL, cleanupErr)
-			}
-			failedURLs[book.BuyURL] = struct{}{}
-			continue
-		}
-		prepared = append(prepared, preparedBook)
-		preparedBooks[book.BuyURL] = preparedBook
+		prepared = append(prepared, book)
+		preparedBooks[book.BuyURL] = book
 		newBooks++
 	}
 
-	return prepared, preparedBooks, newBooks, nil
+	return prepared, preparedBooks, newBooks
 }
 
 func (s *Service) preparePending(
-	ctx context.Context,
 	pending []alib.Book,
 	preparedBooks map[string]alib.Book,
 	failedURLs map[string]struct{},
-	options *digest.Options,
-) ([]alib.Book, error) {
+	options digest.Options,
+) []alib.Book {
 	result := make([]alib.Book, 0, len(pending))
 	for _, book := range pending {
-		preparedBook, ready, err := s.preparePendingBook(ctx, book, preparedBooks, failedURLs, *options)
-		if err != nil {
-			return nil, err
-		}
+		preparedBook, ready := s.preparePendingBook(book, preparedBooks, failedURLs, options)
 		if ready {
 			result = append(result, preparedBook)
 		}
 	}
 
-	return result, nil
+	return result
 }
 
 func (s *Service) preparePendingBook(
-	ctx context.Context,
 	book alib.Book,
 	preparedBooks map[string]alib.Book,
 	failedURLs map[string]struct{},
 	options digest.Options,
-) (alib.Book, bool, error) {
+) (alib.Book, bool) {
 	if preparedBook, alreadyProcessed := preparedBooks[book.BuyURL]; alreadyProcessed {
-		return preparedBook, true, nil
+		return preparedBook, true
 	}
 	if _, alreadyFailed := failedURLs[book.BuyURL]; alreadyFailed {
-		return alib.Book{}, false, nil
+		return alib.Book{}, false
 	}
 
-	preparedBook, cleanup, err := s.prepareBook(ctx, book)
-	if err != nil {
-		if ctx.Err() != nil {
-			return alib.Book{}, false, fmt.Errorf("prepare book %q: %w", book.BuyURL, err)
-		}
+	if !renderable(book, options) {
 		failedURLs[book.BuyURL] = struct{}{}
-		return alib.Book{}, false, nil
-	}
-	if !reflect.DeepEqual(book, preparedBook) {
-		if saveErr := s.dependencies.State.SavePrepared(ctx, preparedBook); saveErr != nil {
-			return alib.Book{}, false, fmt.Errorf(
-				"save prepared book %q: %w", book.BuyURL, errors.Join(saveErr, cleanup()))
-		}
-	}
-	if !renderable(preparedBook, options) {
-		if cleanupErr := cleanup(); cleanupErr != nil && ctx.Err() != nil {
-			return alib.Book{}, false, fmt.Errorf("cleanup prepared book %q: %w", book.BuyURL, cleanupErr)
-		}
-		failedURLs[book.BuyURL] = struct{}{}
-		return alib.Book{}, false, nil
-	}
-	if cleanupErr := cleanup(); cleanupErr != nil {
-		if ctx.Err() != nil {
-			return alib.Book{}, false, fmt.Errorf("cleanup prepared book %q: %w", book.BuyURL, cleanupErr)
-		}
-		failedURLs[book.BuyURL] = struct{}{}
-		return alib.Book{}, false, nil
+		return alib.Book{}, false
 	}
 
-	return preparedBook, true, nil
-}
-
-func (s *Service) prepareBook(ctx context.Context, book alib.Book) (alib.Book, func() error, error) {
-	if len(book.Photos) == 0 || s.dependencies.PhotoProcessor == nil {
-		return book, func() error { return nil }, nil
-	}
-
-	prepared, err := s.dependencies.PhotoProcessor.Process(ctx, book)
-	if prepared != nil {
-		if err != nil {
-			if cleanupErr := prepared.Cleanup(); cleanupErr != nil {
-				err = errors.Join(err, cleanupErr)
-			}
-			return book, func() error { return nil }, err
-		}
-	}
-	if err != nil {
-		return book, func() error { return nil }, err
-	}
-	if prepared == nil {
-		return book, func() error { return nil }, errors.New("photo processor returned no book")
-	}
-	if prepared.Book.BuyURL == "" {
-		prepared.Book.BuyURL = book.BuyURL
-	}
-
-	return prepared.Book, prepared.Cleanup, nil
+	return book, true
 }
 
 func renderable(book alib.Book, options digest.Options) bool {
