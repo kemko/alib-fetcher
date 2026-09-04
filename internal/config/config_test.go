@@ -374,6 +374,10 @@ func Test_Load_rejects_invalid_Alib_tracking_configuration(t *testing.T) {
 			series:   `"unterminated`,
 			variable: "ALIB_SERIES",
 		},
+		"multiple CSV records": {
+			categories: "tramka\ndeti",
+			variable:   "ALIB_CATEGORIES",
+		},
 		"invalid category": {
 			categories: "tram-ka",
 			variable:   "ALIB_CATEGORIES",

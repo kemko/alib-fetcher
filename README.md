@@ -27,6 +27,9 @@ queue.
 Configuration is validated before process startup. Invalid chat IDs, including
 plain text without `@`, an empty `@` username, whitespace, and numeric overflow,
 fail fast with an error naming `TELEGRAM_CHAT_ID`.
+`ALIB_URL` is no longer supported. Before upgrading, replace it with
+`ALIB_CATEGORIES`, `ALIB_SERIES`, or both; there is no compatibility fallback or
+default category.
 `ALIB_CATEGORIES` and `ALIB_SERIES` are optional independently, but at least one
 must be non-empty. Each variable is parsed as one CSV record: surrounding
 whitespace is trimmed, empty elements and malformed quotes are rejected, and

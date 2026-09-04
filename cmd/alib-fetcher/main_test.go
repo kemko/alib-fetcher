@@ -92,6 +92,7 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 				assert.NoError(t, err)
 			}))
 			t.Cleanup(alibServer.Close)
+			routeAlibRequestsTo(t, alibServer.URL)
 
 			telegramRequests := make(chan telegramRequest, 4)
 			telegramServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -112,7 +113,7 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 			logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 			// When
-			err := runWithAlibURLs(t, logger, alibServer.URL+"/tramka.phtml?tnew=7")
+			err := run(logger)
 
 			// Then
 			require.NoError(t, err)
@@ -144,7 +145,7 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 					`Первая строка содержания.<br/>Вторая строка содержания.<br/><br/>`+
 					`Продавец: <a href="%s/bs.php4?bs=BotSad">BotSad</a>, Москва.`,
 				currentYear,
-				alibServer.URL,
+				"https://www.alib.ru",
 			))
 			require.Contains(t, richHTML, fmt.Sprintf(
 				`%s<b>Свежая книга.</b> М., %d г.<br/><br/>Цена: 500 руб.`,
@@ -160,9 +161,9 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 					`<a href="%s/foto.php4?id=1">Обложка</a> - `+
 					`<a href="%s/foto.php4?id=2">фото</a> - `+
 					`<a href="%s/foto.php4?id=1">Повтор</a>`,
-				alibServer.URL,
-				alibServer.URL,
-				alibServer.URL,
+				"https://www.alib.ru",
+				"https://www.alib.ru",
+				"https://www.alib.ru",
 			))
 			require.NotContains(t, richHTML, "<tg-slideshow>")
 			require.NotContains(t, richHTML, "<img ")
@@ -171,7 +172,7 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 			require.NotRegexp(t, `[\r\n]`, richHTML)
 			require.True(
 				t,
-				strings.HasSuffix(richHTML, `<a href="`+alibServer.URL+`/fresh.html">Купить</a>`),
+				strings.HasSuffix(richHTML, `<a href="https://www.alib.ru/fresh.html">Купить</a>`),
 			)
 			requireRefreshButton(t, payload)
 			require.Contains(t, logs.String(), "digest.completed")
@@ -779,6 +780,35 @@ func localAlibURLs(t *testing.T, base string, endpoints []string) []string {
 	}
 
 	return localEndpoints
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (function roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return function(request)
+}
+
+func routeAlibRequestsTo(t *testing.T, base string) {
+	t.Helper()
+	target, err := url.Parse(base)
+	require.NoError(t, err)
+	originalTransport := http.DefaultTransport
+	t.Cleanup(func() {
+		http.DefaultTransport = originalTransport
+	})
+	http.DefaultTransport = roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Host != "www.alib.ru" && request.URL.Host != "alib.ru" {
+			return originalTransport.RoundTrip(request)
+		}
+
+		routedRequest := request.Clone(request.Context())
+		routedURL := *request.URL
+		routedURL.Scheme = target.Scheme
+		routedURL.Host = target.Host
+		routedRequest.URL = &routedURL
+
+		return originalTransport.RoundTrip(routedRequest)
+	})
 }
 
 func useCommandLine(t *testing.T, arguments ...string) {

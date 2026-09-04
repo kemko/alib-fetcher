@@ -63,9 +63,8 @@ func NewClient(rawURLs []string, timeout, requestInterval time.Duration, logger 
 		return nil, errors.New("create alib client: at least one URL is required")
 	}
 
-	inputURLs := append([]string(nil), rawURLs...)
-	endpoints := make([]*url.URL, 0, len(inputURLs))
-	for index, rawURL := range inputURLs {
+	endpoints := make([]*url.URL, 0, len(rawURLs))
+	for index, rawURL := range rawURLs {
 		rawURL = strings.TrimSpace(rawURL)
 		if rawURL == "" {
 			return nil, fmt.Errorf("parse alib URL item %d: URL is empty", index)
