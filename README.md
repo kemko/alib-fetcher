@@ -89,10 +89,12 @@ The parser recognizes the last four-digit year in the bibliography followed by
 freshness markers.
 
 Each digest first checks fetched listing identities against the state database,
-then records renderable new listings as pending records. A book-specific parse
-or rendering failure excludes that book from the current digest; a new failed
-book is not written to state and is retried on the next cycle. Such failures
-are counted once per book.
+then runs the same per-book `RenderBook` validation used during chunk assembly
+before recording renderable new listings as pending records. A book-specific
+parse or rendering failure, including `digest.ErrMessageTooLong`, excludes only
+that book from the current digest; a new failed book is not written to state and
+is retried on the next cycle. Other renderable new and pending books continue to
+the same digest. Such failures are counted once per book.
 
 Recorded listings contain the full semantic Alib payload: title, bibliography,
 publication year, content, seller name and URL, location, price, condition and
@@ -342,7 +344,8 @@ make coverage
 ```
 
 It writes ignored `coverage.out` and fails when total statement coverage is
-below 80%.
+below 80%. Coverage includes calls across repository packages (`-coverpkg=./...`),
+including shared test helpers.
 
 ## Security-only dependency updates
 

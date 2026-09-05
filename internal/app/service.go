@@ -206,9 +206,9 @@ func recordableFetched(
 }
 
 func renderable(book alib.Book, options digest.Options) bool {
-	_, skipped, err := digest.RenderSendable([]alib.Book{book}, options, 0)
+	_, err := digest.RenderBook(book, options)
 
-	return err == nil && len(skipped) == 0
+	return err == nil
 }
 
 func sortPending(pending []alib.Book) []alib.Book {

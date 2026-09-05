@@ -97,22 +97,58 @@ func NewClient(rawURLs []string, timeout, requestInterval time.Duration, logger 
 
 // FetchWithResult downloads all configured pages and returns partial listing failures.
 func (c *Client) FetchWithResult(ctx context.Context) (FetchResult, error) {
-	downloaded, pageErrors, err := c.downloadPages(ctx)
-	if err != nil {
-		return FetchResult{}, err
+	downloaded, pageErrors, downloadErr := c.downloadPages(ctx)
+	if downloadErr != nil {
+		return FetchResult{}, downloadErr
 	}
-	books, failed, unidentifiedFailures, parsedPages, parseErrors, err := c.parsePages(ctx, downloaded)
-	if err != nil {
-		return FetchResult{}, err
+	state := parseState{
+		books:       make([]Book, 0),
+		seen:        make(map[string]struct{}),
+		failed:      make(map[string]struct{}),
+		failedOrder: make([]string, 0),
 	}
-	pageErrors = append(pageErrors, parseErrors...)
+	parsedPages := 0
+	unidentifiedFailures := 0
+	for _, page := range downloaded {
+		if err := ctx.Err(); err != nil {
+			return FetchResult{}, err
+		}
+		pageResult, parseErr := ParseWithResult(bytes.NewReader(page.body), page.endpoint, page.contentType)
+		if contextErr := ctx.Err(); contextErr != nil {
+			return FetchResult{}, contextErr
+		}
+		if parseErr != nil {
+			if errors.Is(parseErr, ErrNoBooks) {
+				unidentifiedFailures += pageResult.UnidentifiedFailures
+				for _, buyURL := range pageResult.FailedBuyURLs {
+					state.addFailure(buyURL)
+				}
+			}
+			pageURL := page.endpoint.String()
+			pageErrors = append(pageErrors, fmt.Errorf("parse alib URL %q: %w", pageURL, parseErr))
+			c.logger.ErrorContext(ctx, "alib.page_parse_failed",
+				slog.Int(logKeyIndex, page.index), slog.String(logKeyURL, pageURL), slog.Any(logKeyError, parseErr))
+			continue
+		}
+		parsedPages++
+		c.logger.InfoContext(ctx, "alib.page_parsed",
+			slog.Int(logKeyIndex, page.index), slog.String(logKeyURL, page.endpoint.String()),
+			slog.Int(logKeyBooks, len(pageResult.Books)))
+		unidentifiedFailures += pageResult.UnidentifiedFailures
+		for _, buyURL := range pageResult.FailedBuyURLs {
+			state.addFailure(buyURL)
+		}
+		for _, book := range pageResult.Books {
+			state.addBook(book)
+		}
+	}
 	if parsedPages == 0 {
 		return FetchResult{}, errors.Join(pageErrors...)
 	}
 
 	return FetchResult{
-		Books:                books,
-		FailedBuyURLs:        failed,
+		Books:                state.books,
+		FailedBuyURLs:        state.failedBuyURLs(),
 		UnidentifiedFailures: unidentifiedFailures,
 	}, nil
 }
@@ -143,82 +179,6 @@ func (c *Client) downloadPages(ctx context.Context) ([]downloadedPage, []error, 
 	}
 
 	return downloaded, pageErrors, nil
-}
-
-func (c *Client) parsePages(
-	ctx context.Context,
-	pages []downloadedPage,
-) ([]Book, []string, int, int, []error, error) {
-	books := make([]Book, 0)
-	failed := make(map[string]struct{})
-	pageErrors := make([]error, 0, len(pages))
-	parsedPages := 0
-	unidentifiedFailures := 0
-	seen := make(map[string]struct{})
-	failedOrder := make([]string, 0)
-	for _, page := range pages {
-		if err := ctx.Err(); err != nil {
-			return nil, nil, 0, 0, nil, err
-		}
-		pageResult, err := ParseWithResult(bytes.NewReader(page.body), page.endpoint, page.contentType)
-		if contextErr := ctx.Err(); contextErr != nil {
-			return nil, nil, 0, 0, nil, contextErr
-		}
-		if err != nil {
-			if errors.Is(err, ErrNoBooks) {
-				unidentifiedFailures += pageResult.UnidentifiedFailures
-				mergeFailedListings(failed, seen, &failedOrder, pageResult.FailedBuyURLs)
-			}
-			pageURL := page.endpoint.String()
-			pageErrors = append(pageErrors, fmt.Errorf("parse alib URL %q: %w", pageURL, err))
-			c.logger.ErrorContext(ctx, "alib.page_parse_failed",
-				slog.Int(logKeyIndex, page.index), slog.String(logKeyURL, pageURL), slog.Any(logKeyError, err))
-			continue
-		}
-		parsedPages++
-		c.logger.InfoContext(ctx, "alib.page_parsed",
-			slog.Int(logKeyIndex, page.index), slog.String(logKeyURL, page.endpoint.String()),
-			slog.Int(logKeyBooks, len(pageResult.Books)))
-		unidentifiedFailures += pageResult.UnidentifiedFailures
-		mergePageResult(&books, failed, seen, &failedOrder, pageResult)
-	}
-
-	return books, remainingFailures(failedOrder, failed), unidentifiedFailures, parsedPages, pageErrors, nil
-}
-
-func mergePageResult(
-	books *[]Book,
-	failed map[string]struct{},
-	seen map[string]struct{},
-	failedOrder *[]string,
-	page ParseResult,
-) {
-	mergeFailedListings(failed, seen, failedOrder, page.FailedBuyURLs)
-	for _, book := range page.Books {
-		delete(failed, book.BuyURL)
-		if _, exists := seen[book.BuyURL]; exists {
-			continue
-		}
-		seen[book.BuyURL] = struct{}{}
-		*books = append(*books, book)
-	}
-}
-
-func mergeFailedListings(
-	failed map[string]struct{},
-	seen map[string]struct{},
-	failedOrder *[]string,
-	failedBuyURLs []string,
-) {
-	for _, buyURL := range failedBuyURLs {
-		if _, succeeded := seen[buyURL]; succeeded {
-			continue
-		}
-		if _, alreadyFailed := failed[buyURL]; !alreadyFailed {
-			*failedOrder = append(*failedOrder, buyURL)
-			failed[buyURL] = struct{}{}
-		}
-	}
 }
 
 func (c *Client) downloadPage(ctx context.Context, index int, endpoint *url.URL) (downloadedPage, error) {

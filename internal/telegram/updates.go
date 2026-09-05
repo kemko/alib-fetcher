@@ -43,8 +43,7 @@ func (s *Sender) ListenCallbacks(ctx context.Context, handle CallbackHandler, re
 		defer close(errorsDone)
 		s.reportCallbackErrors(ctx, reportError)
 	}()
-	pollCtx := context.WithValue(ctx, sdkPollContextKey{}, struct{}{})
-	s.bot.Start(pollCtx)
+	s.bot.Start(ctx)
 	<-errorsDone
 }
 

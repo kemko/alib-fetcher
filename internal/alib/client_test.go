@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kemko/alib-fetcher/internal/alib"
+	"github.com/kemko/alib-fetcher/internal/testutil"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -109,7 +110,7 @@ func Test_Client_returns_context_error_when_canceled_after_download(t *testing.T
 	// Given
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, err := writer.Write([]byte(listingPage("Book", "/book.html", "100 руб.")))
+		_, err := writer.Write([]byte(testutil.ListingPage("Book", "/book.html", "100 руб.")))
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
@@ -192,7 +193,7 @@ func Test_NewClient_copies_endpoint_configuration(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		requests <- request.URL.Path
 		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, err := writer.Write([]byte(listingPage("Book", "/book.html", "100 руб.")))
+		_, err := writer.Write([]byte(testutil.ListingPage("Book", "/book.html", "100 руб.")))
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
@@ -280,18 +281,18 @@ func Test_Client_fetches_urls_in_order_and_deduplicates_by_buy_url(t *testing.T)
 		switch request.URL.Path {
 		case "/one/first":
 			_, err := writer.Write([]byte(
-				listingPage("First", "book-1.html", "100 руб.") +
-					listingPage("Second", "../shared-book.html", "200 руб."),
+				testutil.ListingPage("First", "book-1.html", "100 руб.") +
+					testutil.ListingPage("Second", "../shared-book.html", "200 руб."),
 			))
 			assert.NoError(t, err)
 		case "/two/second":
 			_, err := writer.Write([]byte(
-				listingPage("Duplicate", "../shared-book.html", "999 руб.") +
-					listingPage("Third", "book-3.html", "300 руб."),
+				testutil.ListingPage("Duplicate", "../shared-book.html", "999 руб.") +
+					testutil.ListingPage("Third", "book-3.html", "300 руб."),
 			))
 			assert.NoError(t, err)
 		case "/three/third":
-			_, err := writer.Write([]byte(listingPage("Fourth", "book-4.html", "400 руб.")))
+			_, err := writer.Write([]byte(testutil.ListingPage("Fourth", "book-4.html", "400 руб.")))
 			assert.NoError(t, err)
 		default:
 			t.Errorf("unexpected path %q", request.URL.Path)
@@ -336,7 +337,7 @@ func Test_ClientWithResult_deduplicates_failure_after_success_on_later_page(t *t
 			assert.NoError(t, err)
 			return
 		}
-		_, err := writer.Write([]byte(listingPage("Успешное объявление", "/book.html", "100 руб.")))
+		_, err := writer.Write([]byte(testutil.ListingPage("Успешное объявление", "/book.html", "100 руб.")))
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
@@ -366,7 +367,7 @@ func Test_ClientWithResult_returns_deduplicated_failed_buy_urls(t *testing.T) {
 
 			return
 		}
-		_, err := writer.Write([]byte(failedListing + listingPage("Рабочая книга", "/good.html", "100 руб.")))
+		_, err := writer.Write([]byte(failedListing + testutil.ListingPage("Рабочая книга", "/good.html", "100 руб.")))
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
@@ -383,6 +384,65 @@ func Test_ClientWithResult_returns_deduplicated_failed_buy_urls(t *testing.T) {
 	require.Equal(t, server.URL+"/good.html", result.Books[0].BuyURL)
 }
 
+func Test_ClientWithResult_deduplicates_successes_and_failures_across_pages(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		malformed := func(title, buyURL string) string {
+			return `<p><a href="/bs.php4?bs=Seller">BS - Seller</a><br>` +
+				`<b>` + title + `</b> М., 2026 г. <a href="` + buyURL + `"><b>Купить</b></a></p>`
+		}
+		switch request.URL.Path {
+		case "/first":
+			_, err := writer.Write([]byte(
+				testutil.ListingPage("Первая версия", "/first-book.html", "100 руб.") +
+					malformed("Первый сбой", "/first-broken.html") +
+					malformed("Второй сбой", "/second-broken.html"),
+			))
+			assert.NoError(t, err)
+		case "/second":
+			_, err := writer.Write([]byte(
+				malformed("Успешная книга снова сломалась", "/first-book.html") +
+					malformed("Первый сбой снова", "/first-broken.html") +
+					malformed("Третий сбой", "/third-broken.html"),
+			))
+			assert.NoError(t, err)
+		case "/third":
+			_, err := writer.Write([]byte(
+				testutil.ListingPage("Первый сбой исправлен", "/first-broken.html", "200 руб.") +
+					testutil.ListingPage("Вторая версия", "/first-book.html", "999 руб."),
+			))
+			assert.NoError(t, err)
+		default:
+			t.Errorf("unexpected path %q", request.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client, err := alib.NewClient(
+		[]string{server.URL + "/first", server.URL + "/second", server.URL + "/third"},
+		time.Second,
+		0,
+		slog.New(slog.DiscardHandler),
+	)
+	require.NoError(t, err)
+
+	// When
+	result, err := client.FetchWithResult(context.Background())
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, []alib.Book{
+		{Title: "Первая версия", Price: "100 руб.", BuyURL: server.URL + "/first-book.html"},
+		{Title: "Первый сбой исправлен", Price: "200 руб.", BuyURL: server.URL + "/first-broken.html"},
+	}, result.Books)
+	require.Equal(t, []string{
+		server.URL + "/second-broken.html",
+		server.URL + "/third-broken.html",
+	}, result.FailedBuyURLs)
+}
+
 func Test_ClientWithResult_returns_unidentified_failures_from_mixed_page(t *testing.T) {
 	t.Parallel()
 
@@ -390,7 +450,7 @@ func Test_ClientWithResult_returns_unidentified_failures_from_mixed_page(t *test
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, err := writer.Write([]byte(`<p><b>Сбойное объявление.</b> М., 2026 г. <a><b>Купить</b></a></p>` +
-			listingPage("Рабочая книга", "/good.html", "100 руб.")))
+			testutil.ListingPage("Рабочая книга", "/good.html", "100 руб.")))
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
@@ -417,7 +477,7 @@ func Test_ClientWithResult_keeps_unidentified_failure_from_failed_page(t *testin
 			assert.NoError(t, err)
 			return
 		}
-		_, err := writer.Write([]byte(listingPage("Рабочая книга", "/good.html", "100 руб.")))
+		_, err := writer.Write([]byte(testutil.ListingPage("Рабочая книга", "/good.html", "100 руб.")))
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
@@ -538,7 +598,7 @@ func Test_Client_downloads_all_pages_before_parsing_and_logs_outcomes(t *testing
 			assert.NoError(t, writeErr)
 		case "/success":
 			writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_, writeErr := writer.Write([]byte(listingPage("Success", "/success-book.html", "100 руб.")))
+			_, writeErr := writer.Write([]byte(testutil.ListingPage("Success", "/success-book.html", "100 руб.")))
 			assert.NoError(t, writeErr)
 		case "/empty":
 			writer.Header().Set("Content-Type", "text/html; charset=windows-1251")
@@ -629,7 +689,7 @@ func Test_Client_continues_after_response_body_read_failure(t *testing.T) {
 			assert.NoError(t, err)
 			return
 		}
-		_, err := writer.Write([]byte(listingPage("Book", "/book.html", "100 руб.")))
+		_, err := writer.Write([]byte(testutil.ListingPage("Book", "/book.html", "100 руб.")))
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
@@ -720,7 +780,7 @@ func Test_Client_waits_between_requests(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		requestTimes <- time.Now()
 		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, err := writer.Write([]byte(listingPage("Book", "/book.html", "100 руб.")))
+		_, err := writer.Write([]byte(testutil.ListingPage("Book", "/book.html", "100 руб.")))
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
@@ -754,7 +814,7 @@ func Test_Client_waits_between_attempts_after_failure(t *testing.T) {
 			return
 		}
 		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, err := writer.Write([]byte(listingPage("Book", "/book.html", "100 руб.")))
+		_, err := writer.Write([]byte(testutil.ListingPage("Book", "/book.html", "100 руб.")))
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
@@ -782,7 +842,7 @@ func Test_Client_does_not_wait_after_single_request(t *testing.T) {
 	// Given
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, err := writer.Write([]byte(listingPage("Book", "/book.html", "100 руб.")))
+		_, err := writer.Write([]byte(testutil.ListingPage("Book", "/book.html", "100 руб.")))
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
@@ -813,7 +873,7 @@ func Test_Client_returns_context_error_when_canceled_during_wait(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		requestCount++
 		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, err := writer.Write([]byte(listingPage("Book", "/book.html", "100 руб.")))
+		_, err := writer.Write([]byte(testutil.ListingPage("Book", "/book.html", "100 руб.")))
 		assert.NoError(t, err)
 		if requestCount == 1 {
 			close(firstResponse)
@@ -901,10 +961,6 @@ func Test_Client_returns_context_error_when_canceled_during_body_download(t *tes
 		t.Fatalf("unexpected request after cancellation: %s", path)
 	default:
 	}
-}
-
-func listingPage(title, buyURL, price string) string {
-	return "<p><b>" + title + "</b> Цена: " + price + " <a href=\"" + buyURL + "\"><b>Купить</b></a></p>"
 }
 
 func fetchBooks(client *alib.Client, ctx context.Context) ([]alib.Book, error) {

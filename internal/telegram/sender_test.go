@@ -120,62 +120,89 @@ func Test_Sender_posts_refresh_button_when_requested(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func Test_Sender_returns_API_description_on_rejection(t *testing.T) {
+func Test_Sender_reports_response_errors(t *testing.T) {
 	t.Parallel()
 
-	// Given
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writer.Header().Set("Content-Type", "application/json")
-		_, err := writer.Write([]byte(`{"ok":false,"error_code":400,"description":"chat not found"}`))
-		assert.NoError(t, err)
-	}))
-	t.Cleanup(server.Close)
-	sender, err := telegram.NewSender(telegram.Config{
-		APIBase: server.URL,
-		Token:   "test-token",
-		ChatID:  "missing",
-		Timeout: 2 * time.Second,
-	})
-	require.NoError(t, err)
+	tests := []struct {
+		expectedError error
+		name          string
+		body          string
+		description   string
+		status        int
+	}{
+		{
+			name:          "API rejection description",
+			status:        http.StatusOK,
+			body:          `{"ok":false,"error_code":400,"description":"chat not found"}`,
+			expectedError: telegram.ErrRejected,
+			description:   "chat not found",
+		},
+		{
+			name:          "chat migration",
+			status:        http.StatusBadRequest,
+			body:          `{"ok":false,"error_code":400,"description":"group chat was upgraded","parameters":{"migrate_to_chat_id":-100456}}`,
+			expectedError: telegram.ErrRejected,
+			description:   "migrate_to_chat_id -100456",
+		},
+		{
+			name:          "HTTP rejection without description",
+			status:        http.StatusBadGateway,
+			body:          `{"ok":false,"error_code":502}`,
+			expectedError: telegram.ErrRejected,
+			description:   "502",
+		},
+		{
+			name:          "success body with unsuccessful HTTP status",
+			status:        http.StatusBadGateway,
+			body:          `{"ok":true,"result":{}}`,
+			expectedError: telegram.ErrRejected,
+			description:   "Bad Gateway",
+		},
+		{
+			name:        "trailing data",
+			status:      http.StatusOK,
+			body:        `{"ok":true}{"ok":true}`,
+			description: "decode Telegram response",
+		},
+		{
+			name:        "invalid JSON",
+			status:      http.StatusOK,
+			body:        `not json`,
+			description: "decode Telegram response",
+		},
+	}
 
-	// When
-	err = sender.Send(context.Background(), "digest", false, false)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	// Then
-	require.ErrorIs(t, err, telegram.ErrRejected)
-	require.Contains(t, err.Error(), "chat not found")
-}
+			// Given
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				writer.Header().Set("Content-Type", "application/json")
+				writer.WriteHeader(tt.status)
+				_, err := writer.Write([]byte(tt.body))
+				assert.NoError(t, err)
+			}))
+			t.Cleanup(server.Close)
+			sender, err := telegram.NewSender(telegram.Config{
+				APIBase: server.URL,
+				Token:   "test-token",
+				ChatID:  "-100123",
+				Timeout: 2 * time.Second,
+			})
+			require.NoError(t, err)
 
-func Test_Sender_classifies_chat_migration_as_rejection(t *testing.T) {
-	t.Parallel()
+			// When
+			err = sender.Send(context.Background(), "digest", false, false)
 
-	// Given
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writer.Header().Set("Content-Type", "application/json")
-		writer.WriteHeader(http.StatusBadRequest)
-		_, err := writer.Write([]byte(`{
-			"ok":false,
-			"error_code":400,
-			"description":"group chat was upgraded",
-			"parameters":{"migrate_to_chat_id":-100456}
-		}`))
-		assert.NoError(t, err)
-	}))
-	t.Cleanup(server.Close)
-	sender, err := telegram.NewSender(telegram.Config{
-		APIBase: server.URL,
-		Token:   "test-token",
-		ChatID:  "-100123",
-		Timeout: 2 * time.Second,
-	})
-	require.NoError(t, err)
-
-	// When
-	err = sender.Send(context.Background(), "digest", false, false)
-
-	// Then
-	require.ErrorIs(t, err, telegram.ErrRejected)
-	require.Contains(t, err.Error(), "migrate_to_chat_id -100456")
+			// Then
+			require.Error(t, err)
+			if tt.expectedError != nil {
+				require.ErrorIs(t, err, tt.expectedError)
+			}
+			require.Contains(t, err.Error(), tt.description)
+		})
+	}
 }
 
 func Test_Sender_redacts_token_and_API_URL_from_rejection(t *testing.T) {
@@ -335,60 +362,6 @@ func Test_NewSender_accepts_short_positive_timeout(t *testing.T) {
 	require.NotNil(t, sender)
 }
 
-func Test_Sender_uses_HTTP_status_when_rejection_has_no_description(t *testing.T) {
-	t.Parallel()
-
-	// Given
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writer.Header().Set("Content-Type", "application/json")
-		writer.WriteHeader(http.StatusBadGateway)
-		_, err := writer.Write([]byte(`{"ok":false,"error_code":502}`))
-		assert.NoError(t, err)
-	}))
-	t.Cleanup(server.Close)
-	sender, err := telegram.NewSender(telegram.Config{
-		APIBase: server.URL,
-		Token:   "test-token",
-		ChatID:  "-100123",
-		Timeout: 2 * time.Second,
-	})
-	require.NoError(t, err)
-
-	// When
-	err = sender.Send(context.Background(), "digest", false, false)
-
-	// Then
-	require.ErrorIs(t, err, telegram.ErrRejected)
-	require.Contains(t, err.Error(), "502")
-}
-
-func Test_Sender_rejects_success_body_with_unsuccessful_HTTP_status(t *testing.T) {
-	t.Parallel()
-
-	// Given
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writer.Header().Set("Content-Type", "application/json")
-		writer.WriteHeader(http.StatusBadGateway)
-		_, err := writer.Write([]byte(`{"ok":true,"result":{}}`))
-		assert.NoError(t, err)
-	}))
-	t.Cleanup(server.Close)
-	sender, err := telegram.NewSender(telegram.Config{
-		APIBase: server.URL,
-		Token:   "test-token",
-		ChatID:  "-100123",
-		Timeout: 2 * time.Second,
-	})
-	require.NoError(t, err)
-
-	// When
-	err = sender.Send(context.Background(), "digest", false, false)
-
-	// Then
-	require.ErrorIs(t, err, telegram.ErrRejected)
-	require.Contains(t, err.Error(), "Bad Gateway")
-}
-
 func Test_Sender_uses_HTTP_status_for_undecodable_HTTP_rejection(t *testing.T) {
 	t.Parallel()
 
@@ -456,57 +429,6 @@ func Test_Sender_rejects_oversized_API_response(t *testing.T) {
 	assert.Contains(t, err.Error(), "exceeds 1048576 bytes")
 	assert.NotErrorIs(t, err, telegram.ErrRequest)
 	assert.NotErrorIs(t, err, telegram.ErrRejected)
-}
-
-func Test_Sender_rejects_trailing_data_after_API_response(t *testing.T) {
-	t.Parallel()
-
-	// Given
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		_, err := writer.Write([]byte(`{"ok":true}{"ok":true}`))
-		assert.NoError(t, err)
-	}))
-	t.Cleanup(server.Close)
-	sender, err := telegram.NewSender(telegram.Config{
-		APIBase: server.URL,
-		Token:   "test-token",
-		ChatID:  "-100123",
-		Timeout: 2 * time.Second,
-	})
-	require.NoError(t, err)
-
-	// When
-	err = sender.Send(context.Background(), "digest", false, false)
-
-	// Then
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "decode Telegram response")
-}
-
-func Test_Sender_returns_decode_error_for_invalid_response(t *testing.T) {
-	t.Parallel()
-
-	// Given
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writer.Header().Set("Content-Type", "application/json")
-		_, err := writer.Write([]byte(`not json`))
-		assert.NoError(t, err)
-	}))
-	t.Cleanup(server.Close)
-	sender, err := telegram.NewSender(telegram.Config{
-		APIBase: server.URL,
-		Token:   "test-token",
-		ChatID:  "-100123",
-		Timeout: 2 * time.Second,
-	})
-	require.NoError(t, err)
-
-	// When
-	err = sender.Send(context.Background(), "digest", false, false)
-
-	// Then
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "decode Telegram response")
 }
 
 func Test_Sender_returns_request_error_for_transport_failure(t *testing.T) {

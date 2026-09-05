@@ -37,19 +37,8 @@ type Chunk struct {
 	Books []alib.Book
 }
 
-// Render formats books as Telegram HTML and splits only between listings.
-func Render(books []alib.Book, options Options) ([]Chunk, error) {
-	chunks, _, err := render(books, options, false, 0)
-
-	return chunks, err
-}
-
 // RenderSendable formats every listing that fits and reports the oversized listings it skipped.
 func RenderSendable(books []alib.Book, options Options, previousFailures int) ([]Chunk, []string, error) {
-	return render(books, options, true, previousFailures)
-}
-
-func render(books []alib.Book, options Options, skipOversized bool, previousFailures int) ([]Chunk, []string, error) {
 	if len(books) == 0 {
 		if previousFailures > 0 {
 			summaryChunks, err := renderFailureSummary(previousFailures, options)
@@ -68,14 +57,10 @@ func render(books []alib.Book, options Options, skipOversized bool, previousFail
 	current := Chunk{Text: header, Books: make([]alib.Book, 0)}
 	currentBlocks := 0
 	for _, book := range books {
-		item, fits := renderItem(book, options)
-		if !fits {
-			if skipOversized {
-				skippedBuyURLs = append(skippedBuyURLs, book.BuyURL)
-				continue
-			}
-
-			return nil, nil, fmt.Errorf("%w: %s", ErrMessageTooLong, book.BuyURL)
+		item, err := RenderBook(book, options)
+		if err != nil {
+			skippedBuyURLs = append(skippedBuyURLs, book.BuyURL)
+			continue
 		}
 		chunks, current, currentBlocks = appendBook(
 			chunks, current, currentBlocks, book, item, options,
@@ -109,15 +94,19 @@ func render(books []alib.Book, options Options, skipOversized bool, previousFail
 	return append(chunks, Chunk{Text: summary, Books: make([]alib.Book, 0)}), skippedBuyURLs, nil
 }
 
-func renderItem(book alib.Book, options Options) (string, bool) {
+// RenderBook formats one listing as Telegram HTML.
+func RenderBook(book alib.Book, options Options) (string, error) {
 	item := renderBook(book, options)
 	itemLimit := options.Limit
 	if renderedRuneCount(item) > itemLimit && strings.TrimSpace(book.Content) != "" {
 		item = truncateContent(book, options)
 		itemLimit--
 	}
+	if renderedRuneCount(item) > itemLimit {
+		return "", fmt.Errorf("%w: %s", ErrMessageTooLong, book.BuyURL)
+	}
 
-	return item, renderedRuneCount(item) <= itemLimit
+	return item, nil
 }
 
 func appendBook(

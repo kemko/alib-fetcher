@@ -468,6 +468,31 @@ func Test_ParseWithResult_deduplicates_failed_announcements(t *testing.T) {
 	require.Equal(t, []string{"https://www.alib.ru/broken.html"}, result.FailedBuyURLs)
 }
 
+func Test_ParseWithResult_preserves_order_of_multiple_failed_announcements(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	page := `<p><a href="/bs.php4?bs=Seller">BS - Seller</a><br>
+<b>Первый сбой.</b> М., 2026 г. <a href="/first-broken.html"><b>Купить</b></a></p>` +
+		`<p><a href="/bs.php4?bs=Seller">BS - Seller</a><br>
+<b>Второй сбой.</b> М., 2026 г. <a href="/second-broken.html"><b>Купить</b></a></p>` +
+		`<p><a href="/bs.php4?bs=Seller">BS - Seller</a><br>
+<b>Повторный первый сбой.</b> М., 2026 г. <a href="/first-broken.html"><b>Купить</b></a></p>`
+	baseURL, err := url.Parse("https://www.alib.ru/tramka.phtml?tnew=7")
+	require.NoError(t, err)
+
+	// When
+	result, err := alib.ParseWithResult(bytes.NewBufferString(page), baseURL, "text/html")
+
+	// Then
+	require.NoError(t, err)
+	require.Empty(t, result.Books)
+	require.Equal(t, []string{
+		"https://www.alib.ru/first-broken.html",
+		"https://www.alib.ru/second-broken.html",
+	}, result.FailedBuyURLs)
+}
+
 func Test_ParseWithResult_ignores_failure_when_duplicate_is_parsed_successfully(t *testing.T) {
 	t.Parallel()
 

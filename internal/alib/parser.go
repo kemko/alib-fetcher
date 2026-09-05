@@ -79,14 +79,23 @@ func ParseWithResult(reader io.Reader, baseURL *url.URL, contentType string) (Pa
 		if node.Type != html.ElementNode || node.Data != "p" {
 			continue
 		}
-		if collectListing(&state, node, baseURL) {
-			unidentifiedFailures++
+		book, buyURL, candidate, found := parseListing(node, baseURL)
+		if !candidate {
+			continue
 		}
+		if !found {
+			if buyURL == "" {
+				unidentifiedFailures++
+			} else {
+				state.addFailure(buyURL)
+			}
+			continue
+		}
+		state.addBook(book)
 	}
-	failedBuyURLs := remainingFailures(state.failedOrder, state.failed)
 	result := ParseResult{
 		Books:                state.books,
-		FailedBuyURLs:        failedBuyURLs,
+		FailedBuyURLs:        state.failedBuyURLs(),
 		UnidentifiedFailures: unidentifiedFailures,
 	}
 
@@ -107,39 +116,30 @@ type parseState struct {
 	failedOrder []string
 }
 
-func collectListing(state *parseState, node *html.Node, baseURL *url.URL) bool {
-	book, buyURL, candidate, found := parseListing(node, baseURL)
-	if !candidate {
-		return false
-	}
-	if !found {
-		if buyURL == "" {
-			return true
-		}
-		if _, succeeded := state.seen[buyURL]; succeeded {
-			return false
-		}
-		if _, alreadyFailed := state.failed[buyURL]; !alreadyFailed {
-			state.failedOrder = append(state.failedOrder, buyURL)
-			state.failed[buyURL] = struct{}{}
-		}
-		return false
-	}
-
+func (state *parseState) addBook(book Book) {
 	delete(state.failed, book.BuyURL)
 	if _, exists := state.seen[book.BuyURL]; exists {
-		return false
+		return
 	}
 	state.seen[book.BuyURL] = struct{}{}
 	state.books = append(state.books, book)
-
-	return false
 }
 
-func remainingFailures(order []string, failed map[string]struct{}) []string {
-	result := make([]string, 0, len(failed))
-	for _, buyURL := range order {
-		if _, stillFailed := failed[buyURL]; stillFailed {
+func (state *parseState) addFailure(buyURL string) {
+	if _, succeeded := state.seen[buyURL]; succeeded {
+		return
+	}
+	if _, alreadyFailed := state.failed[buyURL]; alreadyFailed {
+		return
+	}
+	state.failedOrder = append(state.failedOrder, buyURL)
+	state.failed[buyURL] = struct{}{}
+}
+
+func (state *parseState) failedBuyURLs() []string {
+	result := make([]string, 0, len(state.failed))
+	for _, buyURL := range state.failedOrder {
+		if _, stillFailed := state.failed[buyURL]; stillFailed {
 			result = append(result, buyURL)
 		}
 	}
@@ -629,13 +629,7 @@ func textContent(node *html.Node) string {
 }
 
 func href(node *html.Node) string {
-	for _, attr := range node.Attr {
-		if attr.Key == "href" {
-			return attr.Val
-		}
-	}
-
-	return ""
+	return attribute(node, "href")
 }
 
 func resolveURL(baseURL *url.URL, raw string) string {

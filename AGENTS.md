@@ -147,8 +147,10 @@ Preserve these semantics:
 - `internal/app`: use-case orchestration through small `Fetcher`, `State`, and
   `Sender` interfaces. Keep policy here and transport/storage details in their
   adapter packages.
-- `internal/digest`: full-listing Telegram Rich HTML block rendering and
-  chunking only between complete listings, with displayed-rune and block limits.
+- `internal/digest`: per-book `RenderBook` HTML rendering plus
+  `RenderSendable` chunking, with displayed-rune and block limits. The app uses
+  `RenderBook` both to preflight new listings before recording them and while
+  assembling pending chunks, so both paths share one renderability contract.
 - `internal/store`: bbolt storage in bucket `sent_books`; keys are buy URLs and
   values are JSON records containing the full semantic `alib.Book`, observed
   timestamp, pending queue order, sent status, and sent timestamp for delivered
@@ -158,6 +160,9 @@ Preserve these semantics:
   `EditMessageReplyMarkup`; digest messages use `rich_message.html`. The SDK
   owns Bot API endpoints, request/response models, serialization, allowed
   updates, offsets, and polling retry/backoff.
+- `internal/testutil`: shared test helpers `RenderChunks`, `DisplayedRuneCount`,
+  and `ListingPage`. Import only from tests; keep displayed-rune counting
+  independent of the production renderer.
 - `Dockerfile`: multi-stage static build; final distroless Debian image runs as
   UID/GID 65532 (`nonroot`) and stores state under `/var/lib/alib-fetcher`.
 - `docker-compose.yml`: read-only, capability-dropped service with a persistent
@@ -318,7 +323,7 @@ cycle, including from a clean checkout:
 - `make test` runs the complete test suite with the race detector, shuffled
   order, and no result cache.
 - `make coverage` writes `coverage.out` and fails when total statement coverage
-  is below 80%.
+  is below 80%. It includes calls across repository packages with `-coverpkg=./...`.
 - `make build` compiles `bin/alib-fetcher` with reproducible path trimming.
 - `make tools` installs the exact golangci-lint version used by CI under the
   ignored project-local `bin/tools` tree.

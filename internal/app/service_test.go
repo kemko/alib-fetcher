@@ -12,9 +12,9 @@ import (
 	"github.com/kemko/alib-fetcher/internal/app"
 	"github.com/kemko/alib-fetcher/internal/digest"
 	"github.com/kemko/alib-fetcher/internal/store"
+	"github.com/kemko/alib-fetcher/internal/testutil"
 
 	"github.com/stretchr/testify/require"
-	xhtml "golang.org/x/net/html"
 )
 
 func Test_Service_reports_fetch_listing_errors(t *testing.T) {
@@ -114,6 +114,59 @@ func Test_Service_retries_unrenderable_new_book_without_recording(t *testing.T) 
 	require.Equal(t, []bool{false}, existing)
 	require.Equal(t, []string{"fetch", "fetch"}, events)
 	require.Len(t, sender.messages, 2)
+}
+
+func Test_Service_preserves_state_at_content_truncation_boundary(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	now := time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC)
+	state, err := store.Open(filepath.Join(t.TempDir(), "state.db"), now)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, state.Close()) })
+	newBook := alib.Book{
+		Title:   strings.Repeat("я", 51),
+		Content: "длинное описание",
+		BuyURL:  "https://example.com/new",
+	}
+	pendingBook := newBook
+	pendingBook.BuyURL = "https://example.com/pending"
+	truncatedBook := newBook
+	truncatedBook.Title = strings.Repeat("я", 50)
+	truncatedBook.BuyURL = "https://example.com/truncated"
+	exactBook := newBook
+	exactBook.Content = "я"
+	exactBook.BuyURL = "https://example.com/exact"
+	books := []alib.Book{newBook, pendingBook, truncatedBook, exactBook}
+	_, err = state.RecordDiscovered(context.Background(), []alib.Book{pendingBook}, now.Add(-time.Hour))
+	require.NoError(t, err)
+	sender := &fakeSender{}
+	service := app.NewService(app.Dependencies{
+		Fetcher:      fakeFetcher{books: books},
+		State:        state,
+		Sender:       sender,
+		MessageLimit: 64,
+		Now:          func() time.Time { return now },
+	})
+
+	// When
+	result, err := service.Run(context.Background())
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, app.Result{Fetched: 4, New: 2, Sent: 2, Failed: 2}, result)
+	existing, err := state.Existing(context.Background(), books)
+	require.NoError(t, err)
+	require.Equal(t, []bool{false, true, true, true}, existing)
+	pending, err := state.Pending(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []alib.Book{pendingBook}, pending)
+	combined := strings.Join(sender.messages, "")
+	require.NotContains(t, combined, newBook.BuyURL)
+	require.NotContains(t, combined, pendingBook.BuyURL)
+	require.Contains(t, combined, truncatedBook.BuyURL)
+	require.Contains(t, combined, exactBook.BuyURL)
+	require.Equal(t, 1, strings.Count(combined, "Не удалось обработать книг: 2"))
 }
 
 func Test_Service_marks_each_chunk_only_after_delivery(t *testing.T) {
@@ -343,7 +396,7 @@ func Test_Service_sorts_pending_books_by_publication_year_before_chunking(t *tes
 		books[1], books[3], books[6], books[8], books[11], books[14], books[10],
 	}
 	messageLimit := 60
-	expectedChunks, err := digest.Render(expectedOrder, digest.Options{LocalTime: now, Limit: messageLimit})
+	expectedChunks, err := testutil.RenderChunks(t, expectedOrder, digest.Options{LocalTime: now, Limit: messageLimit})
 	require.NoError(t, err)
 	state := &fakeState{pending: books, recordedNew: len(books)}
 	sender := &fakeSender{}
@@ -388,7 +441,7 @@ func Test_Service_sends_later_chunk_that_fits_only_without_header(t *testing.T) 
 
 	// Given
 	books, messageLimit := headerlessOnlyLaterBookFixture(t)
-	expectedChunks, err := digest.Render(books, digest.Options{Limit: messageLimit})
+	expectedChunks, err := testutil.RenderChunks(t, books, digest.Options{Limit: messageLimit})
 	require.NoError(t, err)
 	require.Len(t, expectedChunks, 2)
 
@@ -418,7 +471,7 @@ func Test_Service_retries_headerless_only_chunk_after_partial_delivery_failure(t
 	// Given
 	now := time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC)
 	books, messageLimit := headerlessOnlyLaterBookFixture(t)
-	expectedChunks, err := digest.Render(books, digest.Options{Limit: messageLimit})
+	expectedChunks, err := testutil.RenderChunks(t, books, digest.Options{Limit: messageLimit})
 	require.NoError(t, err)
 	require.Len(t, expectedChunks, 2)
 
@@ -469,39 +522,14 @@ func headerlessOnlyLaterBookFixture(t *testing.T) ([]alib.Book, int) {
 		{Title: "Первая", BuyURL: "https://example.com/1"},
 		{Title: "Вторая длиннее первой", BuyURL: "https://example.com/2"},
 	}
-	firstBookChunks, err := digest.Render(books[:1], digest.Options{Limit: 4096})
+	firstBookChunks, err := testutil.RenderChunks(t, books[:1], digest.Options{Limit: 4096})
 	require.NoError(t, err)
-	messageLimit := displayedRuneCount(t, firstBookChunks[0].Text)
-	secondBookChunks, err := digest.Render(books[1:], digest.Options{Limit: 4096})
+	messageLimit := testutil.DisplayedRuneCount(t, firstBookChunks[0].Text)
+	secondBookChunks, err := testutil.RenderChunks(t, books[1:], digest.Options{Limit: 4096})
 	require.NoError(t, err)
-	require.Greater(t, displayedRuneCount(t, secondBookChunks[0].Text), messageLimit)
+	require.Greater(t, testutil.DisplayedRuneCount(t, secondBookChunks[0].Text), messageLimit)
 
 	return books, messageLimit
-}
-
-func displayedRuneCount(t *testing.T, value string) int {
-	t.Helper()
-
-	document, err := xhtml.Parse(strings.NewReader(value))
-	require.NoError(t, err)
-
-	var count func(*xhtml.Node) int
-	count = func(node *xhtml.Node) int {
-		total := 0
-		if node.Type == xhtml.TextNode {
-			total += len([]rune(node.Data))
-		}
-		if node.Type == xhtml.ElementNode && node.Data == "br" {
-			total++
-		}
-		for child := node.FirstChild; child != nil; child = child.NextSibling {
-			total += count(child)
-		}
-
-		return total
-	}
-
-	return count(document)
 }
 
 func Test_Service_runs_pre_delivery_hook_once_before_sending_and_marking(t *testing.T) {
@@ -831,9 +859,9 @@ func Test_Service_sends_renderable_pending_books_when_one_pending_book_is_too_lo
 	oversized := alib.Book{Title: strings.Repeat("Очень длинная книга ", 20), BuyURL: "https://e/oversized"}
 	firstDeliverable := alib.Book{Title: "Обычная 1", BuyURL: "https://e/1"}
 	secondDeliverable := alib.Book{Title: "Обычная 2", BuyURL: "https://e/2"}
-	firstChunks, err := digest.Render([]alib.Book{firstDeliverable}, digest.Options{Limit: 4096})
+	firstChunks, err := testutil.RenderChunks(t, []alib.Book{firstDeliverable}, digest.Options{Limit: 4096})
 	require.NoError(t, err)
-	messageLimit := displayedRuneCount(t, firstChunks[0].Text)
+	messageLimit := testutil.DisplayedRuneCount(t, firstChunks[0].Text)
 	state := &fakeState{pending: []alib.Book{oversized, firstDeliverable, secondDeliverable}}
 	sender := &fakeSender{}
 	hookCalls := 0
