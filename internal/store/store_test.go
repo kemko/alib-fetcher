@@ -906,19 +906,8 @@ func decodeStoredTime(value int64) time.Time {
 func readStoredRecord(t *testing.T, path, buyURL string) storedRecord {
 	t.Helper()
 
-	db, err := bolt.Open(path, 0o600, &bolt.Options{ReadOnly: true, Timeout: time.Second})
-	require.NoError(t, err)
-	defer func() { require.NoError(t, db.Close()) }()
-
 	var record storedRecord
-	err = db.View(func(tx *bolt.Tx) error {
-		value := tx.Bucket([]byte("sent_books")).Get([]byte(buyURL))
-		if value == nil {
-			return fmt.Errorf("read stored record %q: missing", buyURL)
-		}
-		return json.Unmarshal(value, &record)
-	})
-	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(readRawRecord(t, path, buyURL), &record))
 
 	return record
 }

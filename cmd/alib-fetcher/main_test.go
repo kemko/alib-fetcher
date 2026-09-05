@@ -25,10 +25,10 @@ import (
 	"github.com/kemko/alib-fetcher/internal/config"
 	"github.com/kemko/alib-fetcher/internal/store"
 	"github.com/kemko/alib-fetcher/internal/telegram"
+	"github.com/kemko/alib-fetcher/internal/testutil"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	xhtml "golang.org/x/net/html"
 	"golang.org/x/text/encoding/charmap"
 )
 
@@ -223,7 +223,7 @@ func Test_run_once_sends_truncated_description_through_rich_message(t *testing.T
 	var listingMessage telegramRequest
 	for _, request := range requests {
 		require.Equal(t, "/bottest-token/sendRichMessage", request.Path)
-		require.LessOrEqual(t, displayedRuneCount(t, request.Message.RichMessage.HTML), messageLimit)
+		require.LessOrEqual(t, testutil.DisplayedRuneCount(t, request.Message.RichMessage.HTML), messageLimit)
 		if strings.Contains(request.Message.RichMessage.HTML, "…") {
 			listingMessage = request
 		}
@@ -286,7 +286,7 @@ func Test_run_once_uses_default_rich_message_limit_and_listing_block_chunks(t *t
 	require.Equal(t, 250, strings.Count(requests[0].Message.RichMessage.HTML, "<hr/>")+1)
 	require.Equal(t, 1, strings.Count(requests[1].Message.RichMessage.HTML, "<b>Книга 250.</b>"))
 	for _, request := range requests {
-		require.LessOrEqual(t, displayedRuneCount(t, request.Message.RichMessage.HTML), 32000)
+		require.LessOrEqual(t, testutil.DisplayedRuneCount(t, request.Message.RichMessage.HTML), 32000)
 		require.NotContains(t, request.Path, "sendMessage")
 	}
 }
@@ -565,7 +565,7 @@ func Test_run_once_fetches_categories_and_series_in_order_and_sends_partial_dedu
 			assert.NoError(t, decodeErr)
 			assert.Equal(t, "Серия, тома", decodedSeries)
 			_, err := writer.Write([]byte(
-				listingPage("Восстановленная книга", recoveredPath, "999 руб."),
+				testutil.ListingPage("Восстановленная книга", recoveredPath, "999 руб."),
 			))
 			assert.NoError(t, err)
 		case request.URL.Path == "/findp.php4" && request.URL.Query().Get("seria") == "changed":
@@ -622,7 +622,7 @@ func Test_run_once_fetches_categories_and_series_in_order_and_sends_partial_dedu
 	firstCycleHTML := make([]string, 0, len(firstCycleMessages))
 	for index, request := range firstCycleMessages {
 		require.Equal(t, "/bottest-token/sendRichMessage", request.Path)
-		require.LessOrEqual(t, displayedRuneCount(t, request.Message.RichMessage.HTML), messageLimit)
+		require.LessOrEqual(t, testutil.DisplayedRuneCount(t, request.Message.RichMessage.HTML), messageLimit)
 		require.NotRegexp(t, `[\n]`, request.Message.RichMessage.HTML)
 		if index == len(firstCycleMessages)-1 {
 			requireRefreshButton(t, request.Message)
@@ -932,30 +932,6 @@ func decodeTelegramMessage(t *testing.T, request *http.Request) telegrambot.Send
 	return payload
 }
 
-func displayedRuneCount(t *testing.T, value string) int {
-	t.Helper()
-	document, err := xhtml.Parse(strings.NewReader(value))
-	require.NoError(t, err)
-
-	var count func(*xhtml.Node) int
-	count = func(node *xhtml.Node) int {
-		total := 0
-		if node.Type == xhtml.TextNode {
-			total += len([]rune(node.Data))
-		}
-		if node.Type == xhtml.ElementNode && node.Data == "br" {
-			total++
-		}
-		for child := node.FirstChild; child != nil; child = child.NextSibling {
-			total += count(child)
-		}
-
-		return total
-	}
-
-	return count(document)
-}
-
 func setRunEnvironment(t *testing.T, telegramAPIBase, statePath string) {
 	t.Helper()
 
@@ -979,8 +955,4 @@ func unsetEnvironment(t *testing.T, key string) {
 
 	t.Setenv(key, "")
 	require.NoError(t, os.Unsetenv(key))
-}
-
-func listingPage(title, buyURL, price string) string {
-	return "<p><b>" + title + "</b> Цена: " + price + " <a href=\"" + buyURL + "\"><b>Купить</b></a></p>"
 }

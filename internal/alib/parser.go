@@ -629,13 +629,7 @@ func textContent(node *html.Node) string {
 }
 
 func href(node *html.Node) string {
-	for _, attr := range node.Attr {
-		if attr.Key == "href" {
-			return attr.Val
-		}
-	}
-
-	return ""
+	return attribute(node, "href")
 }
 
 func resolveURL(baseURL *url.URL, raw string) string {
