@@ -147,8 +147,10 @@ Preserve these semantics:
 - `internal/app`: use-case orchestration through small `Fetcher`, `State`, and
   `Sender` interfaces. Keep policy here and transport/storage details in their
   adapter packages.
-- `internal/digest`: full-listing Telegram Rich HTML block rendering and
-  chunking only between complete listings, with displayed-rune and block limits.
+- `internal/digest`: per-book `RenderBook` HTML rendering plus
+  `RenderSendable` chunking, with displayed-rune and block limits. The app uses
+  `RenderBook` both to preflight new listings before recording them and while
+  assembling pending chunks, so both paths share one renderability contract.
 - `internal/store`: bbolt storage in bucket `sent_books`; keys are buy URLs and
   values are JSON records containing the full semantic `alib.Book`, observed
   timestamp, pending queue order, sent status, and sent timestamp for delivered
