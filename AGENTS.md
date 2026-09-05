@@ -160,6 +160,9 @@ Preserve these semantics:
   `EditMessageReplyMarkup`; digest messages use `rich_message.html`. The SDK
   owns Bot API endpoints, request/response models, serialization, allowed
   updates, offsets, and polling retry/backoff.
+- `internal/testutil`: shared test helpers `RenderChunks`, `DisplayedRuneCount`,
+  and `ListingPage`. Import only from tests; keep displayed-rune counting
+  independent of the production renderer.
 - `Dockerfile`: multi-stage static build; final distroless Debian image runs as
   UID/GID 65532 (`nonroot`) and stores state under `/var/lib/alib-fetcher`.
 - `docker-compose.yml`: read-only, capability-dropped service with a persistent
