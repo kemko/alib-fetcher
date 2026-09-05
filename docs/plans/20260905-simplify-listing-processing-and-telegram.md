@@ -95,17 +95,17 @@ HTTP-клиент Telegram.
 - Modify: `internal/telegram/sender_internal_test.go`
 - Modify: `internal/telegram/updates_test.go`
 
-- [ ] Использовать один настроенный `http.Client` для polling, отправки сообщений
+- [x] Использовать один настроенный `http.Client` для polling, отправки сообщений
   и callback-операций.
-- [ ] Удалить `pollClient`, `sdkPollContextKey` и выбор клиента через context;
+- [x] Удалить `pollClient`, `sdkPollContextKey` и выбор клиента через context;
   запускать SDK с контекстом слушателя.
-- [ ] Сохранить отдельный расчёт SDK poll timeout, `HTTP_TIMEOUT` каждого запроса,
+- [x] Сохранить отдельный расчёт SDK poll timeout, `HTTP_TIMEOUT` каждого запроса,
   ограничение ответа, сокрытие секретов и `sdkCall` для проверки HTTP-статуса.
-- [ ] Добавить регрессию: при удерживаемом `getUpdates` отправка сообщения и ответ
+- [x] Добавить регрессию: при удерживаемом `getUpdates` отправка сообщения и ответ
   на callback завершаются независимо; отмена слушателя завершает polling.
-- [ ] Дополнить проверки короткого timeout, ошибок polling и применения
+- [x] Дополнить проверки короткого timeout, ошибок polling и применения
   ограничений ответа к обоим видам запросов.
-- [ ] Выполнить `make verify`.
+- [x] Выполнить `make verify`.
 
 ### Task 4: Verify acceptance criteria
 

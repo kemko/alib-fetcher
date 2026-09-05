@@ -1,8 +1,10 @@
 package telegram_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -138,6 +140,82 @@ func Test_Sender_listens_for_registered_refresh_callbacks(t *testing.T) {
 	}, collectCallbacks(callbacks))
 	assert.Empty(t, errors)
 	assert.Equal(t, int32(3), callbackCount.Load())
+}
+
+func Test_Sender_completes_API_calls_while_polling_is_held(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	pollStarted := make(chan struct{}, 1)
+	pollRelease := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_, err := io.Copy(io.Discard, request.Body)
+		assert.NoError(t, err)
+		if request.URL.Path == "/bottest-token/getUpdates" {
+			select {
+			case pollStarted <- struct{}{}:
+			default:
+			}
+			select {
+			case <-pollRelease:
+			case <-request.Context().Done():
+				return
+			}
+			writeTelegramResponse(t, writer, `{"ok":true,"result":[]}`)
+
+			return
+		}
+		if request.URL.Path == "/bottest-token/sendRichMessage" {
+			writeTelegramResponse(t, writer, `{"ok":true,"result":{}}`)
+
+			return
+		}
+		assert.Equal(t, "/bottest-token/answerCallbackQuery", request.URL.Path)
+		writeTelegramResponse(t, writer, `{"ok":true,"result":true}`)
+	}))
+	t.Cleanup(server.Close)
+	sender, err := telegram.NewSender(telegram.Config{
+		APIBase: server.URL,
+		Token:   "test-token",
+		ChatID:  "-100123",
+		Timeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	listenerDone := make(chan struct{})
+
+	// When
+	go func() {
+		defer close(listenerDone)
+		sender.ListenCallbacks(ctx, nil, nil)
+	}()
+	waitForSignal(t, pollStarted, "polling request did not start")
+	sendDone := make(chan error, 1)
+	answerDone := make(chan error, 1)
+	go func() {
+		sendDone <- sender.Send(context.Background(), "digest", false, false)
+	}()
+	go func() {
+		answerDone <- sender.AnswerCallback(context.Background(), "callback-1", "Started")
+	}()
+
+	// Then
+	select {
+	case sendErr := <-sendDone:
+		require.NoError(t, sendErr)
+	case <-time.After(time.Second):
+		t.Fatal("send remained blocked by polling")
+	}
+	select {
+	case answerErr := <-answerDone:
+		require.NoError(t, answerErr)
+	case <-time.After(time.Second):
+		t.Fatal("callback answer remained blocked by polling")
+	}
+	cancel()
+	close(pollRelease)
+	waitForListener(t, listenerDone)
 }
 
 func Test_Sender_listener_applies_short_HTTP_timeout_to_polling(t *testing.T) {
@@ -346,6 +424,51 @@ func Test_Sender_listener_reports_poll_error_and_recovers(t *testing.T) {
 	assert.GreaterOrEqual(t, requestCount.Load(), int32(2))
 }
 
+func Test_Sender_listener_limits_poll_response_read(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	requestStarted := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		assert.Equal(t, "/bottest-token/getUpdates", request.URL.Path)
+		select {
+		case requestStarted <- struct{}{}:
+		default:
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, err := writer.Write(bytes.Repeat([]byte(" "), (1<<20)+1))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+	sender, err := telegram.NewSender(telegram.Config{
+		APIBase: server.URL,
+		Token:   "test-token",
+		ChatID:  "-100123",
+		Timeout: 2 * time.Second,
+	})
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	errors := make(chan error, 1)
+	done := make(chan struct{})
+
+	// When
+	go func() {
+		defer close(done)
+		sender.ListenCallbacks(ctx, nil, func(_ context.Context, err error) {
+			errors <- err
+			cancel()
+		})
+	}()
+	waitForSignal(t, requestStarted, "polling request did not reach the server")
+	pollErr := <-errors
+	waitForListener(t, done)
+
+	// Then
+	require.Error(t, pollErr)
+	assert.Contains(t, pollErr.Error(), "response exceeds")
+}
+
 func Test_Sender_listener_stops_when_context_is_canceled(t *testing.T) {
 	t.Parallel()
 
@@ -406,4 +529,11 @@ func newTestSender(apiBase string) (*telegram.Sender, error) {
 		ChatID:  "-100123",
 		Timeout: 2 * time.Second,
 	})
+}
+
+func writeTelegramResponse(t *testing.T, writer http.ResponseWriter, body string) {
+	t.Helper()
+	writer.Header().Set("Content-Type", "application/json")
+	_, err := writer.Write([]byte(body))
+	assert.NoError(t, err)
 }

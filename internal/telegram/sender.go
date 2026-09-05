@@ -66,12 +66,6 @@ func newSender(config Config, client *http.Client) (*Sender, error) {
 	}
 	client.Timeout = config.Timeout
 	client.Transport = &responseLimitRoundTripper{base: transport}
-	pollClient := &http.Client{
-		Transport:     client.Transport,
-		CheckRedirect: client.CheckRedirect,
-		Jar:           client.Jar,
-		Timeout:       config.Timeout,
-	}
 	sender := &Sender{
 		chatID:    config.ChatID,
 		secrets:   []string{config.Token, config.APIBase, serverURL},
@@ -80,10 +74,7 @@ func newSender(config Config, client *http.Client) (*Sender, error) {
 	sdkBot, err := telegrambot.New(
 		config.Token,
 		telegrambot.WithServerURL(serverURL),
-		telegrambot.WithHTTPClient(sdkPollTimeout(config.Timeout), &sdkHTTPClient{
-			client:     client,
-			pollClient: pollClient,
-		}),
+		telegrambot.WithHTTPClient(sdkPollTimeout(config.Timeout), &sdkHTTPClient{client: client}),
 		telegrambot.WithSkipGetMe(),
 		telegrambot.WithAllowedUpdates(telegrambot.AllowedUpdates{models.AllowedUpdateCallbackQuery}),
 		telegrambot.WithErrorsHandler(sender.handleSDKError),
@@ -277,8 +268,7 @@ type responseLimitBody struct {
 }
 
 type sdkHTTPClient struct {
-	client     *http.Client
-	pollClient *http.Client
+	client *http.Client
 }
 
 type sdkRequestError struct {
@@ -290,8 +280,6 @@ type sdkCall struct {
 }
 
 type sdkCallContextKey struct{}
-
-type sdkPollContextKey struct{}
 
 func (e *rejectedError) Error() string {
 	return fmt.Sprintf("%s: %s", ErrRejected, e.description)
@@ -366,12 +354,8 @@ func (e *sdkRequestError) Is(target error) bool {
 }
 
 func (client *sdkHTTPClient) Do(request *http.Request) (*http.Response, error) {
-	httpClient := client.client
-	if _, polling := request.Context().Value(sdkPollContextKey{}).(struct{}); polling {
-		httpClient = client.pollClient
-	}
 	//nolint:gosec // Operator-configured API base intentionally supports HTTP(S) test and proxy servers.
-	response, err := httpClient.Do(request)
+	response, err := client.client.Do(request)
 	if err != nil {
 		return response, &sdkRequestError{cause: err}
 	}
