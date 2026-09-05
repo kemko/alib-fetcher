@@ -383,6 +383,65 @@ func Test_ClientWithResult_returns_deduplicated_failed_buy_urls(t *testing.T) {
 	require.Equal(t, server.URL+"/good.html", result.Books[0].BuyURL)
 }
 
+func Test_ClientWithResult_deduplicates_successes_and_failures_across_pages(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		malformed := func(title, buyURL string) string {
+			return `<p><a href="/bs.php4?bs=Seller">BS - Seller</a><br>` +
+				`<b>` + title + `</b> М., 2026 г. <a href="` + buyURL + `"><b>Купить</b></a></p>`
+		}
+		switch request.URL.Path {
+		case "/first":
+			_, err := writer.Write([]byte(
+				listingPage("Первая версия", "/first-book.html", "100 руб.") +
+					malformed("Первый сбой", "/first-broken.html") +
+					malformed("Второй сбой", "/second-broken.html"),
+			))
+			assert.NoError(t, err)
+		case "/second":
+			_, err := writer.Write([]byte(
+				malformed("Успешная книга снова сломалась", "/first-book.html") +
+					malformed("Первый сбой снова", "/first-broken.html") +
+					malformed("Третий сбой", "/third-broken.html"),
+			))
+			assert.NoError(t, err)
+		case "/third":
+			_, err := writer.Write([]byte(
+				listingPage("Первый сбой исправлен", "/first-broken.html", "200 руб.") +
+					listingPage("Вторая версия", "/first-book.html", "999 руб."),
+			))
+			assert.NoError(t, err)
+		default:
+			t.Errorf("unexpected path %q", request.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client, err := alib.NewClient(
+		[]string{server.URL + "/first", server.URL + "/second", server.URL + "/third"},
+		time.Second,
+		0,
+		slog.New(slog.DiscardHandler),
+	)
+	require.NoError(t, err)
+
+	// When
+	result, err := client.FetchWithResult(context.Background())
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, []alib.Book{
+		{Title: "Первая версия", Price: "100 руб.", BuyURL: server.URL + "/first-book.html"},
+		{Title: "Первый сбой исправлен", Price: "200 руб.", BuyURL: server.URL + "/first-broken.html"},
+	}, result.Books)
+	require.Equal(t, []string{
+		server.URL + "/second-broken.html",
+		server.URL + "/third-broken.html",
+	}, result.FailedBuyURLs)
+}
+
 func Test_ClientWithResult_returns_unidentified_failures_from_mixed_page(t *testing.T) {
 	t.Parallel()
 
