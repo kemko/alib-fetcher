@@ -344,7 +344,8 @@ make coverage
 ```
 
 It writes ignored `coverage.out` and fails when total statement coverage is
-below 80%.
+below 80%. Coverage includes calls across repository packages (`-coverpkg=./...`),
+including shared test helpers.
 
 ## Security-only dependency updates
 

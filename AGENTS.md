@@ -323,7 +323,7 @@ cycle, including from a clean checkout:
 - `make test` runs the complete test suite with the race detector, shuffled
   order, and no result cache.
 - `make coverage` writes `coverage.out` and fails when total statement coverage
-  is below 80%.
+  is below 80%. It includes calls across repository packages with `-coverpkg=./...`.
 - `make build` compiles `bin/alib-fetcher` with reproducible path trimming.
 - `make tools` installs the exact golangci-lint version used by CI under the
   ignored project-local `bin/tools` tree.
