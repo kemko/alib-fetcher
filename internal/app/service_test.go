@@ -17,6 +17,15 @@ import (
 	xhtml "golang.org/x/net/html"
 )
 
+func renderChunks(t *testing.T, books []alib.Book, options digest.Options) ([]digest.Chunk, error) {
+	t.Helper()
+
+	chunks, skippedBuyURLs, err := digest.RenderSendable(books, options, 0)
+	require.Empty(t, skippedBuyURLs)
+
+	return chunks, err
+}
+
 func Test_Service_reports_fetch_listing_errors(t *testing.T) {
 	t.Parallel()
 
@@ -343,7 +352,7 @@ func Test_Service_sorts_pending_books_by_publication_year_before_chunking(t *tes
 		books[1], books[3], books[6], books[8], books[11], books[14], books[10],
 	}
 	messageLimit := 60
-	expectedChunks, err := digest.Render(expectedOrder, digest.Options{LocalTime: now, Limit: messageLimit})
+	expectedChunks, err := renderChunks(t, expectedOrder, digest.Options{LocalTime: now, Limit: messageLimit})
 	require.NoError(t, err)
 	state := &fakeState{pending: books, recordedNew: len(books)}
 	sender := &fakeSender{}
@@ -388,7 +397,7 @@ func Test_Service_sends_later_chunk_that_fits_only_without_header(t *testing.T) 
 
 	// Given
 	books, messageLimit := headerlessOnlyLaterBookFixture(t)
-	expectedChunks, err := digest.Render(books, digest.Options{Limit: messageLimit})
+	expectedChunks, err := renderChunks(t, books, digest.Options{Limit: messageLimit})
 	require.NoError(t, err)
 	require.Len(t, expectedChunks, 2)
 
@@ -418,7 +427,7 @@ func Test_Service_retries_headerless_only_chunk_after_partial_delivery_failure(t
 	// Given
 	now := time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC)
 	books, messageLimit := headerlessOnlyLaterBookFixture(t)
-	expectedChunks, err := digest.Render(books, digest.Options{Limit: messageLimit})
+	expectedChunks, err := renderChunks(t, books, digest.Options{Limit: messageLimit})
 	require.NoError(t, err)
 	require.Len(t, expectedChunks, 2)
 
@@ -469,10 +478,10 @@ func headerlessOnlyLaterBookFixture(t *testing.T) ([]alib.Book, int) {
 		{Title: "Первая", BuyURL: "https://example.com/1"},
 		{Title: "Вторая длиннее первой", BuyURL: "https://example.com/2"},
 	}
-	firstBookChunks, err := digest.Render(books[:1], digest.Options{Limit: 4096})
+	firstBookChunks, err := renderChunks(t, books[:1], digest.Options{Limit: 4096})
 	require.NoError(t, err)
 	messageLimit := displayedRuneCount(t, firstBookChunks[0].Text)
-	secondBookChunks, err := digest.Render(books[1:], digest.Options{Limit: 4096})
+	secondBookChunks, err := renderChunks(t, books[1:], digest.Options{Limit: 4096})
 	require.NoError(t, err)
 	require.Greater(t, displayedRuneCount(t, secondBookChunks[0].Text), messageLimit)
 
@@ -831,7 +840,7 @@ func Test_Service_sends_renderable_pending_books_when_one_pending_book_is_too_lo
 	oversized := alib.Book{Title: strings.Repeat("Очень длинная книга ", 20), BuyURL: "https://e/oversized"}
 	firstDeliverable := alib.Book{Title: "Обычная 1", BuyURL: "https://e/1"}
 	secondDeliverable := alib.Book{Title: "Обычная 2", BuyURL: "https://e/2"}
-	firstChunks, err := digest.Render([]alib.Book{firstDeliverable}, digest.Options{Limit: 4096})
+	firstChunks, err := renderChunks(t, []alib.Book{firstDeliverable}, digest.Options{Limit: 4096})
 	require.NoError(t, err)
 	messageLimit := displayedRuneCount(t, firstChunks[0].Text)
 	state := &fakeState{pending: []alib.Book{oversized, firstDeliverable, secondDeliverable}}

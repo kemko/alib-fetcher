@@ -18,6 +18,15 @@ import (
 	xhtml "golang.org/x/net/html"
 )
 
+func renderChunks(t *testing.T, books []alib.Book, options digest.Options) ([]digest.Chunk, error) {
+	t.Helper()
+
+	chunks, skippedBuyURLs, err := digest.RenderSendable(books, options, 0)
+	require.Empty(t, skippedBuyURLs)
+
+	return chunks, err
+}
+
 func Test_Render_formats_structured_listing_and_escapes_HTML(t *testing.T) {
 	t.Parallel()
 
@@ -46,7 +55,7 @@ func Test_Render_formats_structured_listing_and_escapes_HTML(t *testing.T) {
 	}
 
 	// When
-	chunks, err := digest.Render([]alib.Book{book}, options)
+	chunks, err := renderChunks(t, []alib.Book{book}, options)
 
 	// Then
 	require.NoError(t, err)
@@ -80,7 +89,7 @@ func Test_Render_normalizes_line_breaks_in_all_dynamic_fields(t *testing.T) {
 	}
 
 	// When
-	chunks, err := digest.Render([]alib.Book{book}, digest.Options{Limit: 4096})
+	chunks, err := renderChunks(t, []alib.Book{book}, digest.Options{Limit: 4096})
 
 	// Then
 	require.NoError(t, err)
@@ -202,7 +211,7 @@ func Test_Render_highlights_publication_year(t *testing.T) {
 			}
 
 			// When
-			chunks, err := digest.Render([]alib.Book{book}, digest.Options{
+			chunks, err := renderChunks(t, []alib.Book{book}, digest.Options{
 				Limit:               4096,
 				LocalTime:           test.localTime,
 				FreshBooksLowerYear: optionalYear(test.freshness, test.lowerYear),
@@ -243,7 +252,7 @@ func Test_Render_omits_optional_fields_without_extra_sections(t *testing.T) {
 	}
 
 	// When
-	chunks, err := digest.Render([]alib.Book{book}, digest.Options{Limit: 4096})
+	chunks, err := renderChunks(t, []alib.Book{book}, digest.Options{Limit: 4096})
 
 	// Then
 	require.NoError(t, err)
@@ -268,7 +277,7 @@ func Test_Render_separates_listings_with_divider(t *testing.T) {
 	}
 
 	// When
-	chunks, err := digest.Render(books, digest.Options{Limit: 4096})
+	chunks, err := renderChunks(t, books, digest.Options{Limit: 4096})
 
 	// Then
 	require.NoError(t, err)
@@ -307,7 +316,7 @@ func Test_Render_splits_only_between_complete_listings(t *testing.T) {
 	require.Greater(t, displayedRuneCount(t, header+secondMessage), messageLimit)
 
 	// When
-	chunks, err := digest.Render(books, digest.Options{Limit: messageLimit, LocalTime: localTime})
+	chunks, err := renderChunks(t, books, digest.Options{Limit: messageLimit, LocalTime: localTime})
 
 	// Then
 	require.NoError(t, err)
@@ -336,7 +345,7 @@ func Test_Render_uses_header_only_chunk_when_first_listing_fits_only_without_hea
 		BuyURL: "https://example.com/1",
 	}
 	header := `<b>Новые книги на Alib.ru</b>`
-	unlimitedChunks, err := digest.Render([]alib.Book{book}, digest.Options{Limit: 4096})
+	unlimitedChunks, err := renderChunks(t, []alib.Book{book}, digest.Options{Limit: 4096})
 	require.NoError(t, err)
 	require.Len(t, unlimitedChunks, 1)
 	require.True(t, strings.HasPrefix(unlimitedChunks[0].Text, header+`<br/><br/>`))
@@ -346,7 +355,7 @@ func Test_Render_uses_header_only_chunk_when_first_listing_fits_only_without_hea
 	require.Greater(t, displayedRuneCount(t, header+listing), messageLimit)
 
 	// When
-	chunks, err := digest.Render([]alib.Book{book}, digest.Options{Limit: messageLimit})
+	chunks, err := renderChunks(t, []alib.Book{book}, digest.Options{Limit: messageLimit})
 
 	// Then
 	require.NoError(t, err)
@@ -364,13 +373,13 @@ func Test_Render_does_not_count_divider_toward_message_limit(t *testing.T) {
 		{Title: "Первая", BuyURL: "https://example.com/1"},
 		{Title: "Вторая", BuyURL: "https://example.com/2"},
 	}
-	unlimitedChunks, err := digest.Render(books, digest.Options{Limit: 4096})
+	unlimitedChunks, err := renderChunks(t, books, digest.Options{Limit: 4096})
 	require.NoError(t, err)
 	require.Len(t, unlimitedChunks, 1)
 	limitWithoutDivider := displayedRuneCount(t, strings.Replace(unlimitedChunks[0].Text, "<hr/>", "", 1))
 
 	// When
-	chunks, err := digest.Render(books, digest.Options{Limit: limitWithoutDivider})
+	chunks, err := renderChunks(t, books, digest.Options{Limit: limitWithoutDivider})
 
 	// Then
 	require.NoError(t, err)
@@ -392,7 +401,7 @@ func Test_Render_splits_before_rich_message_block_limit(t *testing.T) {
 	}
 
 	// When
-	chunks, err := digest.Render(books, digest.Options{Limit: messageLimit})
+	chunks, err := renderChunks(t, books, digest.Options{Limit: messageLimit})
 
 	// Then
 	require.NoError(t, err)
@@ -417,12 +426,12 @@ func Test_Render_rejects_listing_over_rune_limit(t *testing.T) {
 	}
 
 	// When
-	chunks, err := digest.Render([]alib.Book{book}, digest.Options{Limit: 64})
+	item, err := digest.RenderBook(book, digest.Options{Limit: 64})
 
 	// Then
 	require.ErrorIs(t, err, digest.ErrMessageTooLong)
 	require.ErrorContains(t, err, book.BuyURL)
-	require.Empty(t, chunks)
+	require.Empty(t, item)
 }
 
 func Test_RenderSendable_skips_oversized_listings_in_one_pass(t *testing.T) {
@@ -526,7 +535,7 @@ func Test_RenderSendable_splits_failure_summary_when_text_limit_is_reached(t *te
 
 	// Given
 	book := alib.Book{Title: "Книга", BuyURL: "https://example.com/book"}
-	unlimitedChunks, err := digest.Render([]alib.Book{book}, digest.Options{Limit: 4096})
+	unlimitedChunks, err := renderChunks(t, []alib.Book{book}, digest.Options{Limit: 4096})
 	require.NoError(t, err)
 	limit := displayedRuneCount(t, unlimitedChunks[0].Text)
 
@@ -572,7 +581,7 @@ func Test_Render_preserves_content_at_or_below_item_limit(t *testing.T) {
 		Content: "я",
 		BuyURL:  "https://example.com/book",
 	}
-	unlimitedChunks, err := digest.Render([]alib.Book{book}, digest.Options{Limit: 4096})
+	unlimitedChunks, err := renderChunks(t, []alib.Book{book}, digest.Options{Limit: 4096})
 	require.NoError(t, err)
 	listing := strings.TrimPrefix(unlimitedChunks[0].Text, `<b>Новые книги на Alib.ru</b><br/><br/>`)
 	listingLength := displayedRuneCount(t, listing)
@@ -589,7 +598,7 @@ func Test_Render_preserves_content_at_or_below_item_limit(t *testing.T) {
 			t.Parallel()
 
 			// When
-			chunks, renderErr := digest.Render([]alib.Book{book}, digest.Options{Limit: test.limit})
+			chunks, _, renderErr := digest.RenderSendable([]alib.Book{book}, digest.Options{Limit: test.limit}, 0)
 
 			// Then
 			require.NoError(t, renderErr)
@@ -616,13 +625,13 @@ func Test_Render_truncates_long_content_to_limit_minus_one(t *testing.T) {
 	}
 	candidate := book
 	candidate.Content = prefix + "…"
-	candidateChunks, err := digest.Render([]alib.Book{candidate}, digest.Options{Limit: 4096})
+	candidateChunks, err := renderChunks(t, []alib.Book{candidate}, digest.Options{Limit: 4096})
 	require.NoError(t, err)
 	listing := strings.TrimPrefix(candidateChunks[0].Text, `<b>Новые книги на Alib.ru</b><br/><br/>`)
 	messageLimit := displayedRuneCount(t, listing) + 1
 
 	// When
-	chunks, err := digest.Render([]alib.Book{book}, digest.Options{Limit: messageLimit})
+	chunks, _, err := digest.RenderSendable([]alib.Book{book}, digest.Options{Limit: messageLimit}, 0)
 	sendableChunks, skippedBuyURLs, sendableErr := digest.RenderSendable(
 		[]alib.Book{book},
 		digest.Options{Limit: messageLimit},
@@ -653,13 +662,13 @@ func Test_Render_truncates_content_at_escaped_rune_boundary(t *testing.T) {
 	}
 	candidate := book
 	candidate.Content = "абв…"
-	candidateChunks, err := digest.Render([]alib.Book{candidate}, digest.Options{Limit: 4096})
+	candidateChunks, err := renderChunks(t, []alib.Book{candidate}, digest.Options{Limit: 4096})
 	require.NoError(t, err)
 	listing := strings.TrimPrefix(candidateChunks[0].Text, `<b>Новые книги на Alib.ru</b><br/><br/>`)
 	messageLimit := displayedRuneCount(t, listing) + 2
 
 	// When
-	chunks, err := digest.Render([]alib.Book{book}, digest.Options{Limit: messageLimit})
+	chunks, _, err := digest.RenderSendable([]alib.Book{book}, digest.Options{Limit: messageLimit}, 0)
 
 	// Then
 	require.NoError(t, err)
@@ -684,13 +693,13 @@ func Test_Render_truncates_content_by_source_runes_without_mutating_chunk_book(t
 	}
 	candidate := book
 	candidate.Content = "начало &…"
-	candidateChunks, err := digest.Render([]alib.Book{candidate}, digest.Options{Limit: 4096})
+	candidateChunks, err := renderChunks(t, []alib.Book{candidate}, digest.Options{Limit: 4096})
 	require.NoError(t, err)
 	listing := strings.TrimPrefix(candidateChunks[0].Text, `<b>Новые книги на Alib.ru</b><br/><br/>`)
 	messageLimit := displayedRuneCount(t, listing) + 1
 
 	// When
-	chunks, err := digest.Render([]alib.Book{book}, digest.Options{Limit: messageLimit})
+	chunks, _, err := digest.RenderSendable([]alib.Book{book}, digest.Options{Limit: messageLimit}, 0)
 
 	// Then
 	require.NoError(t, err)
@@ -730,7 +739,7 @@ func Test_Render_returns_no_chunks_for_no_books(t *testing.T) {
 	t.Parallel()
 
 	// When
-	chunks, err := digest.Render(nil, digest.Options{Limit: 4096})
+	chunks, err := renderChunks(t, nil, digest.Options{Limit: 4096})
 
 	// Then
 	require.NoError(t, err)
@@ -755,7 +764,7 @@ func Test_Render_parses_and_sends_belyaev_listing_with_long_photo_urls(t *testin
 
 	// When
 	for _, limit := range []int{4000, 32000} {
-		chunks, renderErr := digest.Render(books, digest.Options{Limit: limit})
+		chunks, _, renderErr := digest.RenderSendable(books, digest.Options{Limit: limit}, 0)
 
 		// Then
 		require.NoError(t, renderErr)
@@ -794,7 +803,7 @@ func Test_Render_keeps_all_photo_links_and_captions(t *testing.T) {
 	}
 
 	// When
-	chunks, err := digest.Render([]alib.Book{book}, digest.Options{Limit: 4096})
+	chunks, err := renderChunks(t, []alib.Book{book}, digest.Options{Limit: 4096})
 
 	// Then
 	require.NoError(t, err)
@@ -818,7 +827,7 @@ func Test_Render_splits_mixed_listings_at_rich_message_block_limit(t *testing.T)
 	})
 
 	// When
-	chunks, err := digest.Render(books, digest.Options{Limit: 32000})
+	chunks, err := renderChunks(t, books, digest.Options{Limit: 32000})
 
 	// Then
 	require.NoError(t, err)
@@ -829,7 +838,7 @@ func Test_Render_splits_mixed_listings_at_rich_message_block_limit(t *testing.T)
 	require.Contains(t, chunks[1].Text, "https://example.com/image")
 
 	books = append(books, alib.Book{Title: "После границы", BuyURL: "https://example.com/after"})
-	chunks, err = digest.Render(books, digest.Options{Limit: 32000})
+	chunks, _, err = digest.RenderSendable(books, digest.Options{Limit: 32000}, 0)
 	require.NoError(t, err)
 	require.Len(t, chunks, 2)
 	require.Len(t, chunks[0].Books, 250)
