@@ -532,6 +532,15 @@ func Test_run_sends_only_last_wired_message_with_sound(t *testing.T) {
 func Test_run_once_fetches_categories_and_series_in_order_and_sends_partial_deduplicated_result(t *testing.T) {
 	// Given
 	useOnceMode(t)
+	const (
+		recoveredPath  = "/recovered-book.html"
+		truncatedPath  = "/truncated-book.html"
+		oversizedPath  = "/oversized-book.html"
+		messageLimit   = 500
+		truncatedTitle = "Сокращаемая книга"
+	)
+	truncatedContent := strings.Repeat("Длинное описание книги. ", 100)
+	oversizedTitle := strings.Repeat("Обязательное поле ", 1000)
 	alibRequests := make(chan alibRequest, 4)
 	alibServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		alibRequests <- alibRequest{Path: request.URL.Path, RawQuery: request.URL.RawQuery}
@@ -539,8 +548,13 @@ func Test_run_once_fetches_categories_and_series_in_order_and_sends_partial_dedu
 		switch {
 		case request.URL.Path == "/first.phtml":
 			_, err := writer.Write([]byte(
-				listingPage("Первый", "/first-book.html", "100 руб.") +
-					listingPage("Общий первый", "/shared-book.html", "200 руб."),
+				`<p><a href="/bs.php4?bs=Seller">BS - Seller</a><br>` +
+					`<b>Сбойное объявление.</b> М., 2026 г. <a href="` + recoveredPath + `"><b>Купить</b></a></p>` +
+					`<p><b>` + truncatedTitle + `.</b> Цена: 100 руб. ` +
+					`<a href="` + truncatedPath + `"><b>Купить</b></a><br>` +
+					truncatedContent + `</p>` +
+					`<p><b>` + oversizedTitle + `.</b> Цена: 200 руб. ` +
+					`<a href="` + oversizedPath + `"><b>Купить</b></a></p>`,
 			))
 			assert.NoError(t, err)
 		case request.URL.Path == "/broken.phtml":
@@ -551,8 +565,7 @@ func Test_run_once_fetches_categories_and_series_in_order_and_sends_partial_dedu
 			assert.NoError(t, decodeErr)
 			assert.Equal(t, "Серия, тома", decodedSeries)
 			_, err := writer.Write([]byte(
-				listingPage("Общий второй", "/shared-book.html", "999 руб.") +
-					listingPage("Последний", "/last-book.html", "300 руб."),
+				listingPage("Восстановленная книга", recoveredPath, "999 руб."),
 			))
 			assert.NoError(t, err)
 		case request.URL.Path == "/findp.php4" && request.URL.Query().Get("seria") == "changed":
@@ -564,7 +577,7 @@ func Test_run_once_fetches_categories_and_series_in_order_and_sends_partial_dedu
 	}))
 	t.Cleanup(alibServer.Close)
 
-	telegramRequests := make(chan telegramRequest, 2)
+	telegramRequests := make(chan telegramRequest, 8)
 	telegramServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		telegramRequests <- telegramRequest{Message: decodeTelegramMessage(t, request), Path: request.URL.Path}
 		writer.Header().Set("Content-Type", "application/json")
@@ -577,6 +590,7 @@ func Test_run_once_fetches_categories_and_series_in_order_and_sends_partial_dedu
 	setRunEnvironment(t, telegramServer.URL, statePath)
 	t.Setenv("ALIB_CATEGORIES", "first,broken")
 	t.Setenv("ALIB_SERIES", `"Серия, тома",changed`)
+	t.Setenv("MESSAGE_LIMIT", strconv.Itoa(messageLimit))
 	settings, err := config.Load()
 	require.NoError(t, err)
 	require.Equal(t, []string{
@@ -600,21 +614,31 @@ func Test_run_once_fetches_categories_and_series_in_order_and_sends_partial_dedu
 		{Path: "/findp.php4", RawQuery: "seria=%D1%E5%F0%E8%FF%2C+%F2%EE%EC%E0&lday=7"},
 		{Path: "/findp.php4", RawQuery: "seria=changed&lday=7"},
 	}, []alibRequest{<-alibRequests, <-alibRequests, <-alibRequests, <-alibRequests})
-	require.Len(t, telegramRequests, 1)
-	message := (<-telegramRequests).Message
-	richHTML := message.RichMessage.HTML
-	for _, buyURL := range []string{
-		alibServer.URL + "/first-book.html",
-		alibServer.URL + "/shared-book.html",
-		alibServer.URL + "/last-book.html",
-	} {
-		require.Contains(t, richHTML, buyURL)
+	firstCycleMessages := make([]telegramRequest, len(telegramRequests))
+	for index := range firstCycleMessages {
+		firstCycleMessages[index] = <-telegramRequests
 	}
-	require.Less(t, strings.Index(richHTML, "Первый"), strings.Index(richHTML, "Общий первый"))
-	require.Less(t, strings.Index(richHTML, "Общий первый"), strings.Index(richHTML, "Последний"))
-	require.NotContains(t, richHTML, "Общий второй")
-	require.Equal(t, 1, strings.Count(richHTML, "Новые книги на Alib.ru"))
-	requireRefreshButton(t, message)
+	require.NotEmpty(t, firstCycleMessages)
+	firstCycleHTML := make([]string, 0, len(firstCycleMessages))
+	for index, request := range firstCycleMessages {
+		require.Equal(t, "/bottest-token/sendRichMessage", request.Path)
+		require.LessOrEqual(t, displayedRuneCount(t, request.Message.RichMessage.HTML), messageLimit)
+		require.NotRegexp(t, `[\n]`, request.Message.RichMessage.HTML)
+		if index == len(firstCycleMessages)-1 {
+			requireRefreshButton(t, request.Message)
+		} else {
+			require.Nil(t, request.Message.ReplyMarkup)
+		}
+		firstCycleHTML = append(firstCycleHTML, request.Message.RichMessage.HTML)
+	}
+	combinedHTML := strings.Join(firstCycleHTML, "\n")
+	require.Contains(t, combinedHTML, alibServer.URL+recoveredPath)
+	require.Contains(t, combinedHTML, alibServer.URL+truncatedPath)
+	require.NotContains(t, combinedHTML, alibServer.URL+oversizedPath)
+	require.Contains(t, combinedHTML, "Восстановленная книга")
+	require.NotContains(t, combinedHTML, "Сбойное объявление")
+	require.Contains(t, combinedHTML, "…")
+	require.Equal(t, 1, strings.Count(combinedHTML, "Не удалось обработать книг: 1"))
 	logOutput := logs.String()
 	require.Equal(t, 3, strings.Count(logOutput, `"msg":"alib.page_downloaded"`))
 	require.Equal(t, 1, strings.Count(logOutput, `"msg":"alib.page_download_failed"`))
@@ -625,7 +649,7 @@ func Test_run_once_fetches_categories_and_series_in_order_and_sends_partial_dedu
 	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","index":3,"url":"`+alibServer.URL+`/findp.php4?seria=changed&lday=7"`)
 	require.Contains(t, logOutput, `"msg":"alib.page_download_failed","index":1,"url":"`+alibServer.URL+`/broken.phtml?tnew=7"`)
 	require.Contains(t, logOutput, `"msg":"alib.page_parsed","index":0,"url":"`+alibServer.URL+`/first.phtml?tnew=7","books":2`)
-	require.Contains(t, logOutput, `"msg":"alib.page_parsed","index":2,"url":"`+alibServer.URL+`/findp.php4?seria=%D1%E5%F0%E8%FF%2C+%F2%EE%EC%E0&lday=7","books":2`)
+	require.Contains(t, logOutput, `"msg":"alib.page_parsed","index":2,"url":"`+alibServer.URL+`/findp.php4?seria=%D1%E5%F0%E8%FF%2C+%F2%EE%EC%E0&lday=7","books":1`)
 	require.Contains(t, logOutput, `"msg":"alib.page_parse_failed","index":3,"url":"`+alibServer.URL+`/findp.php4?seria=changed&lday=7"`)
 	require.Less(t,
 		strings.LastIndex(logOutput, `"msg":"alib.page_downloaded"`),
@@ -634,15 +658,37 @@ func Test_run_once_fetches_categories_and_series_in_order_and_sends_partial_dedu
 	require.NotContains(t, logOutput, `"msg":"alib.page_failed"`)
 	require.Contains(t, logOutput, `"msg":"digest.completed"`)
 	require.Contains(t, logOutput, `"fetched":3`)
-	require.Contains(t, logOutput, `"new":3`)
-	require.Contains(t, logOutput, `"sent":3`)
+	require.Contains(t, logOutput, `"new":2`)
+	require.Contains(t, logOutput, `"failed":1`)
+	require.Contains(t, logOutput, `"sent":2`)
 
 	state, err := store.Open(statePath, time.Now())
 	require.NoError(t, err)
+	existing, err := state.Existing(context.Background(), []alib.Book{
+		{BuyURL: alibServer.URL + recoveredPath},
+		{BuyURL: alibServer.URL + truncatedPath},
+		{BuyURL: alibServer.URL + oversizedPath},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []bool{true, true, false}, existing)
 	pending, err := state.Pending(context.Background())
 	require.NoError(t, err)
 	require.NoError(t, state.Close())
 	require.Empty(t, pending)
+
+	// When
+	err = runWithConfig(logger, settings, true)
+
+	// Then
+	require.NoError(t, err)
+	require.Len(t, telegramRequests, 1)
+	secondCycleMessage := (<-telegramRequests).Message
+	require.Contains(t, secondCycleMessage.RichMessage.HTML, "Не удалось обработать книг: 1")
+	require.NotContains(t, secondCycleMessage.RichMessage.HTML, alibServer.URL+recoveredPath)
+	require.NotContains(t, secondCycleMessage.RichMessage.HTML, alibServer.URL+truncatedPath)
+	require.NotContains(t, secondCycleMessage.RichMessage.HTML, alibServer.URL+oversizedPath)
+	requireRefreshButton(t, secondCycleMessage)
+	require.Equal(t, 1, strings.Count(combinedHTML, "Не удалось обработать книг: 1"))
 }
 
 func Test_run_once_accepts_all_correct_empty_pages_without_telegram_delivery(t *testing.T) {
