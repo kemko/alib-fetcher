@@ -147,6 +147,7 @@ func Test_Sender_completes_API_calls_while_polling_is_held(t *testing.T) {
 
 	// Given
 	pollStarted := make(chan struct{}, 1)
+	pollCanceled := make(chan struct{}, 1)
 	pollRelease := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		_, err := io.Copy(io.Discard, request.Body)
@@ -159,6 +160,10 @@ func Test_Sender_completes_API_calls_while_polling_is_held(t *testing.T) {
 			select {
 			case <-pollRelease:
 			case <-request.Context().Done():
+				select {
+				case pollCanceled <- struct{}{}:
+				default:
+				}
 				return
 			}
 			writeTelegramResponse(t, writer, `{"ok":true,"result":[]}`)
@@ -174,11 +179,12 @@ func Test_Sender_completes_API_calls_while_polling_is_held(t *testing.T) {
 		writeTelegramResponse(t, writer, `{"ok":true,"result":true}`)
 	}))
 	t.Cleanup(server.Close)
+	t.Cleanup(func() { close(pollRelease) })
 	sender, err := telegram.NewSender(telegram.Config{
 		APIBase: server.URL,
 		Token:   "test-token",
 		ChatID:  "-100123",
-		Timeout: 5 * time.Second,
+		Timeout: 30 * time.Second,
 	})
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -214,7 +220,7 @@ func Test_Sender_completes_API_calls_while_polling_is_held(t *testing.T) {
 		t.Fatal("callback answer remained blocked by polling")
 	}
 	cancel()
-	close(pollRelease)
+	waitForSignal(t, pollCanceled, "active polling request was not canceled")
 	waitForListener(t, listenerDone)
 }
 

@@ -125,6 +125,59 @@ func Test_Service_retries_unrenderable_new_book_without_recording(t *testing.T) 
 	require.Len(t, sender.messages, 2)
 }
 
+func Test_Service_preserves_state_at_content_truncation_boundary(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	now := time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC)
+	state, err := store.Open(filepath.Join(t.TempDir(), "state.db"), now)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, state.Close()) })
+	newBook := alib.Book{
+		Title:   strings.Repeat("я", 51),
+		Content: "длинное описание",
+		BuyURL:  "https://example.com/new",
+	}
+	pendingBook := newBook
+	pendingBook.BuyURL = "https://example.com/pending"
+	truncatedBook := newBook
+	truncatedBook.Title = strings.Repeat("я", 50)
+	truncatedBook.BuyURL = "https://example.com/truncated"
+	exactBook := newBook
+	exactBook.Content = "я"
+	exactBook.BuyURL = "https://example.com/exact"
+	books := []alib.Book{newBook, pendingBook, truncatedBook, exactBook}
+	_, err = state.RecordDiscovered(context.Background(), []alib.Book{pendingBook}, now.Add(-time.Hour))
+	require.NoError(t, err)
+	sender := &fakeSender{}
+	service := app.NewService(app.Dependencies{
+		Fetcher:      fakeFetcher{books: books},
+		State:        state,
+		Sender:       sender,
+		MessageLimit: 64,
+		Now:          func() time.Time { return now },
+	})
+
+	// When
+	result, err := service.Run(context.Background())
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, app.Result{Fetched: 4, New: 2, Sent: 2, Failed: 2}, result)
+	existing, err := state.Existing(context.Background(), books)
+	require.NoError(t, err)
+	require.Equal(t, []bool{false, true, true, true}, existing)
+	pending, err := state.Pending(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []alib.Book{pendingBook}, pending)
+	combined := strings.Join(sender.messages, "")
+	require.NotContains(t, combined, newBook.BuyURL)
+	require.NotContains(t, combined, pendingBook.BuyURL)
+	require.Contains(t, combined, truncatedBook.BuyURL)
+	require.Contains(t, combined, exactBook.BuyURL)
+	require.Equal(t, 1, strings.Count(combined, "Не удалось обработать книг: 2"))
+}
+
 func Test_Service_marks_each_chunk_only_after_delivery(t *testing.T) {
 	t.Parallel()
 

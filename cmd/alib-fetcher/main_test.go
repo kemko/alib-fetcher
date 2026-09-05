@@ -688,7 +688,7 @@ func Test_run_once_fetches_categories_and_series_in_order_and_sends_partial_dedu
 	require.NotContains(t, secondCycleMessage.RichMessage.HTML, alibServer.URL+truncatedPath)
 	require.NotContains(t, secondCycleMessage.RichMessage.HTML, alibServer.URL+oversizedPath)
 	requireRefreshButton(t, secondCycleMessage)
-	require.Equal(t, 1, strings.Count(combinedHTML, "Не удалось обработать книг: 1"))
+	require.Equal(t, 1, strings.Count(secondCycleMessage.RichMessage.HTML, "Не удалось обработать книг: 1"))
 }
 
 func Test_run_once_accepts_all_correct_empty_pages_without_telegram_delivery(t *testing.T) {

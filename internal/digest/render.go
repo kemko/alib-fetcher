@@ -97,10 +97,12 @@ func RenderSendable(books []alib.Book, options Options, previousFailures int) ([
 // RenderBook formats one listing as Telegram HTML.
 func RenderBook(book alib.Book, options Options) (string, error) {
 	item := renderBook(book, options)
-	if renderedRuneCount(item) > options.Limit && strings.TrimSpace(book.Content) != "" {
+	itemLimit := options.Limit
+	if renderedRuneCount(item) > itemLimit && strings.TrimSpace(book.Content) != "" {
 		item = truncateContent(book, options)
+		itemLimit--
 	}
-	if renderedRuneCount(item) > options.Limit {
+	if renderedRuneCount(item) > itemLimit {
 		return "", fmt.Errorf("%w: %s", ErrMessageTooLong, book.BuyURL)
 	}
 

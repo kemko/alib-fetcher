@@ -473,6 +473,58 @@ func Test_RenderSendable_skips_oversized_listings_in_one_pass(t *testing.T) {
 	}, chunks)
 }
 
+func Test_RenderBook_enforces_minimal_content_truncation_boundary(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		titleLength int
+		fits        bool
+	}{
+		{name: "minimal content at limit minus one", titleLength: 50, fits: true},
+		{name: "minimal content at limit", titleLength: 51, fits: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Given
+			book := alib.Book{
+				Title:   strings.Repeat("я", test.titleLength),
+				Content: "длинное описание",
+				BuyURL:  "https://example.com/book",
+			}
+			options := digest.Options{Limit: 64}
+
+			// When
+			item, err := digest.RenderBook(book, options)
+			chunks, skippedBuyURLs, sendableErr := digest.RenderSendable([]alib.Book{book}, options, 0)
+
+			// Then
+			require.NoError(t, sendableErr)
+			if !test.fits {
+				require.ErrorIs(t, err, digest.ErrMessageTooLong)
+				require.ErrorContains(t, err, book.BuyURL)
+				require.Empty(t, item)
+				require.Equal(t, []string{book.BuyURL}, skippedBuyURLs)
+				require.Len(t, chunks, 1)
+				require.Empty(t, chunks[0].Books)
+				require.Contains(t, chunks[0].Text, "Не удалось обработать книг: 1")
+				require.NotContains(t, chunks[0].Text, book.BuyURL)
+
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, options.Limit-1, displayedRuneCount(t, item))
+			require.Contains(t, item, "<br/><br/>…<br/><br/>")
+			require.Empty(t, skippedBuyURLs)
+			require.Len(t, chunks, 2)
+			require.Equal(t, item, chunks[1].Text)
+			require.Equal(t, []alib.Book{book}, chunks[1].Books)
+		})
+	}
+}
+
 func Test_RenderSendable_appends_previous_and_oversized_failures(t *testing.T) {
 	t.Parallel()
 
@@ -631,8 +683,8 @@ func Test_Render_truncates_long_content_to_limit_minus_one(t *testing.T) {
 	messageLimit := displayedRuneCount(t, listing) + 1
 
 	// When
-	chunks, _, err := digest.RenderSendable([]alib.Book{book}, digest.Options{Limit: messageLimit}, 0)
-	sendableChunks, skippedBuyURLs, sendableErr := digest.RenderSendable(
+	item, err := digest.RenderBook(book, digest.Options{Limit: messageLimit})
+	chunks, skippedBuyURLs, sendableErr := digest.RenderSendable(
 		[]alib.Book{book},
 		digest.Options{Limit: messageLimit},
 		0,
@@ -643,7 +695,7 @@ func Test_Render_truncates_long_content_to_limit_minus_one(t *testing.T) {
 	require.NoError(t, sendableErr)
 	require.Empty(t, skippedBuyURLs)
 	require.Len(t, chunks, 2)
-	require.Equal(t, chunks, sendableChunks)
+	require.Equal(t, item, chunks[1].Text)
 	require.Equal(t, []alib.Book{}, chunks[0].Books)
 	require.Equal(t, []alib.Book{book}, chunks[1].Books)
 	require.Equal(t, messageLimit-1, displayedRuneCount(t, chunks[1].Text))
