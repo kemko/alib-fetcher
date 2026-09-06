@@ -226,14 +226,14 @@ func Test_NewClient_rejects_non_positive_timeout(t *testing.T) {
 	require.Nil(t, client)
 }
 
-func Test_NewClient_rejects_negative_request_interval(t *testing.T) {
+func Test_NewClient_rejects_negative_max_retries(t *testing.T) {
 	t.Parallel()
 
 	// When
 	client, err := alib.NewClient(
 		[]string{"https://www.alib.ru/tramka.phtml?tnew=7"},
 		time.Second,
-		-time.Second,
+		-1,
 		slog.New(slog.DiscardHandler),
 	)
 
@@ -772,7 +772,7 @@ func Test_Client_returns_combined_error_when_all_pages_fail(t *testing.T) {
 	require.Contains(t, err.Error(), "parse alib URL \""+server.URL+"/broken?scope=broken\"")
 }
 
-func Test_Client_waits_between_requests(t *testing.T) {
+func Test_Client_does_not_pause_between_pages(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -784,12 +784,8 @@ func Test_Client_waits_between_requests(t *testing.T) {
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	client, err := alib.NewClient(
-		[]string{server.URL + "/first", server.URL + "/second"},
-		time.Second,
-		40*time.Millisecond,
-		slog.New(slog.DiscardHandler),
-	)
+	client, err := alib.NewClient([]string{server.URL + "/first", server.URL + "/second"}, time.Second, 0,
+		slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
 	// When
@@ -799,17 +795,52 @@ func Test_Client_waits_between_requests(t *testing.T) {
 	require.NoError(t, err)
 	firstRequest := <-requestTimes
 	secondRequest := <-requestTimes
-	require.GreaterOrEqual(t, secondRequest.Sub(firstRequest), 30*time.Millisecond)
+	require.Less(t, secondRequest.Sub(firstRequest), 500*time.Millisecond)
 }
 
-func Test_Client_waits_between_attempts_after_failure(t *testing.T) {
+func Test_Client_retries_each_page_until_success(t *testing.T) {
 	t.Parallel()
 
 	// Given
-	requestTimes := make(chan time.Time, 2)
+	var requests []string
+	var logs bytes.Buffer
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		requestTimes <- time.Now()
-		if request.URL.Path == "/first" {
+		requests = append(requests, request.URL.Path)
+		if len(requests) == 1 || len(requests) == 3 {
+			writer.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, err := writer.Write([]byte(testutil.ListingPage(request.URL.Path, request.URL.Path+".html", "100 руб.")))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+	client, err := alib.NewClient([]string{server.URL + "/first", server.URL + "/second"}, time.Second, 1,
+		slog.New(slog.NewTextHandler(&logs, nil)))
+	require.NoError(t, err)
+
+	// When
+	result, err := client.FetchWithResult(context.Background())
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, []string{"/first", "/first", "/second", "/second"}, requests)
+	require.Len(t, result.Books, 2)
+	require.Equal(t, 2, strings.Count(logs.String(), "msg=alib.page_download_failed"))
+	require.Contains(t, logs.String(), "msg=alib.page_download_failed index=0 url="+server.URL+
+		"/first error=")
+	require.Contains(t, logs.String(), "attempt=1")
+	require.Contains(t, logs.String(), "attempt=2")
+}
+
+func Test_Client_uses_four_attempts_by_default(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		requestCount++
+		if requestCount < 4 {
 			writer.WriteHeader(http.StatusBadGateway)
 			return
 		}
@@ -818,86 +849,35 @@ func Test_Client_waits_between_attempts_after_failure(t *testing.T) {
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	client, err := alib.NewClient(
-		[]string{server.URL + "/first", server.URL + "/second"},
-		time.Second,
-		40*time.Millisecond,
-		slog.New(slog.DiscardHandler),
-	)
+	client, err := alib.NewClient([]string{server.URL}, time.Second, 3, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
 	// When
-	_, err = client.FetchWithResult(context.Background())
+	result, err := client.FetchWithResult(context.Background())
 
 	// Then
 	require.NoError(t, err)
-	firstRequest := <-requestTimes
-	secondRequest := <-requestTimes
-	require.GreaterOrEqual(t, secondRequest.Sub(firstRequest), 30*time.Millisecond)
+	require.Len(t, result.Books, 1)
+	require.Equal(t, 4, requestCount)
 }
 
-func Test_Client_does_not_wait_after_single_request(t *testing.T) {
-	t.Parallel()
-
+func Test_Client_stops_retry_wait_on_context_cancellation(t *testing.T) {
 	// Given
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, err := writer.Write([]byte(testutil.ListingPage("Book", "/book.html", "100 руб.")))
-		assert.NoError(t, err)
-	}))
-	t.Cleanup(server.Close)
-	client, err := alib.NewClient([]string{server.URL}, time.Second, 5*time.Second, slog.New(slog.DiscardHandler))
-	require.NoError(t, err)
-	result := make(chan error, 1)
-
-	// When
-	go func() {
-		_, fetchErr := client.FetchWithResult(context.Background())
-		result <- fetchErr
-	}()
-
-	// Then
-	select {
-	case err = <-result:
-		require.NoError(t, err)
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("single request waited for the configured interval")
-	}
-}
-
-func Test_Client_returns_context_error_when_canceled_during_wait(t *testing.T) {
-	// Given
-	firstResponse := make(chan struct{})
-	allowFirstResponse := make(chan struct{})
 	requestCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		requestCount++
-		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, err := writer.Write([]byte(testutil.ListingPage("Book", "/book.html", "100 руб.")))
-		assert.NoError(t, err)
-		if requestCount == 1 {
-			close(firstResponse)
-			<-allowFirstResponse
-		}
+		writer.WriteHeader(http.StatusBadGateway)
 	}))
 	t.Cleanup(server.Close)
-	client, err := alib.NewClient(
-		[]string{server.URL + "/first", server.URL + "/second"},
-		time.Second,
-		5*time.Second,
-		slog.New(slog.DiscardHandler),
-	)
+	client, err := alib.NewClient([]string{server.URL}, time.Second, 1, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	result := make(chan error, 1)
 	go func() {
 		_, fetchErr := client.FetchWithResult(ctx)
 		result <- fetchErr
 	}()
-	<-firstResponse
-	close(allowFirstResponse)
-	time.Sleep(10 * time.Millisecond)
+	time.Sleep(20 * time.Millisecond)
 	cancel()
 
 	// When

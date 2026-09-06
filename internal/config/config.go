@@ -23,15 +23,15 @@ var ErrInvalid = errors.New("invalid configuration")
 var errInvalidFreshBooks = errors.New("must use age:N with a non-negative integer or since:YYYY")
 
 const (
-	defaultAlibRequestInterval = time.Second
-	defaultCronSchedule        = "0 0 * * *"
-	defaultHTTPTimeout         = 30 * time.Second
-	defaultMessageLimit        = 32000
-	defaultRunOnStartup        = true
-	defaultStatePath           = "/var/lib/alib-fetcher/state.db"
-	defaultTelegramAPIBase     = "https://api.telegram.org"
-	defaultTimezone            = "Europe/Moscow"
-	telegramHardMessageLimit   = 32768
+	defaultAlibMaxRetries    = 3
+	defaultCronSchedule      = "0 0 * * *"
+	defaultHTTPTimeout       = 30 * time.Second
+	defaultMessageLimit      = 32000
+	defaultRunOnStartup      = true
+	defaultStatePath         = "/var/lib/alib-fetcher/state.db"
+	defaultTelegramAPIBase   = "https://api.telegram.org"
+	defaultTimezone          = "Europe/Moscow"
+	telegramHardMessageLimit = 32768
 )
 
 type freshBooksMode uint8
@@ -58,18 +58,18 @@ func (policy FreshBooksPolicy) LowerYear(currentYear int) int {
 
 // Config contains validated process configuration.
 type Config struct {
-	Location            *time.Location
-	FreshBooks          *FreshBooksPolicy
-	TelegramToken       string
-	TelegramChatID      string
-	TelegramAPIBase     string
-	StatePath           string
-	cronSpec            string
-	AlibURLs            []string
-	AlibRequestInterval time.Duration
-	HTTPTimeout         time.Duration
-	MessageLimit        int
-	RunOnStartup        bool
+	Location        *time.Location
+	FreshBooks      *FreshBooksPolicy
+	TelegramToken   string
+	TelegramChatID  string
+	TelegramAPIBase string
+	StatePath       string
+	cronSpec        string
+	AlibURLs        []string
+	AlibMaxRetries  int
+	HTTPTimeout     time.Duration
+	MessageLimit    int
+	RunOnStartup    bool
 }
 
 // Load reads and validates process environment variables.
@@ -219,10 +219,7 @@ func loadValidatedConfig(settings Config) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	settings.AlibRequestInterval, err = parseNonNegativeDuration(
-		"ALIB_REQUEST_INTERVAL",
-		defaultAlibRequestInterval,
-	)
+	settings.AlibMaxRetries, err = parseNonNegativeInt("ALIB_MAX_RETRIES", defaultAlibMaxRetries)
 	if err != nil {
 		return Config{}, err
 	}
@@ -254,10 +251,10 @@ func parsePositiveDuration(name string, defaultValue time.Duration) (time.Durati
 	return value, nil
 }
 
-func parseNonNegativeDuration(name string, defaultValue time.Duration) (time.Duration, error) {
-	value, err := time.ParseDuration(valueOrDefault(name, defaultValue.String()))
+func parseNonNegativeInt(name string, defaultValue int) (int, error) {
+	value, err := strconv.Atoi(valueOrDefault(name, strconv.Itoa(defaultValue)))
 	if err != nil || value < 0 {
-		return 0, fmt.Errorf("%w: %s must be a non-negative Go duration", ErrInvalid, name)
+		return 0, fmt.Errorf("%w: %s must be a non-negative integer", ErrInvalid, name)
 	}
 
 	return value, nil

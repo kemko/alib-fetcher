@@ -475,7 +475,7 @@ func Test_run_sends_only_last_wired_message_with_sound(t *testing.T) {
 	t.Setenv("ALIB_PUBLISHERS", "")
 	t.Setenv("TELEGRAM_API_BASE", telegramServer.URL)
 	t.Setenv("HTTP_TIMEOUT", "2s")
-	t.Setenv("ALIB_REQUEST_INTERVAL", "0s")
+	t.Setenv("ALIB_MAX_RETRIES", "0")
 	t.Setenv("MESSAGE_LIMIT", "64")
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -893,7 +893,7 @@ func setEnvironmentAbsentDigestConfiguration(t *testing.T) {
 		"MESSAGE_LIMIT",
 		"RUN_ON_STARTUP",
 		"FRESH_BOOKS",
-		"ALIB_REQUEST_INTERVAL",
+		"ALIB_MAX_RETRIES",
 	} {
 		unsetEnvironment(t, key)
 	}
@@ -946,7 +946,7 @@ func setRunEnvironment(t *testing.T, telegramAPIBase, statePath string) {
 	t.Setenv("ALIB_PUBLISHERS", "")
 	t.Setenv("TELEGRAM_API_BASE", telegramAPIBase)
 	t.Setenv("HTTP_TIMEOUT", "2s")
-	t.Setenv("ALIB_REQUEST_INTERVAL", "0s")
+	t.Setenv("ALIB_MAX_RETRIES", "0")
 	t.Setenv("MESSAGE_LIMIT", "4000")
 }
 

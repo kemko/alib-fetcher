@@ -61,7 +61,7 @@ func runWithConfig(logger *slog.Logger, settings config.Config, once bool) error
 	fetcher, err := alib.NewClient(
 		settings.AlibURLs,
 		settings.HTTPTimeout,
-		settings.AlibRequestInterval,
+		settings.AlibMaxRetries,
 		logger,
 	)
 	if err != nil {
