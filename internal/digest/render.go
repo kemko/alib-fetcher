@@ -15,6 +15,7 @@ import (
 
 const (
 	header                = "<b>Новые книги на Alib.ru</b>"
+	emptyNotification     = "Новых книг не обнаружено."
 	lineBreak             = "<br/>"
 	sectionBreak          = lineBreak + lineBreak
 	listingSeparator      = "<hr/>"
@@ -45,8 +46,11 @@ func RenderSendable(books []alib.Book, options Options, previousFailures int) ([
 
 			return summaryChunks, nil, err
 		}
+		if renderedRuneCount(emptyNotification) > options.Limit {
+			return nil, nil, fmt.Errorf("%w: empty notification", ErrMessageTooLong)
+		}
 
-		return nil, nil, nil
+		return []Chunk{{Text: emptyNotification, Books: make([]alib.Book, 0)}}, nil, nil
 	}
 	if renderedRuneCount(header) > options.Limit {
 		return nil, nil, fmt.Errorf("%w: %s", ErrMessageTooLong, books[0].BuyURL)

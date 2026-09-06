@@ -104,7 +104,7 @@ func Test_startCallbackListening_runs_digest_and_removes_old_button_before_new_s
 	require.Less(t, eventIndex(eventsSnapshot, "remove"), eventIndex(eventsSnapshot, "send"))
 }
 
-func Test_handleRefreshCallback_leaves_old_button_when_digest_sends_no_books(t *testing.T) {
+func Test_handleRefreshCallback_sends_empty_notification_when_digest_finds_no_books(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -130,8 +130,10 @@ func Test_handleRefreshCallback_leaves_old_button_when_digest_sends_no_books(t *
 
 	// Then
 	require.Equal(t, []callbackAnswer{{id: "callback-1", text: refreshStartedText}}, client.answersSnapshot())
-	require.Empty(t, client.removalsSnapshot())
-	require.Empty(t, sender.messages)
+	require.Equal(t, []removedReplyMarkup{{chatID: -100123, messageID: 77}}, client.removalsSnapshot())
+	require.Equal(t, []string{"Новых книг не обнаружено."}, sender.messages)
+	require.Equal(t, []bool{false}, sender.silent)
+	require.Equal(t, []bool{true}, sender.attachRefresh)
 }
 
 func Test_handleRefreshCallback_answers_and_skips_when_digest_is_running(t *testing.T) {
@@ -262,7 +264,7 @@ func Test_handleRefreshCallback_continues_after_callback_is_answered(t *testing.
 
 	// Then
 	require.Equal(t, []callbackAnswer{{id: "callback-1", text: refreshStartedText}}, client.answersSnapshot())
-	require.Empty(t, client.removalsSnapshot())
+	require.Equal(t, []removedReplyMarkup{{chatID: -100123, messageID: 77}}, client.removalsSnapshot())
 }
 
 func Test_handleRefreshCallback_cancels_background_digest_on_shutdown(t *testing.T) {

@@ -691,7 +691,7 @@ func Test_run_once_fetches_categories_and_series_in_order_and_sends_partial_dedu
 	require.Equal(t, 1, strings.Count(secondCycleMessage.RichMessage.HTML, "Не удалось обработать книг: 1"))
 }
 
-func Test_run_once_accepts_all_correct_empty_pages_without_telegram_delivery(t *testing.T) {
+func Test_run_once_sends_notification_for_all_correct_empty_pages(t *testing.T) {
 	// Given
 	useOnceMode(t)
 	emptyPage, err := os.ReadFile(filepath.Join("..", "..", "internal", "alib", "testdata", "empty.html"))
@@ -704,10 +704,12 @@ func Test_run_once_accepts_all_correct_empty_pages_without_telegram_delivery(t *
 		assert.NoError(t, writeErr)
 	}))
 	t.Cleanup(alibServer.Close)
-	telegramRequests := make(chan struct{}, 1)
-	telegramServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		telegramRequests <- struct{}{}
-		writer.WriteHeader(http.StatusInternalServerError)
+	telegramRequests := make(chan telegramRequest, 1)
+	telegramServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		telegramRequests <- telegramRequest{Message: decodeTelegramMessage(t, request), Path: request.URL.Path}
+		writer.Header().Set("Content-Type", "application/json")
+		_, writeErr := writer.Write([]byte(`{"ok":true,"result":{}}`))
+		assert.NoError(t, writeErr)
 	}))
 	t.Cleanup(telegramServer.Close)
 
@@ -728,7 +730,12 @@ func Test_run_once_accepts_all_correct_empty_pages_without_telegram_delivery(t *
 		{Path: "/empty-one", RawQuery: "first=true"},
 		{Path: "/empty-two", RawQuery: "second=true"},
 	}, []alibRequest{<-alibRequests, <-alibRequests})
-	require.Empty(t, telegramRequests)
+	require.Len(t, telegramRequests, 1)
+	telegramRequest := <-telegramRequests
+	require.Equal(t, "/bottest-token/sendRichMessage", telegramRequest.Path)
+	require.Equal(t, "Новых книг не обнаружено.", telegramRequest.Message.RichMessage.HTML)
+	require.False(t, telegramRequest.Message.DisableNotification)
+	requireRefreshButton(t, telegramRequest.Message)
 	logOutput := logs.String()
 	require.Equal(t, 2, strings.Count(logOutput, `"msg":"alib.page_downloaded"`))
 	require.Equal(t, 2, strings.Count(logOutput, `"msg":"alib.page_parsed"`))

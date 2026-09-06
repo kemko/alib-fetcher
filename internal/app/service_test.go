@@ -43,6 +43,29 @@ func Test_Service_reports_fetch_listing_errors(t *testing.T) {
 	require.Equal(t, 1, result.Sent)
 }
 
+func Test_Service_does_not_send_empty_notification_on_fetch_error(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	fetchErr := errors.New("Alib unavailable")
+	sender := &fakeSender{}
+	service := app.NewService(app.Dependencies{
+		Fetcher:      fakeFetcher{err: fetchErr},
+		State:        &fakeState{},
+		Sender:       sender,
+		MessageLimit: 4096,
+		Now:          time.Now,
+	})
+
+	// When
+	result, err := service.Run(context.Background())
+
+	// Then
+	require.ErrorIs(t, err, fetchErr)
+	require.Empty(t, sender.messages)
+	require.Equal(t, app.Result{}, result)
+}
+
 func Test_Service_skips_pending_book_that_failed_in_current_parse(t *testing.T) {
 	t.Parallel()
 
@@ -961,27 +984,41 @@ func Test_Service_sends_failure_summary_when_no_books_are_renderable(t *testing.
 	require.Empty(t, state.marked)
 }
 
-func Test_Service_does_not_send_when_no_pending_books(t *testing.T) {
+func Test_Service_sends_empty_notification_when_no_pending_books(t *testing.T) {
 	t.Parallel()
 
 	// Given
 	book := alib.Book{Title: "Уже отправлена", BuyURL: "https://example.com/1"}
+	state := &fakeState{existing: []bool{true}}
 	sender := &fakeSender{}
+	hookCalls := 0
 	service := app.NewService(app.Dependencies{
-		Fetcher:      fakeFetcher{books: []alib.Book{book}},
-		State:        &fakeState{existing: []bool{true}},
-		Sender:       sender,
+		Fetcher: fakeFetcher{books: []alib.Book{book}},
+		State:   state,
+		Sender:  sender,
+		BeforeDelivery: func(context.Context) error {
+			hookCalls++
+
+			return nil
+		},
 		MessageLimit: 4096,
 		Now:          time.Now,
 	})
 
 	// When
-	result, err := service.Run(context.Background())
+	firstResult, firstErr := service.Run(context.Background())
+	secondResult, secondErr := service.Run(context.Background())
 
 	// Then
-	require.NoError(t, err)
-	require.Equal(t, app.Result{Fetched: 1}, result)
-	require.Empty(t, sender.messages)
+	require.NoError(t, firstErr)
+	require.NoError(t, secondErr)
+	require.Equal(t, app.Result{Fetched: 1}, firstResult)
+	require.Equal(t, app.Result{Fetched: 1}, secondResult)
+	require.Equal(t, 2, hookCalls)
+	require.Equal(t, []string{"Новых книг не обнаружено.", "Новых книг не обнаружено."}, sender.messages)
+	require.Equal(t, []bool{false, false}, sender.silent)
+	require.Equal(t, []bool{true, true}, sender.attachRefresh)
+	require.Empty(t, state.marked)
 }
 
 func Test_Service_prunes_state_at_start_of_cycle(t *testing.T) {
@@ -1009,6 +1046,7 @@ func Test_Service_prunes_state_at_start_of_cycle(t *testing.T) {
 
 type fakeFetcher struct {
 	events               *[]string
+	err                  error
 	books                []alib.Book
 	failedBuyURLs        []string
 	unidentifiedFailures int
@@ -1018,6 +1056,10 @@ func (f fakeFetcher) FetchWithResult(context.Context) (alib.FetchResult, error) 
 	if f.events != nil {
 		*f.events = append(*f.events, "fetch")
 	}
+	if f.err != nil {
+		return alib.FetchResult{}, f.err
+	}
+
 	return alib.FetchResult{
 		Books:                f.books,
 		FailedBuyURLs:        f.failedBuyURLs,
