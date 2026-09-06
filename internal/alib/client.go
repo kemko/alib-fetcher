@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/cenkalti/backoff/v7"
 )
 
 const (
@@ -19,6 +21,7 @@ const (
 	logKeyIndex          = "index"
 	logKeyURL            = "url"
 	logKeyBooks          = "books"
+	logKeyAttempt        = "attempt"
 )
 
 // ErrUnexpectedStatus indicates that Alib.ru did not return an HTTP 200 response.
@@ -35,10 +38,10 @@ type FetchResult struct {
 
 // Client fetches book listings from configured Alib.ru pages.
 type Client struct {
-	httpClient      *http.Client
-	logger          *slog.Logger
-	endpoints       []*url.URL
-	requestInterval time.Duration
+	httpClient *http.Client
+	logger     *slog.Logger
+	endpoints  []*url.URL
+	maxRetries int
 }
 
 type downloadedPage struct {
@@ -49,12 +52,12 @@ type downloadedPage struct {
 }
 
 // NewClient builds an Alib.ru client with a bounded request timeout.
-func NewClient(rawURLs []string, timeout, requestInterval time.Duration, logger *slog.Logger) (*Client, error) {
+func NewClient(rawURLs []string, timeout time.Duration, maxRetries int, logger *slog.Logger) (*Client, error) {
 	if timeout <= 0 {
 		return nil, errors.New("create alib client: timeout must be positive")
 	}
-	if requestInterval < 0 {
-		return nil, errors.New("create alib client: request interval must be non-negative")
+	if maxRetries < 0 {
+		return nil, errors.New("create alib client: max retries must be non-negative")
 	}
 	if logger == nil {
 		return nil, errors.New("create alib client: logger is required")
@@ -88,10 +91,10 @@ func NewClient(rawURLs []string, timeout, requestInterval time.Duration, logger 
 	}
 
 	return &Client{
-		httpClient:      &http.Client{Timeout: timeout},
-		endpoints:       endpoints,
-		requestInterval: requestInterval,
-		logger:          logger,
+		httpClient: &http.Client{Timeout: timeout},
+		endpoints:  endpoints,
+		maxRetries: maxRetries,
+		logger:     logger,
 	}, nil
 }
 
@@ -164,17 +167,8 @@ func (c *Client) downloadPages(ctx context.Context) ([]downloadedPage, []error, 
 			}
 			pageURL := endpoint.String()
 			pageErrors = append(pageErrors, fmt.Errorf("download alib URL %q: %w", pageURL, err))
-			c.logger.ErrorContext(ctx, "alib.page_download_failed",
-				slog.Int(logKeyIndex, index), slog.String(logKeyURL, pageURL), slog.Any(logKeyError, err))
 		} else {
 			downloaded = append(downloaded, page)
-			c.logger.InfoContext(ctx, "alib.page_downloaded",
-				slog.Int(logKeyIndex, index), slog.String(logKeyURL, endpoint.String()))
-		}
-		if index < len(c.endpoints)-1 {
-			if waitErr := wait(ctx, c.requestInterval); waitErr != nil {
-				return nil, nil, waitErr
-			}
 		}
 	}
 
@@ -182,6 +176,34 @@ func (c *Client) downloadPages(ctx context.Context) ([]downloadedPage, []error, 
 }
 
 func (c *Client) downloadPage(ctx context.Context, index int, endpoint *url.URL) (downloadedPage, error) {
+	attempt := 0
+	return backoff.Retry(ctx, func() (downloadedPage, error) {
+		attempt++
+		page, err := c.downloadPageAttempt(ctx, index, endpoint)
+		if err != nil {
+			c.logger.ErrorContext(ctx, "alib.page_download_failed",
+				slog.Int(logKeyIndex, index), slog.String(logKeyURL, endpoint.String()),
+				slog.Any(logKeyError, err), slog.Int(logKeyAttempt, attempt))
+			return downloadedPage{}, err
+		}
+		c.logger.InfoContext(ctx, "alib.page_downloaded",
+			slog.Int(logKeyIndex, index), slog.String(logKeyURL, endpoint.String()), slog.Int(logKeyAttempt, attempt))
+
+		return page, nil
+	}, backoff.WithBackOff(newPageBackOff()), backoff.WithMaxTries(uint(c.maxRetries)+1),
+		backoff.WithMaxElapsedTime(0))
+}
+
+func newPageBackOff() *backoff.ExponentialBackOff {
+	return &backoff.ExponentialBackOff{
+		InitialInterval:     time.Second,
+		Multiplier:          2,
+		MaxInterval:         30 * time.Second,
+		RandomizationFactor: 0,
+	}
+}
+
+func (c *Client) downloadPageAttempt(ctx context.Context, index int, endpoint *url.URL) (downloadedPage, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
 		return downloadedPage{}, fmt.Errorf("create alib request %d: %w", index, err)
@@ -250,19 +272,4 @@ func urlErrorCause(err error) error {
 	}
 
 	return err
-}
-
-func wait(ctx context.Context, duration time.Duration) error {
-	if duration == 0 {
-		return nil
-	}
-
-	timer := time.NewTimer(duration)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 }

@@ -16,17 +16,17 @@ import (
 func Test_Load_applies_service_defaults(t *testing.T) {
 	// Given
 	setEnvironment(t, map[string]string{
-		"TELEGRAM_BOT_TOKEN":    "token",
-		"TELEGRAM_CHAT_ID":      "-100123",
-		"CRON_SCHEDULE":         "",
-		"TIMEZONE":              "",
-		"STATE_PATH":            "",
-		"ALIB_REQUEST_INTERVAL": "",
-		"TELEGRAM_API_BASE":     "",
-		"HTTP_TIMEOUT":          "",
-		"MESSAGE_LIMIT":         "",
-		"RUN_ON_STARTUP":        "",
-		"FRESH_BOOKS":           "",
+		"TELEGRAM_BOT_TOKEN": "token",
+		"TELEGRAM_CHAT_ID":   "-100123",
+		"CRON_SCHEDULE":      "",
+		"TIMEZONE":           "",
+		"STATE_PATH":         "",
+		"ALIB_MAX_RETRIES":   "",
+		"TELEGRAM_API_BASE":  "",
+		"HTTP_TIMEOUT":       "",
+		"MESSAGE_LIMIT":      "",
+		"RUN_ON_STARTUP":     "",
+		"FRESH_BOOKS":        "",
 	})
 
 	// When
@@ -38,7 +38,7 @@ func Test_Load_applies_service_defaults(t *testing.T) {
 	require.Equal(t, "Europe/Moscow", loaded.Location.String())
 	require.Equal(t, "/var/lib/alib-fetcher/state.db", loaded.StatePath)
 	require.Equal(t, []string{"https://www.alib.ru/tramka.phtml?tnew=7"}, loaded.AlibURLs)
-	require.Equal(t, time.Second, loaded.AlibRequestInterval)
+	require.Equal(t, 3, loaded.AlibMaxRetries)
 	require.Equal(t, "https://api.telegram.org", loaded.TelegramAPIBase)
 	require.Equal(t, 30*time.Second, loaded.HTTPTimeout)
 	require.Equal(t, 32000, loaded.MessageLimit)
@@ -95,17 +95,17 @@ func Test_LoadStatePath_reads_environment_without_full_configuration(t *testing.
 	// Given
 	const statePath = "/tmp/alib-fetcher-maintenance.db"
 	setEnvironment(t, map[string]string{
-		"STATE_PATH":            statePath,
-		"TELEGRAM_BOT_TOKEN":    "",
-		"TELEGRAM_CHAT_ID":      "",
-		"CRON_SCHEDULE":         "not a cron expression",
-		"TIMEZONE":              "not a timezone",
-		"HTTP_TIMEOUT":          "not a duration",
-		"MESSAGE_LIMIT":         "not a number",
-		"RUN_ON_STARTUP":        "not a boolean",
-		"ALIB_REQUEST_INTERVAL": "",
-		"TELEGRAM_API_BASE":     "",
-		"FRESH_BOOKS":           "",
+		"STATE_PATH":         statePath,
+		"TELEGRAM_BOT_TOKEN": "",
+		"TELEGRAM_CHAT_ID":   "",
+		"CRON_SCHEDULE":      "not a cron expression",
+		"TIMEZONE":           "not a timezone",
+		"HTTP_TIMEOUT":       "not a duration",
+		"MESSAGE_LIMIT":      "not a number",
+		"RUN_ON_STARTUP":     "not a boolean",
+		"ALIB_MAX_RETRIES":   "",
+		"TELEGRAM_API_BASE":  "",
+		"FRESH_BOOKS":        "",
 	})
 
 	// When
@@ -234,17 +234,17 @@ func Test_Load_rejects_invalid_fresh_books_policy(t *testing.T) {
 func Test_Load_parses_custom_schedule(t *testing.T) {
 	// Given
 	setEnvironment(t, map[string]string{
-		"TELEGRAM_BOT_TOKEN":    "token",
-		"TELEGRAM_CHAT_ID":      "@books",
-		"CRON_SCHEDULE":         "*/15 8-18 * * 1-5",
-		"TIMEZONE":              "Asia/Tbilisi",
-		"STATE_PATH":            "/tmp/custom.db",
-		"ALIB_CATEGORIES":       "books",
-		"ALIB_REQUEST_INTERVAL": "250ms",
-		"TELEGRAM_API_BASE":     "https://telegram.example.test",
-		"HTTP_TIMEOUT":          "15s",
-		"MESSAGE_LIMIT":         "3500",
-		"RUN_ON_STARTUP":        "false",
+		"TELEGRAM_BOT_TOKEN": "token",
+		"TELEGRAM_CHAT_ID":   "@books",
+		"CRON_SCHEDULE":      "*/15 8-18 * * 1-5",
+		"TIMEZONE":           "Asia/Tbilisi",
+		"STATE_PATH":         "/tmp/custom.db",
+		"ALIB_CATEGORIES":    "books",
+		"ALIB_MAX_RETRIES":   "5",
+		"TELEGRAM_API_BASE":  "https://telegram.example.test",
+		"HTTP_TIMEOUT":       "15s",
+		"MESSAGE_LIMIT":      "3500",
+		"RUN_ON_STARTUP":     "false",
 	})
 
 	// When
@@ -255,7 +255,7 @@ func Test_Load_parses_custom_schedule(t *testing.T) {
 	require.Equal(t, "*/15 8-18 * * 1-5", loaded.CronSpec())
 	require.Equal(t, "Asia/Tbilisi", loaded.Location.String())
 	require.Equal(t, 15*time.Second, loaded.HTTPTimeout)
-	require.Equal(t, 250*time.Millisecond, loaded.AlibRequestInterval)
+	require.Equal(t, 5, loaded.AlibMaxRetries)
 	require.Equal(t, 3500, loaded.MessageLimit)
 	require.False(t, loaded.RunOnStartup)
 }
@@ -499,19 +499,19 @@ func Test_Load_rejects_invalid_HTTP_timeout(t *testing.T) {
 	}
 }
 
-func Test_Load_accepts_non_negative_Alib_request_interval(t *testing.T) {
-	testCases := map[string]time.Duration{
+func Test_Load_accepts_non_negative_Alib_max_retries(t *testing.T) {
+	testCases := map[string]int{
 		"zero":     0,
-		"positive": 250 * time.Millisecond,
+		"positive": 250,
 	}
 
 	for name, expected := range testCases {
 		t.Run(name, func(t *testing.T) {
 			// Given
 			setEnvironment(t, map[string]string{
-				"TELEGRAM_BOT_TOKEN":    "token",
-				"TELEGRAM_CHAT_ID":      "-100123",
-				"ALIB_REQUEST_INTERVAL": expected.String(),
+				"TELEGRAM_BOT_TOKEN": "token",
+				"TELEGRAM_CHAT_ID":   "-100123",
+				"ALIB_MAX_RETRIES":   strconv.Itoa(expected),
 			})
 
 			// When
@@ -519,19 +519,19 @@ func Test_Load_accepts_non_negative_Alib_request_interval(t *testing.T) {
 
 			// Then
 			require.NoError(t, err)
-			require.Equal(t, expected, loaded.AlibRequestInterval)
+			require.Equal(t, expected, loaded.AlibMaxRetries)
 		})
 	}
 }
 
-func Test_Load_rejects_invalid_Alib_request_interval(t *testing.T) {
-	for _, value := range []string{"invalid", "-1s"} {
+func Test_Load_rejects_invalid_Alib_max_retries(t *testing.T) {
+	for _, value := range []string{"invalid", "-1", strings.Repeat("9", 100)} {
 		t.Run(value, func(t *testing.T) {
 			// Given
 			setEnvironment(t, map[string]string{
-				"TELEGRAM_BOT_TOKEN":    "token",
-				"TELEGRAM_CHAT_ID":      "-100123",
-				"ALIB_REQUEST_INTERVAL": value,
+				"TELEGRAM_BOT_TOKEN": "token",
+				"TELEGRAM_CHAT_ID":   "-100123",
+				"ALIB_MAX_RETRIES":   value,
 			})
 
 			// When
@@ -539,7 +539,7 @@ func Test_Load_rejects_invalid_Alib_request_interval(t *testing.T) {
 
 			// Then
 			require.ErrorIs(t, err, config.ErrInvalid)
-			require.ErrorContains(t, err, "ALIB_REQUEST_INTERVAL")
+			require.ErrorContains(t, err, "ALIB_MAX_RETRIES")
 			require.Empty(t, loaded)
 		})
 	}

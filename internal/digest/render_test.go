@@ -573,6 +573,18 @@ func Test_RenderSendable_omits_failure_summary_without_failures(t *testing.T) {
 	require.NotContains(t, chunks[0].Text, "Не удалось обработать книг")
 }
 
+func Test_RenderSendable_rejects_empty_notification_over_message_limit(t *testing.T) {
+	t.Parallel()
+
+	// When
+	chunks, skippedBuyURLs, err := digest.RenderSendable(nil, digest.Options{Limit: 24}, 0)
+
+	// Then
+	require.ErrorIs(t, err, digest.ErrMessageTooLong)
+	require.Empty(t, chunks)
+	require.Empty(t, skippedBuyURLs)
+}
+
 func Test_RenderSendable_splits_failure_summary_when_text_limit_is_reached(t *testing.T) {
 	t.Parallel()
 
@@ -753,7 +765,7 @@ func Test_Render_truncates_content_by_source_runes_without_mutating_chunk_book(t
 	require.Equal(t, messageLimit-1, testutil.DisplayedRuneCount(t, chunks[1].Text))
 }
 
-func Test_Render_returns_no_chunks_for_no_books(t *testing.T) {
+func Test_Render_returns_empty_notification_for_no_books(t *testing.T) {
 	t.Parallel()
 
 	// When
@@ -761,7 +773,11 @@ func Test_Render_returns_no_chunks_for_no_books(t *testing.T) {
 
 	// Then
 	require.NoError(t, err)
-	require.Nil(t, chunks)
+	require.Equal(t, []digest.Chunk{{
+		Text:  "Новых книг не обнаружено.",
+		Books: []alib.Book{},
+	}}, chunks)
+	require.NotContains(t, chunks[0].Text, "Новые книги на Alib.ru")
 }
 
 func Test_Render_parses_and_sends_belyaev_listing_with_long_photo_urls(t *testing.T) {
