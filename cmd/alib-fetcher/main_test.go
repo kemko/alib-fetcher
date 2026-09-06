@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -748,6 +749,44 @@ func Test_run_once_sends_notification_for_all_correct_empty_pages(t *testing.T) 
 	require.Contains(t, logOutput, `"new":0`)
 	require.Contains(t, logOutput, `"sent":0`)
 	require.NotContains(t, logOutput, "alib.page_failed")
+}
+
+func Test_run_once_recovers_from_transient_alib_error(t *testing.T) {
+	// Given
+	useOnceMode(t)
+	var requests atomic.Int32
+	alibServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		if requests.Add(1) == 1 {
+			writer.WriteHeader(http.StatusBadGateway)
+
+			return
+		}
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, err := writer.Write([]byte(`<p><b>Восстановленная книга.</b> <a href="/book.html"><b>Купить</b></a></p>`))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(alibServer.Close)
+	telegramRequests := make(chan telegramRequest, 1)
+	telegramServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		telegramRequests <- telegramRequest{Message: decodeTelegramMessage(t, request), Path: request.URL.Path}
+		writer.Header().Set("Content-Type", "application/json")
+		_, err := writer.Write([]byte(`{"ok":true,"result":{}}`))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(telegramServer.Close)
+	setRunEnvironment(t, telegramServer.URL, filepath.Join(t.TempDir(), "state.db"))
+	t.Setenv("ALIB_MAX_RETRIES", "1")
+
+	// When
+	err := runWithAlibURLs(t, slog.New(slog.DiscardHandler), alibServer.URL+"/tramka.phtml?tnew=7")
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, int32(2), requests.Load())
+	require.Len(t, telegramRequests, 1)
+	message := (<-telegramRequests).Message
+	require.Contains(t, message.RichMessage.HTML, "Восстановленная книга")
+	requireRefreshButton(t, message)
 }
 
 func Test_run_once_fails_after_requesting_and_logging_all_failed_pages(t *testing.T) {

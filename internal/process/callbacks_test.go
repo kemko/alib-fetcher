@@ -136,6 +136,76 @@ func Test_handleRefreshCallback_sends_empty_notification_when_digest_finds_no_bo
 	require.Equal(t, []bool{true}, sender.attachRefresh)
 }
 
+func Test_handleRefreshCallback_replaces_empty_notification_on_repeat_refresh(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	statePath := filepath.Join(t.TempDir(), "state.db")
+	events := &recordedEvents{}
+	client := &recordingCallbackClient{events: events}
+	sender := &recordingSender{events: events}
+	runner := &digestRunner{dependencies: app.Dependencies{
+		Fetcher:      emptyFetcher{},
+		Sender:       sender,
+		MessageLimit: 4096,
+		Now:          time.Now,
+	}, statePath: statePath, logger: slog.New(slog.DiscardHandler)}
+	first := telegram.Callback{
+		ID:            "callback-1",
+		Data:          telegram.RefreshCallbackData,
+		MessageChatID: -100123,
+		MessageID:     77,
+	}
+	second := first
+	second.ID = "callback-2"
+	second.MessageID = 78
+
+	// When
+	handleRefreshCallback(context.Background(), client, runner, first, slog.New(slog.DiscardHandler))
+	runner.wait()
+	handleRefreshCallback(context.Background(), client, runner, second, slog.New(slog.DiscardHandler))
+	runner.wait()
+
+	// Then
+	require.Equal(t, []string{"Новых книг не обнаружено.", "Новых книг не обнаружено."}, sender.messages)
+	require.Equal(t, []bool{false, false}, sender.silent)
+	require.Equal(t, []bool{true, true}, sender.attachRefresh)
+	require.Equal(t, []removedReplyMarkup{
+		{chatID: -100123, messageID: 77},
+		{chatID: -100123, messageID: 78},
+	}, client.removalsSnapshot())
+	require.Equal(t, []string{"remove", "send", "remove", "send"}, deliveryEvents(events.snapshot()))
+}
+
+func Test_handleRefreshCallback_does_not_send_when_old_button_removal_fails(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	removeErr := errors.New("remove refresh button")
+	client := &recordingCallbackClient{removeErr: removeErr}
+	sender := &recordingSender{}
+	runner := &digestRunner{dependencies: app.Dependencies{
+		Fetcher:      emptyFetcher{},
+		Sender:       sender,
+		MessageLimit: 4096,
+		Now:          time.Now,
+	}, statePath: filepath.Join(t.TempDir(), "state.db"), logger: slog.New(slog.DiscardHandler)}
+
+	// When
+	handleRefreshCallback(context.Background(), client, runner, telegram.Callback{
+		ID:            "callback-1",
+		Data:          telegram.RefreshCallbackData,
+		MessageChatID: -100123,
+		MessageID:     77,
+	}, slog.New(slog.DiscardHandler))
+	runner.wait()
+
+	// Then
+	require.Empty(t, sender.messages)
+	require.Empty(t, sender.attachRefresh)
+	require.Equal(t, []removedReplyMarkup{{chatID: -100123, messageID: 77}}, client.removalsSnapshot())
+}
+
 func Test_handleRefreshCallback_answers_and_skips_when_digest_is_running(t *testing.T) {
 	t.Parallel()
 
@@ -449,6 +519,7 @@ type recordingCallbackClient struct {
 	cancel    context.CancelFunc
 	listenErr error
 	answerErr error
+	removeErr error
 	callbacks []telegram.Callback
 	answers   []callbackAnswer
 	removals  []removedReplyMarkup
@@ -496,7 +567,7 @@ func (c *recordingCallbackClient) RemoveReplyMarkup(_ context.Context, chatID in
 		c.events.append("remove")
 	}
 
-	return nil
+	return c.removeErr
 }
 
 func (c *recordingCallbackClient) answersSnapshot() []callbackAnswer {
@@ -550,6 +621,17 @@ func eventIndex(events []string, wanted string) int {
 	}
 
 	return -1
+}
+
+func deliveryEvents(events []string) []string {
+	delivery := make([]string, 0, len(events))
+	for _, event := range events {
+		if event == "remove" || event == "send" {
+			delivery = append(delivery, event)
+		}
+	}
+
+	return delivery
 }
 
 func waitForCallbackLoop(t *testing.T, done <-chan struct{}) {

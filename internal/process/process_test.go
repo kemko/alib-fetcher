@@ -357,6 +357,28 @@ func Test_Run_service_mode_skips_startup_when_disabled_but_listens_for_callbacks
 	require.Zero(t, fetches.Load())
 }
 
+func Test_digestRunner_sends_empty_notification_for_startup_and_scheduled_digests(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	sender := &recordingSender{}
+	runner := newDigestRunner(app.Dependencies{
+		Fetcher:      emptyFetcher{},
+		Sender:       sender,
+		MessageLimit: 4096,
+		Now:          time.Now,
+	}, filepath.Join(t.TempDir(), "state.db"), slog.New(slog.DiscardHandler))
+
+	// When
+	runner.runStartup(context.Background())
+	runner.runScheduled(context.Background())
+
+	// Then
+	require.Equal(t, []string{"Новых книг не обнаружено.", "Новых книг не обнаружено."}, sender.messages)
+	require.Equal(t, []bool{false, false}, sender.silent)
+	require.Equal(t, []bool{true, true}, sender.attachRefresh)
+}
+
 func Test_Run_waits_for_refresh_runner_after_listener_stops(t *testing.T) {
 	t.Parallel()
 
