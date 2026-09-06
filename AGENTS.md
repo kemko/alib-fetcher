@@ -28,7 +28,8 @@ One digest cycle is deliberately ordered as follows:
 7. Sort pending books with year `0` first, then publication year descending,
    preserving first-discovery order within each group.
 8. Render pending books into Telegram-sized chunks, adding the book-failure
-   summary when needed.
+   summary when needed, or render the empty notification when no books or
+   book-specific failures remain.
 9. Send each chunk and mark only that chunk's books as delivered, only after
    Telegram accepts it.
 
@@ -42,6 +43,10 @@ Preserve these semantics:
   are not stable deduplication keys.
 - A failed Telegram chunk must remain pending so a later cycle can retry it.
   Earlier successfully sent chunks stay acknowledged.
+- A successful cycle with no pending books and no book-specific failures sends
+  `Новых книг не обнаружено.` with an empty `Books` list; it does not increase
+  `Result.Sent`. Fetch and state errors do not produce this notification.
+- Pending books are sent even when the current fetch finds no new books.
 - `State.Pending` returns records in first-discovery/source order, not bbolt key
   sort order; the digest sends year `0` records first, then recognized years in
   descending order, with stable first-discovery order within each group.
@@ -93,7 +98,8 @@ Preserve these semantics:
   cron jobs are skipped.
 - Service mode starts SDK-managed polling for Telegram `callback_query` updates
   registered for the stable `telegram.RefreshCallbackData` value. `-once` sends
-  the refresh button when it sends books, but never starts the SDK listener.
+  the refresh button whenever it sends a digest message, including the empty
+  notification, but never starts the SDK listener.
 - Refresh callbacks run through the same digest path and bbolt state path as
   startup and scheduled jobs. Startup, scheduled, and refresh-triggered digests
   share one process-local runner lock; scheduled and refresh-triggered digests
@@ -196,7 +202,7 @@ Optional defaults:
 | `ALIB_CATEGORIES` | empty | Optional one-record CSV list of non-empty ASCII-letter category names; each becomes `https://www.alib.ru/<category>.phtml?tnew=7` |
 | `ALIB_SERIES` | empty | Optional one-record CSV list of Unicode series names representable in Windows-1251; each becomes `https://alib.ru/findp.php4?seria=<encoded>&lday=7` |
 | `ALIB_PUBLISHERS` | empty | Optional one-record CSV list of Unicode publisher names representable in Windows-1251; each becomes `https://alib.ru/findp.php4?izdat=<encoded>&lday=7` |
-| `ALIB_REQUEST_INTERVAL` | `1s` | Non-negative Go duration between sequential Alib requests; `0s` disables the delay |
+| `ALIB_MAX_RETRIES` | `3` | Number of additional attempts after the first failed Alib request; `0` disables retries; cenkalti/backoff delays are 1, 2, 4, 8, 16, then 30 seconds, capped at 30 seconds |
 | `TELEGRAM_API_BASE` | `https://api.telegram.org` | HTTP(S) API base; override it in tests |
 | `HTTP_TIMEOUT` | `30s` | positive Go duration applied per external request |
 | `MESSAGE_LIMIT` | `32000` | displayed Rich Message text rune count after HTML parsing, allowed range 64..32768 |
@@ -267,13 +273,17 @@ Source photos are never downloaded or transformed. Every photo renders in one
 order and repeats; empty captions use `фото`.
 
 The Alib client accepts one or more HTTP(S) endpoints, sends
-`User-Agent: alib-fetcher/1.0`, and requires HTTP 200. Endpoints are downloaded
-sequentially with `ALIB_REQUEST_INTERVAL` between attempts. All download
-attempts finish before successful responses are parsed in source order. Responses
-larger than 4 MiB are rejected as download failures. Listings are then combined
-in first-seen order and deduplicated by `BuyURL`; a failed download or parse does
-not discard successful results from other pages. A valid empty search page is
-successful, while a cycle fails if no page parses successfully. The client logs
+`User-Agent: alib-fetcher/1.0`, and requires HTTP 200. Failed page requests use
+the cenkalti/backoff exponential backoff with delays of 1, 2, 4, 8, 16, then 30
+seconds, capped at 30 seconds. `ALIB_MAX_RETRIES` sets additional attempts per
+page; the default is three and `0` disables retries. Each attempt uses the
+configured HTTP timeout and the parent context. All attempts for one URL finish
+before the next URL starts, and all downloads finish before successful responses
+are parsed in source order. Responses larger than 4 MiB are rejected as
+download failures. Listings are then combined in first-seen order and
+deduplicated by `BuyURL`; a failed download or parse does not discard successful
+results from other pages. A valid empty search page is successful, while a cycle
+fails if no page parses successfully. The client logs
 `alib.page_downloaded` or
 `alib.page_download_failed` for each download and, only after a successful
 download, logs `alib.page_parsed` or `alib.page_parse_failed` for its parse.

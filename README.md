@@ -12,7 +12,7 @@ the pending send queue.
 | --- | --- | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | yes | - | Bot token from BotFather |
 | `TELEGRAM_CHAT_ID` | yes | - | Signed decimal `int64` chat ID or non-empty `@channel` username, without whitespace |
-| `CRON_SCHEDULE` | no | `0 0 * * *` | Standard five-field cron expression |
+| `CRON_SCHEDULE` | no | `0 0 * * *` | Standard five-field cron expression; descriptors such as `@hourly` and `@every 6h` are also accepted |
 | `TIMEZONE` | no | `Europe/Moscow` | IANA timezone used by the scheduler and publication-year markers |
 | `RUN_ON_STARTUP` | no | `true` | Run one digest cycle immediately after scheduler startup |
 | `FRESH_BOOKS` | no | empty | Optional `✨` threshold: `age:N` or `since:YYYY` |
@@ -20,7 +20,7 @@ the pending send queue.
 | `ALIB_CATEGORIES` | no | empty | Comma-separated ASCII category names; each creates a `https://www.alib.ru/<category>.phtml?tnew=7` page |
 | `ALIB_SERIES` | no | empty | Comma-separated Unicode series names representable in Windows-1251; each creates a `https://alib.ru/findp.php4?seria=<encoded>&lday=7` page |
 | `ALIB_PUBLISHERS` | no | empty | Comma-separated Unicode publisher names representable in Windows-1251; each creates a `https://alib.ru/findp.php4?izdat=<encoded>&lday=7` page |
-| `ALIB_REQUEST_INTERVAL` | no | `1s` | Non-negative Go duration between sequential Alib page requests; `0s` disables the delay |
+| `ALIB_MAX_RETRIES` | no | `3` | Additional attempts after the first failed Alib page request; `0` disables retries |
 | `TELEGRAM_API_BASE` | no | `https://api.telegram.org` | Bot API base URL; custom/local servers require Bot API 10.1+ |
 | `HTTP_TIMEOUT` | no | `30s` | Positive Go duration applied to each external request |
 | `MESSAGE_LIMIT` | no | `32000` | Displayed Rich Message text rune limit, allowed range `64..32768` |
@@ -48,16 +48,21 @@ category, series, then publisher order. For example:
 ALIB_CATEGORIES='tramka,detektivy' \
 ALIB_SERIES='"История, тома",Фантастика & фэнтези' \
 ALIB_PUBLISHERS='Эксмо,"Международный центр фантастики"' \
-ALIB_REQUEST_INTERVAL=2s
+ALIB_MAX_RETRIES=3
 ```
 
 Pages are downloaded sequentially through one HTTP client. GET parameters are
-preserved. The interval applies only between requests, including after a failed
-page; a single URL is not delayed. The client completes all download attempts
-before parsing any successful response. Responses larger than 4 MiB are rejected
-as download failures. The client then parses responses in URL order and combines
-listings in first-seen order, deduplicated by their `Купить` URL while keeping
-the first copy. Each page has separate download and parse events:
+preserved. Each failed page request is retried by
+[`cenkalti/backoff`](https://github.com/cenkalti/backoff) with a separate
+exponential backoff: delays are 1, 2, 4, 8, 16, then 30 seconds, capped at 30
+seconds. `ALIB_MAX_RETRIES` controls additional attempts independently for each
+page; the default is three and `0` disables retries. Request timeout applies to
+each attempt. The client completes all attempts for a page before moving to the
+next URL, and completes all page downloads before parsing any successful
+response. Responses larger than 4 MiB are rejected as download failures. The
+client then parses responses in URL order and combines listings in first-seen
+order, deduplicated by their `Купить` URL while keeping the first copy. Each
+page has separate download and parse events:
 `alib.page_downloaded` or `alib.page_download_failed`, followed for a successful
 download by `alib.page_parsed` or `alib.page_parse_failed`. Every event has the
 zero-based `index` and full configured `url`, including GET parameters and
@@ -103,7 +108,11 @@ from DOM nodes and logical `<br>`-delimited lines; it does not parse HTML with
 regular expressions. Existing records keep their sent status while refreshing
 the parsed payload from the latest source pages. The first successful run sends
 every listing that can be rendered; failed listings remain
-undelivered for rediscovery.
+undelivered for rediscovery. Pending books are sent even when the current fetch
+finds no new books. When there are no pending books and no book-specific
+failures, a successful cycle sends exactly `Новых книг не обнаружено.` with no
+book records; this notification does not increase the `sent` count. A fetch or
+state error fails the cycle instead of producing that notification.
 
 `Store.Pending` returns every pending record in first-discovery order, not only
 books found in the current fetch result. Before rendering, the service puts
@@ -163,7 +172,8 @@ When book-specific failures occurred, the final message includes
 `Не удалось обработать книг: N`; it follows an `<hr/>` when the chunk also
 contains books. With no renderable books, the digest contains the heading and
 summary, split into two messages if required by the limits. The count includes
-listings skipped because of `digest.ErrMessageTooLong`.
+listings skipped because of `digest.ErrMessageTooLong`. With no books and no
+failures, the digest contains only `Новых книг не обнаружено.` and no heading.
 
 Photos are never downloaded or transformed. Every source photo is rendered in
 one `Смотрите` section with its original URL, source caption, order, and
@@ -172,11 +182,12 @@ Only the final message uses the normal notification sound; all earlier messages
 are silent. Whenever a digest sends at least one message, the final message
 includes an inline `Обновить` button.
 Pressing it asks a running service with the same bot token to start one
-out-of-schedule digest. If that refresh sends new notifications, the clicked
-message's old button is removed before the first new message is sent, and the
-last new message receives a fresh `Обновить` button. If the refresh produces no
-message chunk, the old button stays in place. A failure-summary-only digest does
-produce a chunk and therefore moves the button.
+out-of-schedule digest. If that refresh sends any message chunk, including the
+empty notification, the clicked message's old button is removed before the
+first new message is sent, and the last new message receives a fresh
+`Обновить` button. If the refresh produces no message chunk, the old button
+stays in place. A failure-summary-only digest does produce a chunk and
+therefore moves the button.
 The callback is answered immediately with `Формирование дайджеста запущено`
 after the refresh runner lock is acquired; the digest continues in the
 background on the service lifetime context. No completion callback answer is
@@ -240,9 +251,10 @@ invocation can use it between scheduled cycles.
 
 Service mode starts SDK-managed polling for Telegram callback updates matching
 the `Обновить` button. The SDK owns update offsets and polling retry/backoff.
-The `-once` command sends the button when it sends books, but exits without
-starting callback polling. A running service that uses the same bot can process
-a button sent earlier by `-once`. Refresh callbacks from other chats are
+The `-once` command attaches the button whenever it sends a digest message,
+including an empty notification, but exits without starting callback polling. A
+running service that uses the same bot can process a button sent earlier by
+`-once`. Refresh callbacks from other chats are
 answered and ignored when their numeric chat ID or public `@channel` username
 does not match `TELEGRAM_CHAT_ID`. Do not configure a Telegram webhook or
 another `getUpdates` poller for the same bot token, or refresh callbacks may be

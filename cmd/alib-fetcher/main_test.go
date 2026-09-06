@@ -732,11 +732,11 @@ func Test_run_once_sends_notification_for_all_correct_empty_pages(t *testing.T) 
 		{Path: "/empty-two", RawQuery: "second=true"},
 	}, []alibRequest{<-alibRequests, <-alibRequests})
 	require.Len(t, telegramRequests, 1)
-	telegramRequest := <-telegramRequests
-	require.Equal(t, "/bottest-token/sendRichMessage", telegramRequest.Path)
-	require.Equal(t, "Новых книг не обнаружено.", telegramRequest.Message.RichMessage.HTML)
-	require.False(t, telegramRequest.Message.DisableNotification)
-	requireRefreshButton(t, telegramRequest.Message)
+	request := <-telegramRequests
+	require.Equal(t, "/bottest-token/sendRichMessage", request.Path)
+	require.Equal(t, "Новых книг не обнаружено.", request.Message.RichMessage.HTML)
+	require.False(t, request.Message.DisableNotification)
+	requireRefreshButton(t, request.Message)
 	logOutput := logs.String()
 	require.Equal(t, 2, strings.Count(logOutput, `"msg":"alib.page_downloaded"`))
 	require.Equal(t, 2, strings.Count(logOutput, `"msg":"alib.page_parsed"`))
