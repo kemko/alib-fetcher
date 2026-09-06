@@ -1019,6 +1019,140 @@ func Test_Service_sends_empty_notification_when_no_pending_books(t *testing.T) {
 	require.Equal(t, []bool{false, false}, sender.silent)
 	require.Equal(t, []bool{true, true}, sender.attachRefresh)
 	require.Empty(t, state.marked)
+	require.Zero(t, state.markedAt)
+}
+
+func Test_Service_handles_empty_notification_delivery_errors(t *testing.T) {
+	t.Parallel()
+
+	sendErr := errors.New("send rejected")
+	for _, testCase := range []struct {
+		name       string
+		sendErr    error
+		wantErr    error
+		wantEvents []string
+		attempts   int
+	}{
+		{
+			name:       "terminal failure",
+			sendErr:    sendErr,
+			wantErr:    sendErr,
+			wantEvents: []string{"pending", "before_delivery", "send"},
+			attempts:   1,
+		},
+		{
+			name:       "flood control recovery",
+			sendErr:    retryAfterError{delay: time.Second},
+			wantEvents: []string{"pending", "before_delivery", "send", "wait", "send"},
+			attempts:   2,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Given
+			var events []string
+			state := &fakeState{events: &events}
+			sender := &fakeSender{failAt: 1, err: testCase.sendErr, events: &events}
+			service := app.NewService(app.Dependencies{
+				Fetcher: fakeFetcher{},
+				State:   state,
+				Sender:  sender,
+				BeforeDelivery: func(context.Context) error {
+					events = append(events, "before_delivery")
+					return nil
+				},
+				Wait: func(_ context.Context, delay time.Duration) error {
+					events = append(events, "wait")
+					require.Equal(t, time.Second, delay)
+					return nil
+				},
+				MessageLimit: 4096,
+				Now:          time.Now,
+			})
+
+			// When
+			result, err := service.Run(t.Context())
+
+			// Then
+			if testCase.wantErr == nil {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, testCase.wantErr)
+			}
+			require.Equal(t, app.Result{}, result)
+			require.Equal(t, testCase.wantEvents, events)
+			require.Len(t, sender.messages, testCase.attempts)
+			for index, message := range sender.messages {
+				require.Equal(t, "Новых книг не обнаружено.", message)
+				require.False(t, sender.silent[index])
+				require.True(t, sender.attachRefresh[index])
+			}
+			require.Empty(t, state.marked)
+			require.Zero(t, state.markedAt)
+		})
+	}
+}
+
+func Test_Service_cancels_empty_notification_retry_wait(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	firstSend := make(chan struct{}, 1)
+	var events []string
+	state := &fakeState{events: &events}
+	sender := &fakeSender{
+		failAt:    1,
+		err:       retryAfterError{delay: time.Hour},
+		events:    &events,
+		afterSend: func() { firstSend <- struct{}{} },
+	}
+	service := app.NewService(app.Dependencies{
+		Fetcher: fakeFetcher{},
+		State:   state,
+		Sender:  sender,
+		BeforeDelivery: func(context.Context) error {
+			events = append(events, "before_delivery")
+			return nil
+		},
+		MessageLimit: 4096,
+		Now:          time.Now,
+	})
+	type runResult struct {
+		err    error
+		result app.Result
+	}
+	done := make(chan runResult, 1)
+
+	// When
+	go func() {
+		result, err := service.Run(ctx)
+		done <- runResult{result: result, err: err}
+	}()
+	select {
+	case <-firstSend:
+	case <-time.After(5 * time.Second):
+		t.Fatal("empty notification was not sent")
+	}
+	timer := time.AfterFunc(20*time.Millisecond, cancel)
+	defer timer.Stop()
+
+	// Then
+	select {
+	case completed := <-done:
+		require.ErrorIs(t, completed.err, context.Canceled)
+		require.Equal(t, app.Result{}, completed.result)
+	case <-time.After(5 * time.Second):
+		t.Fatal("empty notification retry did not stop on cancellation")
+	}
+	require.Equal(t, []string{"pending", "before_delivery", "send"}, events)
+	require.Equal(t, []string{"Новых книг не обнаружено."}, sender.messages)
+	require.Equal(t, []bool{false}, sender.silent)
+	require.Equal(t, []bool{true}, sender.attachRefresh)
+	require.Empty(t, state.marked)
+	require.Zero(t, state.markedAt)
 }
 
 func Test_Service_prunes_state_at_start_of_cycle(t *testing.T) {

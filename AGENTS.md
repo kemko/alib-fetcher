@@ -238,7 +238,8 @@ the listing do not participate.
 
 ## Digest and transport details
 
-The first message starts with `<b>Новые книги на Alib.ru</b>`; when a listing
+Except for the empty notification, the first message starts with
+`<b>Новые книги на Alib.ru</b>`; when a listing
 follows in the same chunk, `<br/><br/>` separates it from the heading. Later
 chunks start with a listing. Messages split on text and block limits. If
 the header and first listing do not fit together
@@ -285,8 +286,10 @@ deduplicated by `BuyURL`; a failed download or parse does not discard successful
 results from other pages. A valid empty search page is successful, while a cycle
 fails if no page parses successfully. The client logs
 `alib.page_downloaded` or
-`alib.page_download_failed` for each download and, only after a successful
-download, logs `alib.page_parsed` or `alib.page_parse_failed` for its parse.
+`alib.page_download_failed` for each attempt, with a one-based `attempt` that
+resets for each page. After all downloads finish, each successfully downloaded
+page emits one `alib.page_parsed` or `alib.page_parse_failed` event; pages whose
+download attempts are exhausted emit no parse event.
 Every event has the zero-based `index` and full configured endpoint `url`,
 including GET parameters and fragments; parsed events also have `books`, and
 failed events have `error`. Generated endpoints are written verbatim to logs
@@ -308,8 +311,9 @@ Structured logs go to stdout. Stable event names are `scheduler.started`,
 are `fetched`, `new`, `failed`, `pruned`, and `sent`, while forget-latest completion fields
 are `requested` and `deleted`. Every Alib page event includes the zero-based
 `index` and full configured endpoint `url`, including GET parameters and
-fragments; `alib.page_parsed` also includes `books`, and failed events include
-`error`. Keep slog attributes typed, snake_case, and free of secrets. Generated
+fragments; download events include the one-based per-page `attempt`,
+`alib.page_parsed` includes `books`, and failed events include `error`.
+Keep slog attributes typed, snake_case, and free of secrets. Generated
 page URLs are credential-free and are logged in full as configured endpoints.
 
 ## Development and verification

@@ -51,6 +51,10 @@ ALIB_PUBLISHERS='Эксмо,"Международный центр фантас�
 ALIB_MAX_RETRIES=3
 ```
 
+`ALIB_REQUEST_INTERVAL` is no longer supported and is ignored. Remove it from
+deployment settings. Successful page requests have no fixed inter-page delay;
+`ALIB_MAX_RETRIES` controls retries after failures.
+
 Pages are downloaded sequentially through one HTTP client. GET parameters are
 preserved. Each failed page request is retried by
 [`cenkalti/backoff`](https://github.com/cenkalti/backoff) with a separate
@@ -62,13 +66,14 @@ next URL, and completes all page downloads before parsing any successful
 response. Responses larger than 4 MiB are rejected as download failures. The
 client then parses responses in URL order and combines listings in first-seen
 order, deduplicated by their `Купить` URL while keeping the first copy. Each
-page has separate download and parse events:
-`alib.page_downloaded` or `alib.page_download_failed`, followed for a successful
-download by `alib.page_parsed` or `alib.page_parse_failed`. Every event has the
+download attempt emits `alib.page_downloaded` or `alib.page_download_failed`
+with a one-based `attempt` that resets for each page. After all downloads finish,
+each successfully downloaded page emits one `alib.page_parsed` or
+`alib.page_parse_failed` event. Every event has the
 zero-based `index` and full configured `url`, including GET parameters and
 fragments; parsed events also have `books`, and failed events have `error`. A
-download failure has no parse event. Generated page URLs are also included in
-errors and written verbatim to stdout.
+page whose download attempts are exhausted has no parse event. Generated page
+URLs are also included in errors and written verbatim to stdout.
 A valid search page with no listings counts as a successful empty result. The
 fetch fails only when no page parses successfully or the context is canceled;
 successful pages still produce a partial result when other pages fail.
