@@ -471,6 +471,7 @@ func TestLoad_reads_repository_example(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, loaded.Chats, 2)
+	require.Equal(t, 500*time.Millisecond, loaded.AlibDownloadDelay)
 	require.Equal(t, "/var/lib/alib-fetcher/state.db", loaded.Chats[0].StatePath)
 	require.Equal(t, "/var/lib/alib-fetcher/@another_channel.db", loaded.Chats[1].StatePath)
 	require.Equal(t, []string{

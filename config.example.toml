@@ -4,6 +4,7 @@ timezone = "Europe/Moscow"
 run_on_startup = true
 http_timeout = "30s"
 alib_max_retries = 3
+alib_download_delay = "500ms"
 message_limit = 32000
 fresh_books = ""
 

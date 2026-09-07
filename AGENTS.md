@@ -195,8 +195,15 @@ The process reads strict TOML from `./config.toml` or `-config PATH`. Global
 fields are `state_path` (default `/var/lib/alib-fetcher`, a directory),
 `cron_schedule` (`0 0 * * *`), `timezone` (`Europe/Moscow`), `run_on_startup`
 (`true`), `fresh_books` (empty), `http_timeout` (`30s`), `alib_max_retries`
-(`3`), and `message_limit` (`32000`, range `64..32768`). Relative
+(`3`), `alib_download_delay` (`0s`), and `message_limit` (`32000`, range `64..32768`). Relative
 `state_path` values are resolved from the config directory.
+
+`alib_download_delay` is a non-negative Go duration, including fractional values
+such as `0.5s` and `500ms`. It waits after all attempts for one page finish and
+before the next page's first attempt; it does not wait before the first page,
+after the last, between retries, or during redirects. Context cancellation
+interrupts the wait. A valid service reload applies a changed delay after active
+work has finished.
 
 Each `[[chats]]` entry has `chat_id` (signed decimal `int64` or non-empty
 `@channel`), `telegram_token`, optional `state_file`, and search sources. A
@@ -235,6 +242,8 @@ exit 1. Tokens and TOML contents are never logged.
 uses that inclusive year. Empty disables only `✨`. The configured `timezone`
 controls the current year (`🔥`), previous year in January (also `🔥`), and
 future years (`🛸`); unknown years also receive `🛸`.
+Publication years are the last matching four-digit bibliography year followed by
+`г`, `г.`, `гг`, or `гг.`, allowing spaces and a dot before the suffix.
 
 Service mode checks the config file every second. Valid changes stop new
 digests while active work finishes with its old snapshot; polling continues
@@ -285,7 +294,7 @@ Source photos are never downloaded or transformed. Every photo renders in one
 order and repeats; empty captions use `фото`.
 
 The Alib client accepts one or more HTTP(S) endpoints, sends
-`User-Agent: alib-fetcher/1.0`, and requires HTTP 200. Failed page requests use
+`User-Agent: alib-fetcher/1.0`, and requires final HTTP 200 after redirects. Failed page requests use
 the cenkalti/backoff exponential backoff with delays of 1, 2, 4, 8, 16, then 30
 seconds, capped at 30 seconds. `alib_max_retries` sets additional attempts per
 page; the default is three and `0` disables retries. Each attempt uses the
@@ -304,7 +313,8 @@ download attempts are exhausted emit no parse event.
 Every event has the zero-based `index` and full configured endpoint `url`,
 including GET parameters and fragments; parsed events also have `books`, and
 failed events have `error`. Generated endpoints are written verbatim to logs
-and page errors. The
+and page errors. Every page event has numeric `status_code`; it is `0` when no
+HTTP response is available. The
 SDK-backed Telegram adapter accepts only HTTP(S), caps
 response decoding at 1 MiB, returns `telegram.ErrRequest` for transport failures
 and `telegram.ErrRejected` for unsuccessful API responses, and includes
@@ -324,7 +334,8 @@ are `fetched`, `new`, `failed`, `pruned`, and `sent`, while forget-latest comple
 are `requested` and `deleted`. Every Alib page event includes the zero-based
 `index` and full configured endpoint `url`, including GET parameters and
 fragments; download events include the one-based per-page `attempt`,
-`alib.page_parsed` includes `books`, and failed events include `error`.
+`alib.page_parsed` includes `books`, failed events include `error`, and every
+page event includes `status_code` (`0` when no response exists).
 Recipient-specific events include `chat_id`, including Alib page events and
 matched callback answer failures. Shared polling errors have no single chat ID.
 Keep slog attributes typed, snake_case, and free of secrets. Generated
