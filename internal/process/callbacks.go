@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/kemko/alib-fetcher/internal/telegram"
 )
@@ -23,47 +25,132 @@ type CallbackClient interface {
 	RemoveReplyMarkup(ctx context.Context, chatID int64, messageID int) error
 }
 
-func startCallbackListening(
+type callbackRecipient struct {
+	runner *digestRunner
+	chatID string
+}
+
+type callbackGroup struct {
+	client     CallbackClient
+	recipients []callbackRecipient
+}
+
+func startCallbackGroups(
 	ctx context.Context,
-	callbacks CallbackClient,
-	runner *digestRunner,
-	expectedChatID string,
+	recipients []Recipient,
+	runners []*digestRunner,
 	logger *slog.Logger,
 ) <-chan struct{} {
+	return startCallbackGroupsWithRunContext(ctx, ctx, recipients, runners, logger)
+}
+
+func startCallbackGroupsWithRunContext(
+	pollCtx context.Context,
+	runCtx context.Context,
+	recipients []Recipient,
+	runners []*digestRunner,
+	logger *slog.Logger,
+) <-chan struct{} {
+	groups := make([]callbackGroup, 0, len(recipients))
+	for index, recipient := range recipients {
+		if recipient.Callbacks == nil {
+			continue
+		}
+		groupIndex := -1
+		for candidate := range groups {
+			if sameCallbackClient(groups[candidate].client, recipient.Callbacks) {
+				groupIndex = candidate
+				break
+			}
+		}
+		if groupIndex == -1 {
+			groups = append(groups, callbackGroup{client: recipient.Callbacks})
+			groupIndex = len(groups) - 1
+		}
+		groups[groupIndex].recipients = append(groups[groupIndex].recipients, callbackRecipient{
+			chatID: recipient.ChatID,
+			runner: runners[index],
+		})
+	}
+
 	done := make(chan struct{})
+	var listeners sync.WaitGroup
+	listeners.Add(len(groups))
+	for _, group := range groups {
+		go func(group callbackGroup) {
+			defer listeners.Done()
+			group.client.ListenCallbacks(
+				pollCtx,
+				func(callbackCtx context.Context, callback telegram.Callback) {
+					handleGroupedCallbackWithRunContext(callbackCtx, runCtx, group, callback, logger)
+				},
+				func(errorCtx context.Context, err error) {
+					logger.ErrorContext(errorCtx, "callback.poll_failed", slog.Any(logKeyError, err))
+				},
+			)
+		}(group)
+	}
 	go func() {
-		defer close(done)
-		callbacks.ListenCallbacks(
-			ctx,
-			func(callbackCtx context.Context, callback telegram.Callback) {
-				handleCallback(callbackCtx, callbacks, runner, callback, expectedChatID, logger)
-			},
-			func(errorCtx context.Context, err error) {
-				logger.ErrorContext(errorCtx, "callback.poll_failed", slog.Any(logKeyError, err))
-			},
-		)
+		listeners.Wait()
+		close(done)
 	}()
 
 	return done
 }
 
-func handleCallback(
+func sameCallbackClient(left CallbackClient, right CallbackClient) bool {
+	leftValue := reflect.ValueOf(left)
+	rightValue := reflect.ValueOf(right)
+	if !leftValue.IsValid() || !rightValue.IsValid() || leftValue.Type() != rightValue.Type() {
+		return false
+	}
+	if !leftValue.Type().Comparable() {
+		return false
+	}
+
+	return leftValue.Interface() == rightValue.Interface()
+}
+
+func handleGroupedCallback(
 	ctx context.Context,
-	callbacks CallbackClient,
-	runner *digestRunner,
+	group callbackGroup,
 	callback telegram.Callback,
-	expectedChatID string,
+	logger *slog.Logger,
+) {
+	handleGroupedCallbackWithRunContext(ctx, ctx, group, callback, logger)
+}
+
+func handleGroupedCallbackWithRunContext(
+	answerCtx context.Context,
+	runCtx context.Context,
+	group callbackGroup,
+	callback telegram.Callback,
 	logger *slog.Logger,
 ) {
 	if callback.Data != telegram.RefreshCallbackData {
 		return
 	}
-	if !matchesExpectedChat(callback, expectedChatID) {
-		answerRefreshCallback(ctx, callbacks, callback.ID, refreshUnavailableText, logger)
+
+	var match *callbackRecipient
+	for index := range group.recipients {
+		if !matchesExpectedChat(callback, group.recipients[index].chatID) {
+			continue
+		}
+		if match != nil {
+			answerRefreshCallback(answerCtx, group.client, callback.ID, refreshUnavailableText, logger)
+
+			return
+		}
+		match = &group.recipients[index]
+	}
+	if match == nil {
+		answerRefreshCallback(answerCtx, group.client, callback.ID, refreshUnavailableText, logger)
 
 		return
 	}
-	handleRefreshCallback(ctx, callbacks, runner, callback, logger)
+	handleRefreshCallbackWithRunContext(
+		answerCtx, runCtx, group.client, match.runner, callback, logger.With(slog.String(logKeyChatID, match.chatID)),
+	)
 }
 
 func matchesExpectedChat(callback telegram.Callback, expectedChatID string) bool {
@@ -86,6 +173,17 @@ func handleRefreshCallback(
 	callback telegram.Callback,
 	logger *slog.Logger,
 ) {
+	handleRefreshCallbackWithRunContext(ctx, ctx, callbacks, runner, callback, logger)
+}
+
+func handleRefreshCallbackWithRunContext(
+	answerCtx context.Context,
+	runCtx context.Context,
+	callbacks CallbackClient,
+	runner *digestRunner,
+	callback telegram.Callback,
+	logger *slog.Logger,
+) {
 	beforeDelivery := func(runCtx context.Context) error {
 		if err := callbacks.RemoveReplyMarkup(runCtx, callback.MessageChatID, callback.MessageID); err != nil {
 			return fmt.Errorf("remove refresh button: %w", err)
@@ -93,14 +191,14 @@ func handleRefreshCallback(
 
 		return nil
 	}
-	started := runner.tryStartRefresh(ctx, beforeDelivery)
+	started := runner.tryStartRefresh(runCtx, beforeDelivery)
 	if started {
-		answerRefreshCallback(ctx, callbacks, callback.ID, refreshStartedText, logger)
+		answerRefreshCallback(answerCtx, callbacks, callback.ID, refreshStartedText, logger)
 
 		return
 	}
 
-	answerRefreshCallback(ctx, callbacks, callback.ID, refreshAlreadyRunningText, logger)
+	answerRefreshCallback(answerCtx, callbacks, callback.ID, refreshAlreadyRunningText, logger)
 }
 
 func answerRefreshCallback(

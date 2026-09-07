@@ -13,6 +13,17 @@ import (
 
 // ForgetLatest removes the newest state records without starting a digest.
 func ForgetLatest(ctx context.Context, statePath string, limit int, logger *slog.Logger) (operationErr error) {
+	return ForgetLatestForChat(ctx, statePath, limit, "", logger)
+}
+
+// ForgetLatestForChat removes the newest state records and logs their chat.
+func ForgetLatestForChat(
+	ctx context.Context,
+	statePath string,
+	limit int,
+	chatID string,
+	logger *slog.Logger,
+) (operationErr error) {
 	state, err := store.Open(statePath, time.Now())
 	if err != nil {
 		return err
@@ -23,10 +34,11 @@ func ForgetLatest(ctx context.Context, statePath string, limit int, logger *slog
 	if err != nil {
 		return err
 	}
-	logger.InfoContext(ctx, "state.forget_latest.completed",
-		slog.Int(logKeyRequested, limit),
-		slog.Int(logKeyDeleted, deleted),
-	)
+	attributes := []any{slog.Int(logKeyRequested, limit), slog.Int(logKeyDeleted, deleted)}
+	if chatID != "" {
+		attributes = append(attributes, slog.String(logKeyChatID, chatID))
+	}
+	logger.InfoContext(ctx, "state.forget_latest.completed", attributes...)
 
 	return nil
 }
@@ -37,7 +49,21 @@ func executeJob(
 	statePath string,
 	logger *slog.Logger,
 ) (result app.Result, jobErr error) {
-	logger.InfoContext(ctx, "digest.started")
+	return executeJobForChat(ctx, dependencies, statePath, "", logger)
+}
+
+func executeJobForChat(
+	ctx context.Context,
+	dependencies app.Dependencies,
+	statePath string,
+	chatID string,
+	logger *slog.Logger,
+) (result app.Result, jobErr error) {
+	startedAttributes := make([]any, 0, 1)
+	if chatID != "" {
+		startedAttributes = append(startedAttributes, slog.String(logKeyChatID, chatID))
+	}
+	logger.InfoContext(ctx, "digest.started", startedAttributes...)
 	state, err := store.Open(statePath, dependencies.Now())
 	if err != nil {
 		return result, err
@@ -50,13 +76,17 @@ func executeJob(
 	if jobErr != nil {
 		return result, jobErr
 	}
-	logger.InfoContext(ctx, "digest.completed",
+	completedAttributes := []any{
 		slog.Int(logKeyFetched, result.Fetched),
 		slog.Int(logKeyFailed, result.Failed),
 		slog.Int(logKeyNew, result.New),
 		slog.Int(logKeyPruned, result.Pruned),
 		slog.Int(logKeySent, result.Sent),
-	)
+	}
+	if chatID != "" {
+		completedAttributes = append(completedAttributes, slog.String(logKeyChatID, chatID))
+	}
+	logger.InfoContext(ctx, "digest.completed", completedAttributes...)
 
 	return result, nil
 }

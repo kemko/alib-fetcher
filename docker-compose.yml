@@ -1,26 +1,11 @@
----
-
 services:
   alib-fetcher:
     image: ${ALIB_FETCHER_IMAGE:-ghcr.io/kemko/alib-fetcher:latest}
+    command: ["-service", "-config", "/etc/alib-fetcher/config.toml"]
     restart: unless-stopped
     read_only: true
-    environment:
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN is required}
-      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:?TELEGRAM_CHAT_ID is required}
-      CRON_SCHEDULE: "${CRON_SCHEDULE:-0 0 * * *}"
-      TIMEZONE: ${TIMEZONE:-Europe/Moscow}
-      RUN_ON_STARTUP: "${RUN_ON_STARTUP:-true}"
-      FRESH_BOOKS: "${FRESH_BOOKS:-}"
-      STATE_PATH: /var/lib/alib-fetcher/state.db
-      ALIB_CATEGORIES: "${ALIB_CATEGORIES:-}"
-      ALIB_SERIES: "${ALIB_SERIES:-}"
-      ALIB_PUBLISHERS: "${ALIB_PUBLISHERS:-}"
-      ALIB_MAX_RETRIES: ${ALIB_MAX_RETRIES:-3}
-      TELEGRAM_API_BASE: ${TELEGRAM_API_BASE:-https://api.telegram.org}
-      HTTP_TIMEOUT: ${HTTP_TIMEOUT:-30s}
-      MESSAGE_LIMIT: ${MESSAGE_LIMIT:-32000}
     volumes:
+      - ./config:/etc/alib-fetcher:ro
       - alib-fetcher-state:/var/lib/alib-fetcher
     cap_drop:
       - ALL

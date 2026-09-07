@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	telegrambot "github.com/go-telegram/bot"
@@ -29,34 +29,41 @@ const refreshButtonText = "Обновить"
 const (
 	maxAPIResponseBytes   = 1 << 20
 	minimumSDKPollTimeout = 2 * time.Second
+	standardAPIBase       = "https://api.telegram.org"
 )
 
 var errResponseTooLarge = fmt.Errorf("response exceeds %d bytes", maxAPIResponseBytes)
 
-// Config contains the Telegram Bot API connection settings.
-type Config struct {
-	APIBase string
-	Token   string
-	ChatID  string
-	Timeout time.Duration
+// ClientConfig contains the Telegram Bot API connection settings.
+type ClientConfig struct {
+	HTTPClient *http.Client
+	Token      string
+	Timeout    time.Duration
 }
 
-// Sender delivers digest messages through the Telegram Bot API.
-type Sender struct {
-	bot       *telegrambot.Bot
-	sdkErrors chan error
-	chatID    string
-	secrets   []string
+// Client owns one Telegram SDK client and its callback polling state.
+type Client struct {
+	bot        *telegrambot.Bot
+	httpClient *http.Client
+	sdkErrors  chan error
+	token      string
+	secrets    []string
+	timeout    time.Duration
+	botMutex   sync.RWMutex
 }
 
-// NewSender validates the API settings without exposing the bot token.
-func NewSender(config Config) (*Sender, error) {
-	return newSender(config, &http.Client{Timeout: config.Timeout})
+// NewClient validates the API settings without exposing the bot token.
+func NewClient(config ClientConfig) (*Client, error) {
+	client := config.HTTPClient
+	if client == nil {
+		client = &http.Client{}
+	}
+
+	return newClient(config, client)
 }
 
-func newSender(config Config, client *http.Client) (*Sender, error) {
-	serverURL, err := validateConfig(config)
-	if err != nil {
+func newClient(config ClientConfig, client *http.Client) (*Client, error) {
+	if err := validateConfig(config); err != nil {
 		return nil, err
 	}
 
@@ -66,48 +73,86 @@ func newSender(config Config, client *http.Client) (*Sender, error) {
 	}
 	client.Timeout = config.Timeout
 	client.Transport = &responseLimitRoundTripper{base: transport}
-	sender := &Sender{
-		chatID:    config.ChatID,
-		secrets:   []string{config.Token, config.APIBase, serverURL},
-		sdkErrors: make(chan error, 1),
+	telegramClient := &Client{
+		httpClient: client,
+		token:      config.Token,
+		timeout:    config.Timeout,
+		secrets:    []string{config.Token, standardAPIBase},
+		sdkErrors:  make(chan error, 1),
 	}
-	sdkBot, err := telegrambot.New(
-		config.Token,
-		telegrambot.WithServerURL(serverURL),
-		telegrambot.WithHTTPClient(sdkPollTimeout(config.Timeout), &sdkHTTPClient{client: client}),
-		telegrambot.WithSkipGetMe(),
-		telegrambot.WithAllowedUpdates(telegrambot.AllowedUpdates{models.AllowedUpdateCallbackQuery}),
-		telegrambot.WithErrorsHandler(sender.handleSDKError),
-		telegrambot.WithDefaultHandler(ignoreSDKUpdate),
-		telegrambot.WithNotAsyncHandlers(),
-	)
+	sdkBot, err := telegramClient.newSDKBot(config.Timeout)
 	if err != nil {
 		return nil, &safeCauseError{message: "create Telegram SDK client", cause: err}
 	}
-	sender.bot = sdkBot
+	telegramClient.bot = sdkBot
 
-	return sender, nil
+	return telegramClient, nil
 }
 
-func validateConfig(config Config) (string, error) {
-	endpoint, err := url.Parse(config.APIBase)
+// SetTimeout updates the SDK polling timeout while preserving its offset and queued updates.
+// Callers must first stop polling and wait for all client requests to finish.
+func (c *Client) SetTimeout(timeout time.Duration) error {
+	if timeout <= 0 {
+		return errors.New("update Telegram client: timeout must be positive")
+	}
+
+	c.botMutex.Lock()
+	defer c.botMutex.Unlock()
+	if c.timeout == timeout {
+		return nil
+	}
+	telegrambot.WithHTTPClient(sdkPollTimeout(timeout), &sdkHTTPClient{client: c.httpClient})(c.bot)
+	c.httpClient.Timeout = timeout
+	c.timeout = timeout
+
+	return nil
+}
+
+func (c *Client) newSDKBot(timeout time.Duration) (*telegrambot.Bot, error) {
+	return telegrambot.New(
+		c.token,
+		telegrambot.WithHTTPClient(sdkPollTimeout(timeout), &sdkHTTPClient{client: c.httpClient}),
+		telegrambot.WithSkipGetMe(),
+		telegrambot.WithAllowedUpdates(telegrambot.AllowedUpdates{models.AllowedUpdateCallbackQuery}),
+		telegrambot.WithErrorsHandler(c.handleSDKError),
+		telegrambot.WithDefaultHandler(ignoreSDKUpdate),
+		telegrambot.WithNotAsyncHandlers(),
+	)
+}
+
+// NewSender creates a sender bound to one Telegram chat.
+func (c *Client) NewSender(chatID string) (*Sender, error) {
+	if strings.TrimSpace(chatID) == "" {
+		return nil, errors.New("create Telegram sender: chat ID is required")
+	}
+
+	return &Sender{client: c, chatID: chatID}, nil
+}
+
+// Sender delivers digest messages through the Telegram Bot API.
+type Sender struct {
+	client *Client
+	chatID string
+}
+
+func newSender(config ClientConfig, client *http.Client, chatID string) (*Sender, error) {
+	telegramClient, err := newClient(config, client)
 	if err != nil {
-		return "", &safeCauseError{message: "parse Telegram API URL: invalid URL", cause: err}
+		return nil, err
 	}
-	if endpoint.Scheme != "http" && endpoint.Scheme != "https" {
-		return "", fmt.Errorf("parse Telegram API URL: unsupported scheme %q", endpoint.Scheme)
-	}
-	if endpoint.Host == "" || config.Token == "" || config.ChatID == "" {
-		return "", errors.New("create Telegram sender: API host, token, and chat ID are required")
+
+	return telegramClient.NewSender(chatID)
+}
+
+func validateConfig(config ClientConfig) error {
+	if config.Token == "" {
+		return errors.New("create Telegram client: token is required")
 	}
 	if config.Timeout <= 0 {
-		return "", errors.New("create Telegram sender: timeout must be positive")
+		return errors.New("create Telegram client: timeout must be positive")
 	}
 
-	endpoint.RawQuery = ""
-	endpoint.Fragment = ""
-
-	return strings.TrimRight(endpoint.String(), "/"), nil
+	return nil
 }
 
 // Send posts one rich HTML digest message, optionally without a notification sound.
@@ -131,15 +176,18 @@ func (s *Sender) Send(ctx context.Context, text string, silent bool, attachRefre
 	}
 
 	sdkCtx, call := beginSDKCall(ctx)
-	_, err := s.bot.SendRichMessage(sdkCtx, params)
+	s.client.botMutex.RLock()
+	bot := s.client.bot
+	s.client.botMutex.RUnlock()
+	_, err := bot.SendRichMessage(sdkCtx, params)
 
-	return s.normalizeSDKCallError(ctx, call, err)
+	return s.client.normalizeSDKCallError(ctx, call, err)
 }
 
-func (s *Sender) normalizeSDKCallError(ctx context.Context, call *sdkCall, err error) error {
+func (c *Client) normalizeSDKCallError(ctx context.Context, call *sdkCall, err error) error {
 	unsuccessfulStatus := call.statusCode != 0 &&
 		(call.statusCode < http.StatusOK || call.statusCode >= http.StatusMultipleChoices)
-	normalizedErr := s.normalizeSDKError(ctx, err)
+	normalizedErr := c.normalizeSDKError(ctx, err)
 	if unsuccessfulStatus {
 		if normalizedErr != nil && (errors.Is(normalizedErr, ErrRejected) || ctx.Err() != nil) {
 			return normalizedErr
@@ -152,14 +200,14 @@ func (s *Sender) normalizeSDKCallError(ctx context.Context, call *sdkCall, err e
 	return normalizedErr
 }
 
-func (s *Sender) normalizeSDKError(ctx context.Context, err error) error {
+func (c *Client) normalizeSDKError(ctx context.Context, err error) error {
 	if err == nil {
 		return nil
 	}
 
 	var requestErr *sdkRequestError
 	if errors.As(err, &requestErr) {
-		operation := "call Telegram SDK: " + s.sanitizeError(requestErr.cause.Error())
+		operation := "call Telegram SDK: " + c.sanitizeError(requestErr.cause.Error())
 
 		return requestError(ctx, operation, err)
 	}
@@ -182,18 +230,18 @@ func (s *Sender) normalizeSDKError(ctx context.Context, err error) error {
 		}
 
 		return &rejectedError{
-			description: s.sanitizeError(rateLimitErr.Message),
+			description: c.sanitizeError(rateLimitErr.Message),
 			retryAfter:  retryAfter,
 		}
 	}
 	if isSDKRejection(err) {
-		return &rejectedError{description: s.sanitizeError(err.Error())}
+		return &rejectedError{description: c.sanitizeError(err.Error())}
 	}
 	if strings.Contains(err.Error(), "error decode response") {
 		return &safeCauseError{message: "decode Telegram response", cause: err}
 	}
 
-	return &safeCauseError{message: s.sanitizeError(err.Error()), cause: err}
+	return &safeCauseError{message: c.sanitizeError(err.Error()), cause: err}
 }
 
 func isSDKRejection(err error) bool {
@@ -218,19 +266,19 @@ func isSDKRejection(err error) bool {
 	return strings.Contains(err.Error(), "error response from telegram for method")
 }
 
-func (s *Sender) handleSDKError(err error) {
+func (c *Client) handleSDKError(err error) {
 	if !strings.HasPrefix(err.Error(), "error get updates,") {
 		return
 	}
 
 	select {
-	case s.sdkErrors <- err:
+	case c.sdkErrors <- err:
 	default:
 	}
 }
 
-func (s *Sender) sanitizeError(message string) string {
-	for _, secret := range s.secrets {
+func (c *Client) sanitizeError(message string) string {
+	for _, secret := range c.secrets {
 		if secret != "" {
 			message = strings.ReplaceAll(message, secret, "***")
 		}
@@ -354,7 +402,7 @@ func (e *sdkRequestError) Is(target error) bool {
 }
 
 func (client *sdkHTTPClient) Do(request *http.Request) (*http.Response, error) {
-	//nolint:gosec // Operator-configured API base intentionally supports HTTP(S) test and proxy servers.
+	//nolint:gosec // The SDK builds requests for the standard Telegram HTTPS endpoint.
 	response, err := client.client.Do(request)
 	if err != nil {
 		return response, &sdkRequestError{cause: err}

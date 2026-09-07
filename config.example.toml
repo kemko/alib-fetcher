@@ -1,0 +1,32 @@
+state_path = "/var/lib/alib-fetcher"
+cron_schedule = "0 0 * * *"
+timezone = "Europe/Moscow"
+run_on_startup = true
+http_timeout = "30s"
+alib_max_retries = 3
+message_limit = 32000
+fresh_books = ""
+
+[[chats]]
+chat_id = "-1001234567890"
+telegram_token = "REPLACE_WITH_TOKEN"
+state_file = "state.db"
+categories = ["tramka", "detektivy"]
+
+[chats.filters]
+seria = ["Литературные памятники", "ЖЗЛ"]
+izdat = ["Наука"]
+
+[[chats.queries]]
+author = "Стругацкие"
+seria = "Библиотека приключений"
+cena2 = "3000"
+fotoonly = "da"
+lday = "14"
+
+[[chats]]
+chat_id = "@another_channel"
+telegram_token = "REPLACE_WITH_ANOTHER_TOKEN"
+
+[chats.filters]
+title = ["Понедельник начинается в субботу"]

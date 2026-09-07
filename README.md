@@ -1,373 +1,184 @@
 # alib-fetcher
 
-Always-on Go service that fetches the latest listings from Alib category,
-series, and publisher pages, then delivers unseen books to a Telegram chat as
-Rich Messages on a configurable cron schedule. Delivered listings are tracked
-by their unique `Купить` link in an embedded bbolt database, which also stores
-the pending send queue.
+Always-on Go service that fetches new Alib listings and sends them to one or
+more Telegram chats. Delivery state is kept independently for each chat in a
+bbolt database.
 
 ## Configuration
 
-| Variable | Required | Default | Description |
-| --- | --- | --- | --- |
-| `TELEGRAM_BOT_TOKEN` | yes | - | Bot token from BotFather |
-| `TELEGRAM_CHAT_ID` | yes | - | Signed decimal `int64` chat ID or non-empty `@channel` username, without whitespace |
-| `CRON_SCHEDULE` | no | `0 0 * * *` | Standard five-field cron expression; descriptors such as `@hourly` and `@every 6h` are also accepted |
-| `TIMEZONE` | no | `Europe/Moscow` | IANA timezone used by the scheduler and publication-year markers |
-| `RUN_ON_STARTUP` | no | `true` | Run one digest cycle immediately after scheduler startup |
-| `FRESH_BOOKS` | no | empty | Optional `✨` threshold: `age:N` or `since:YYYY` |
-| `STATE_PATH` | no | `/var/lib/alib-fetcher/state.db` | bbolt state database |
-| `ALIB_CATEGORIES` | no | empty | Comma-separated ASCII category names; each creates a `https://www.alib.ru/<category>.phtml?tnew=7` page |
-| `ALIB_SERIES` | no | empty | Comma-separated Unicode series names representable in Windows-1251; each creates a `https://alib.ru/findp.php4?seria=<encoded>&lday=7` page |
-| `ALIB_PUBLISHERS` | no | empty | Comma-separated Unicode publisher names representable in Windows-1251; each creates a `https://alib.ru/findp.php4?izdat=<encoded>&lday=7` page |
-| `ALIB_MAX_RETRIES` | no | `3` | Additional attempts after the first failed Alib page request; `0` disables retries |
-| `TELEGRAM_API_BASE` | no | `https://api.telegram.org` | Bot API base URL; custom/local servers require Bot API 10.1+ |
-| `HTTP_TIMEOUT` | no | `30s` | Positive Go duration applied to each external request |
-| `MESSAGE_LIMIT` | no | `32000` | Displayed Rich Message text rune limit, allowed range `64..32768` |
+The service reads TOML from `./config.toml`, or from the path passed to
+`-config`. See [config.example.toml](config.example.toml).
 
-Configuration is validated before process startup. Invalid chat IDs, including
-plain text without `@`, an empty `@` username, whitespace, and numeric overflow,
-fail fast with an error naming `TELEGRAM_CHAT_ID`.
-`ALIB_URL` is no longer supported. Before upgrading, replace it with
-`ALIB_CATEGORIES`, `ALIB_SERIES`, `ALIB_PUBLISHERS`, or a combination; there is
-no compatibility fallback or default category.
-All three variables are optional independently, but at least one must be
-non-empty. Each variable is parsed as one CSV record: surrounding whitespace is
-trimmed, empty elements and malformed quotes are rejected, and values retain
-their source order. Categories must be non-empty ASCII letters only. Repeated
-series and publisher names are ignored after their first occurrence. Series and
-publishers are entered as Unicode, but each value must be representable in
-Windows-1251. Each value is first encoded to Windows-1251, then those bytes are
-URL-escaped as the `seria` or `izdat` query value, so spaces, `&`, `/`, and
-commas cannot inject extra parameters. An unrepresentable character is a
-configuration error naming the source variable.
-Requests always use the fixed seven-day window (`tnew=7` or `lday=7`), in
-category, series, then publisher order. For example:
+Global fields and defaults:
 
-```bash
-ALIB_CATEGORIES='tramka,detektivy' \
-ALIB_SERIES='"История, тома",Фантастика & фэнтези' \
-ALIB_PUBLISHERS='Эксмо,"Международный центр фантастики"' \
-ALIB_MAX_RETRIES=3
-```
+- `state_path`: directory containing state databases; default
+  `/var/lib/alib-fetcher`. Relative paths are relative to the TOML file.
+- `cron_schedule`: `0 0 * * *` (standard five-field cron plus descriptors).
+- `timezone`: `Europe/Moscow`.
+- `run_on_startup`: `true`.
+- `fresh_books`: empty, `age:N`, or `since:YYYY`.
+- `http_timeout`: `30s`.
+- `alib_max_retries`: `3` additional attempts.
+- `message_limit`: `32000`, allowed range `64..32768`.
 
-`ALIB_REQUEST_INTERVAL` is no longer supported and is ignored. Remove it from
-deployment settings. Successful page requests have no fixed inter-page delay;
-`ALIB_MAX_RETRIES` controls retries after failures.
+`fresh_books` controls the optional ✨ marker; it does not filter listings.
+`age:N` uses the inclusive threshold `current local year - N`, with `N >= 0`;
+`since:YYYY` uses that inclusive year. Empty disables only ✨. The current
+year, and the previous year in January, get 🔥; future and unknown years get
+🛸. The configured `timezone` determines the current year and month.
 
-Pages are downloaded sequentially through one HTTP client. GET parameters are
-preserved. Each failed page request is retried by
-[`cenkalti/backoff`](https://github.com/cenkalti/backoff) with a separate
-exponential backoff: delays are 1, 2, 4, 8, 16, then 30 seconds, capped at 30
-seconds. `ALIB_MAX_RETRIES` controls additional attempts independently for each
-page; the default is three and `0` disables retries. Request timeout applies to
-each attempt. The client completes all attempts for a page before moving to the
-next URL, and completes all page downloads before parsing any successful
-response. Responses larger than 4 MiB are rejected as download failures. The
-client then parses responses in URL order and combines listings in first-seen
-order, deduplicated by their `Купить` URL while keeping the first copy. Each
-download attempt emits `alib.page_downloaded` or `alib.page_download_failed`
-with a one-based `attempt` that resets for each page. After all downloads finish,
-each successfully downloaded page emits one `alib.page_parsed` or
-`alib.page_parse_failed` event. Every event has the
-zero-based `index` and full configured `url`, including GET parameters and
-fragments; parsed events also have `books`, and failed events have `error`. A
-page whose download attempts are exhausted has no parse event. Generated page
-URLs are also included in errors and written verbatim to stdout.
-A valid search page with no listings counts as a successful empty result. The
-fetch fails only when no page parses successfully or the context is canceled;
-successful pages still produce a partial result when other pages fail.
-`FRESH_BOOKS=age:N` marks publication years from the current local year minus
-non-negative `N`, inclusive. For example, in 2026, `age:5` includes 2021.
-`FRESH_BOOKS=since:YYYY` uses the given four-digit year as the inclusive lower
-boundary. An absent or empty value disables only the optional `✨` marker; it
-does not disable `🔥`. The cycle time converted to `TIMEZONE` determines the
-current year and whether the January exception applies:
+Each `[[chats]]` entry requires `chat_id` (signed decimal `int64` or a
+non-empty `@channel` username) and `telegram_token`. `state_file` is an
+optional file name inside `state_path`; otherwise it is `<normalized chat_id>.db`.
+Numeric IDs are stored in canonical decimal form and usernames are lowercased.
+Absolute paths, path separators, NUL, `.`, and `..` are rejected. Duplicate
+normalized IDs and state files, including existing symlink and hard-link
+aliases, are rejected. State filenames must differ after Unicode normalization
+and case-insensitive comparison on every platform, even before files exist.
+State-file symlinks must point to existing files.
 
-- `🔥` marks the current year and, during January, the previous year;
-- `✨` marks other recognized years between the configured inclusive boundary
-  and the current year;
-- `🛸` marks any recognized year greater than the current year, independently of
-  `FRESH_BOOKS`, and also marks listings without a recognized publication year;
-- other unrecognized publication years receive no marker.
+Search sources are `categories`, `filters`, and `queries`. Categories retain
+the existing ASCII-letter validation. Each filter value makes one independent
+Alib form request, in form-field order; each query map makes one request, in
+TOML order. Values are strings; checkbox values are `da`, `sumfind` is `1..5`,
+`sortby` is `0..10`, and `tipfind` uses the form rubric identifiers. The fields
+are `author`, `title`, `seria`,
+`izdat`, `gorodiz`, `isbnp`, `god1`, `god2`, `cena1`, `cena2`, `sod`, `bsonly`,
+`gorod`, `lday`, `noreprint`, `nograv`, `fotoonly`, `minus`, `sumfind`,
+`tipfind`, and `sortby`. Missing `lday` defaults to `7`; `filters` values are
+independent requests, while each `queries` map is one request containing all
+its fields. Sources run in category, form-field, then query order; duplicate
+URLs are removed after the first occurrence. At least one source is required
+for every chat. Values are encoded as Windows-1251 before URL escaping.
 
-The January `🔥` rule applies even when `FRESH_BOOKS` is empty or its configured
-boundary excludes the previous year.
-
-The parser recognizes the last four-digit year in the bibliography followed by
-`г` or `г.`. Years found only in content or other listing sections do not affect
-freshness markers.
-
-Each digest first checks fetched listing identities against the state database,
-then runs the same per-book `RenderBook` validation used during chunk assembly
-before recording renderable new listings as pending records. A book-specific
-parse or rendering failure, including `digest.ErrMessageTooLong`, excludes only
-that book from the current digest; a new failed book is not written to state and
-is retried on the next cycle. Other renderable new and pending books continue to
-the same digest. Such failures are counted once per book.
-
-Recorded listings contain the full semantic Alib payload: title, bibliography,
-publication year, content, seller name and URL, location, price, condition and
-other details, purchase URL, and ordered photo URLs with normalized captions. The parser derives these fields
-from DOM nodes and logical `<br>`-delimited lines; it does not parse HTML with
-regular expressions. Existing records keep their sent status while refreshing
-the parsed payload from the latest source pages. The first successful run sends
-every listing that can be rendered; failed listings remain
-undelivered for rediscovery. Pending books are sent even when the current fetch
-finds no new books. When there are no pending books and no book-specific
-failures, a successful cycle sends exactly `Новых книг не обнаружено.` with no
-book records; this notification does not increase the `sent` count. A fetch or
-state error fails the cycle instead of producing that notification.
-
-`Store.Pending` returns every pending record in first-discovery order, not only
-books found in the current fetch result. Before rendering, the service puts
-books without a recognized publication year (`0`) first, preserving their
-first-discovery order, then sorts recognized years in descending order with the
-same stable ordering for equal years. Books that could not be sent remain
-pending across later digest cycles. A chunk is acknowledged only after
-Telegram accepts it, and then its records become sent. Sent records older than
-14 days are removed once at the beginning of every digest cycle; pending
-records are not removed by retention pruning. The `MESSAGE_LIMIT` counts
-Unicode runes in the displayed Rich Message text after parsing its HTML:
-formatting tags and URL attribute values do not count, while encoded text and
-`<br/>` line breaks do. Content that makes a listing too long is shortened with
-`…` before HTML escaping to the longest prefix that fits within
-`MESSAGE_LIMIT - 1` displayed runes; only `Content` is shortened. If the
-listing's mandatory displayed fields plus minimal content still do not fit,
-`digest.ErrMessageTooLong` is returned; other renderable pending listings are
-still sent while that listing remains pending.
-Chunks split before Telegram's limit of 500 Rich Message blocks. Each ordinary
-chunk contains at most 250 listings.
-Telegram operations use the pinned
-[`github.com/go-telegram/bot`](https://github.com/go-telegram/bot) v1.23.0 SDK.
-Each Telegram Rich Message is sent through its `SendRichMessage` method with
-rendered HTML. The SDK also supplies request models, inline keyboards, callback
-answers, reply-markup edits, and polling machinery; digest ordering,
-acknowledgement, flood-control retry, chat filtering, and runner locking remain
-service policy. Custom `TELEGRAM_API_BASE` endpoints and test doubles must accept
-the SDK's `multipart/form-data` requests.
-Each listing inside that HTML is structured as:
-
-1. freshness marker, bold title, and bibliography;
-2. content in its own section, when present;
-3. seller as `Продавец: <a href="...">Name</a>, Location.`, then price,
-   condition/other details, and source photo links when present on separate lines;
-4. a final `Купить` link in its own section.
-
-When photos are available, the source photo-link section is rendered as
-`Смотрите: <a href="...">Обложка</a> - <a href="...">фото</a>` in source order,
-including repeated links. Captions come from the source anchor; an empty caption
-falls back to `фото`. When an announcement has no photos, the photo line is omitted.
-When seller URL is absent, seller name is rendered as plain text. Missing
-optional fields do not create empty sections. Dynamic text and URLs are
-HTML-escaped. Every encoded line break uses `<br/>`; sections use `<br/><br/>`
-to render one empty line without client-specific paragraph spacing. Rendered
-Telegram HTML contains no literal CR or LF characters. The heading has the same
-separator before the first listing. Content and details are independent optional
-sections between `main` and the final `Купить` section. When both are absent,
-the layout is exactly `main → <br/><br/> → Купить`. Adjacent listings in one
-Rich Message are separated by `<hr/>`; no divider appears before the first
-listing or after the last. A digest uses multiple Telegram messages when
-pending content exceeds `MESSAGE_LIMIT` or 500 blocks; the heading appears only
-in the first message.
-If the heading and first pending listing cannot fit together but the listing
-fits alone, the first message contains only the heading and the listing follows
-in a headerless message.
-When book-specific failures occurred, the final message includes
-`Не удалось обработать книг: N`; it follows an `<hr/>` when the chunk also
-contains books. With no renderable books, the digest contains the heading and
-summary, split into two messages if required by the limits. The count includes
-listings skipped because of `digest.ErrMessageTooLong`. With no books and no
-failures, the digest contains only `Новых книг не обнаружено.` and no heading.
-
-Photos are never downloaded or transformed. Every source photo is rendered in
-one `Смотрите` section with its original URL, source caption, order, and
-repeated links; an empty caption is rendered as `фото`.
-Only the final message uses the normal notification sound; all earlier messages
-are silent. Whenever a digest sends at least one message, the final message
-includes an inline `Обновить` button.
-Pressing it asks a running service with the same bot token to start one
-out-of-schedule digest. If that refresh sends any message chunk, including the
-empty notification, the clicked message's old button is removed before the
-first new message is sent, and the last new message receives a fresh
-`Обновить` button. If the refresh produces no message chunk, the old button
-stays in place. A failure-summary-only digest does produce a chunk and
-therefore moves the button.
-The callback is answered immediately with `Формирование дайджеста запущено`
-after the refresh runner lock is acquired; the digest continues in the
-background on the service lifetime context. No completion callback answer is
-sent; completion and errors are reported through `digest.completed` and
-`digest.failed` logs.
-`HTTP_TIMEOUT` applies to each external request, not to the whole refresh
-digest. Toast display duration is controlled by the Telegram client;
-the Bot API cannot guarantee an exact duration.
-
-When Telegram returns a flood-control `retry_after`, the service waits for the
-specified duration and retries the same message before continuing with later
-chunks. Waiting stops promptly when the service context is canceled. Books are
-recorded as delivered only after their containing chunk is accepted.
+The file is decoded strictly: unknown global or chat fields, malformed TOML,
+wrong types, invalid IDs, search values, and unsafe state names fail before
+network requests or database opens. Legacy environment variables are not read.
 
 ## Run
 
-Run one cycle locally:
+The command-line interface uses `github.com/urfave/cli/v3` v3.11.0. TOML
+configuration continues to use `github.com/pelletier/go-toml/v2`.
+
+Run one digest for every configured chat:
 
 ```bash
-TELEGRAM_BOT_TOKEN=... \
-TELEGRAM_CHAT_ID=... \
-ALIB_CATEGORIES=tramka \
-STATE_PATH=./data/state.db \
-go run ./cmd/alib-fetcher -once
+alib-fetcher -once -config ./config.toml
 ```
 
-Forget the latest records from the local state database:
+Run one digest only for a selected chat:
 
 ```bash
-STATE_PATH=./data/state.db \
-go run ./cmd/alib-fetcher -forget-latest 6
+alib-fetcher -once -chat=-1001234567890 -config ./config.toml
 ```
 
-This maintenance command deletes up to six records with the greatest discovery
-order and exits immediately. It opens only `STATE_PATH`, so it does not require
-Telegram credentials, contact Alib or Telegram, or start the scheduler or
-callback polling. The deletion is irreversible and applies to both sent and
-pending records; the next digest can discover any still-available deleted books
-on Alib again. If the database contains fewer records than requested, all
-available records are deleted. The value must be positive, and
-`-forget-latest` cannot be combined with `-once`.
-
-Run the scheduler:
+Run the scheduled service:
 
 ```bash
-TELEGRAM_BOT_TOKEN=... \
-TELEGRAM_CHAT_ID=... \
-ALIB_CATEGORIES=tramka \
-CRON_SCHEDULE='*/30 * * * *' \
-STATE_PATH=./data/state.db \
-go run ./cmd/alib-fetcher
+alib-fetcher -service -config ./config.toml
 ```
 
-By default, service mode runs one digest cycle immediately after startup and
-then continues using `CRON_SCHEDULE` in the configured timezone. Set
-`RUN_ON_STARTUP=false` to wait for the first scheduled cycle instead. This does
-not affect `-once`. The five cron fields are minute, hour, day of month, month,
-and day of week; descriptors such as `@hourly` are also accepted. The state
-database is open only while a digest cycle is running, so a separate `-once`
-invocation can use it between scheduled cycles.
+Forget the newest records from one selected database without Telegram or Alib
+access:
 
-Service mode starts SDK-managed polling for Telegram callback updates matching
-the `Обновить` button. The SDK owns update offsets and polling retry/backoff.
-The `-once` command attaches the button whenever it sends a digest message,
-including an empty notification, but exits without starting callback polling. A
-running service that uses the same bot can process a button sent earlier by
-`-once`. Refresh callbacks from other chats are
-answered and ignored when their numeric chat ID or public `@channel` username
-does not match `TELEGRAM_CHAT_ID`. Do not configure a Telegram webhook or
-another `getUpdates` poller for the same bot token, or refresh callbacks may be
-consumed outside this service.
+```bash
+alib-fetcher -forget-latest 6 -chat=-1001234567890 -config ./config.toml
+```
 
-The process emits structured JSON logs and stops gracefully on `SIGINT` or
-`SIGTERM`. Telegram transport errors include the underlying sanitized cause; the
-bot token and API base URL are redacted.
+Exactly one of `-service`, `-once`, and `-forget-latest N` is required.
+`-chat` is optional for `-once`, required for `-forget-latest`, and forbidden
+for `-service`. An explicitly empty `-chat` is an argument error; only omitting
+it selects every recipient in `-once`. No arguments and `-h`/`-help` print help.
+`--help` is also accepted. Single- and double-dash forms are supported for all
+flags.
+Argument errors print help and exit with status 2; configuration and runtime
+errors exit with status 1. `-once` does not start scheduling, callback polling,
+or config watching;
+without `-chat` it attempts every recipient and reports errors after all
+recipients finish. `-forget-latest` reads only the state mapping, so it needs
+no Telegram token or search source and performs no HTTP requests.
 
-On first run after upgrading from older timestamp-marker releases, raw legacy
-state entries are migrated to JSON records. Structured records from releases
-that stored `text_before_seller`, `text_before_buy`, and `text_after_buy` remain
-readable: a narrow JSON compatibility decoder converts those fragments to the
-semantic `Book` model in memory. Opening the database does not rewrite valid
-legacy structured records. A structured legacy `has_photos` field is ignored
-because it contains no recoverable photo URLs; its photo line stays
-absent until rediscovery supplies URLs. Legacy `photo_urls` arrays decode as
-photo records with caption `фото`. Opening the database does not rewrite them;
-the next mutating write, including rediscovery or successful-delivery
-acknowledgement, stores the current `photos` schema.
-Values that look like structured JSON records must decode successfully, and their stored purchase
-URL must match the bbolt key. A malformed or mismatched structured record makes
-state opening fail transactionally: it is not treated as a legacy marker, and no
-neighboring migration is committed. Back up `STATE_PATH` before upgrading. If
-validation fails, stop the service and restore a known-good backup; recreate the
-database only when resetting delivery history is acceptable. Rolling back to an
-older release also requires restoring or recreating the state database.
+The service runs startup and scheduled work independently for each chat and
+uses one Telegram SDK client/poller for chats sharing a token. It keeps
+pending books and retention state per database. Refresh callbacks, retries,
+graceful shutdown, message limits, and delivery ordering follow the same
+policy as previous releases. A valid TOML change pauses new work, lets active
+digests finish with their old settings, then applies the complete new snapshot;
+invalid, deleted, or unreadable files leave the current snapshot active.
+The file is checked every second and rechecked after active digests finish.
+Polling keeps answering and skipping refresh presses during that wait.
+Unchanged settings, including comment-only edits, do not restart work.
+Existing chats do not repeat startup digests; newly added chats follow
+`run_on_startup`. Retained tokens keep their polling offsets and queued callbacks,
+including when `http_timeout` changes. Changing a state path switches databases
+without moving history; removed chats keep their files.
+
+To migrate the former single database, change an old `STATE_PATH=/path/state.db`
+to `state_path = "/path"` and set `state_file = "state.db"` for the matching
+chat. The old database is opened in place; no history is copied or rewritten.
 
 ## Container
 
-After verification succeeds, CI validates the Compose configuration and builds
-the production image for both pull requests and pushes to `master`. Pull
-requests build without registry login or push. A successful `master` push uses
-that single build to publish `ghcr.io/<owner>/<repository>:latest`; failed
-verification or vulnerability checks publish nothing. The final image runs as
-the distroless `nonroot` user. Keep the state directory on a named volume:
+Compose runs the service from a read-only root filesystem and mounts the TOML
+directory read-only. Prepare real tokens and grant the container's GID 65532
+read access before atomically renaming the file. On a Linux Docker host:
 
 ```bash
-docker run -d --name alib-fetcher \
-  --read-only \
-  --mount type=volume,src=alib-fetcher-state,dst=/var/lib/alib-fetcher \
-  -e TELEGRAM_BOT_TOKEN=... \
-  -e TELEGRAM_CHAT_ID=... \
-  -e ALIB_CATEGORIES=tramka \
-  ghcr.io/<owner>/<repository>:latest
-```
-
-Alternatively, start the service with the Compose v3.8 configuration:
-
-```bash
-export TELEGRAM_BOT_TOKEN=...
-export TELEGRAM_CHAT_ID=...
-export ALIB_CATEGORIES=tramka
+install -d -m 0700 config
+install -m 0600 config.example.toml config/config.toml.tmp
+${EDITOR:-vi} config/config.toml.tmp
+sudo chgrp 65532 config config/config.toml.tmp
+chmod 0750 config
+chmod 0640 config/config.toml.tmp
+mv -f config/config.toml.tmp config/config.toml
 docker compose up -d
 ```
 
-With required Telegram variables already supplied by the environment or an
-untracked `.env`, runtime settings can be overridden without putting credentials
-in the command or Compose file:
-
-```bash
-FRESH_BOOKS=age:5 \
-TIMEZONE=Europe/Moscow \
-ALIB_CATEGORIES=tramka,detektivy \
-ALIB_FETCHER_IMAGE=ghcr.io/example/alib-fetcher:latest \
-docker compose up -d
-```
-
-With Podman Desktop, use `podman compose up -d`. Compose stores the database in
-the persistent named volume `alib-fetcher-state`. Set `ALIB_FETCHER_IMAGE` to
-override the default `ghcr.io/kemko/alib-fetcher:latest` image.
-
-Keep `TELEGRAM_BOT_TOKEN` and other runtime credentials in the process
-environment or an untracked local `.env` file. Git ignores `.env` and `.env.*`,
-while allowing a credential-free `.env.example` to be tracked. Docker also
-excludes `.env*`, local `data/`, and database files from the build context.
-Never put real credentials in `.env.example`, Compose, or an image.
+The container keeps state in the named `/var/lib/alib-fetcher` volume and runs
+as UID/GID 65532. The mounted TOML must be readable by that user and contains
+Telegram tokens, so keep the directory private. `ALIB_FETCHER_IMAGE` remains
+the only Compose environment override; do not put credentials in Compose.
+`config/` and the root `config.toml` are ignored by Git and Docker context,
+while the credential-free `config.example.toml` remains trackable.
+For later updates, copy the live configuration to a temporary file in the
+same directory, edit it, and repeat the group, mode, and rename steps.
 
 ## Development
 
-Go 1.26.5 is required. Run the complete non-mutating quality gate:
+Go 1.27.1 is supported. Run the canonical quality gate:
 
 ```bash
 make verify
 ```
 
-Use `make fmt` to apply formatting. `make verify` checks formatting, runs strict
-linting and race-enabled tests, and builds `bin/alib-fetcher`. Quality targets
-automatically provision and use the pinned golangci-lint under ignored
-`bin/tools`; an unrelated binary earlier in `PATH` cannot affect verification.
-CI uses the same Make targets, additionally runs `govulncheck`, and builds the
-production container on pull requests and `master` pushes. Only a successful
-`master` push publishes the image.
+`make verify` checks formatting, runs lint, race-enabled tests and govulncheck,
+and builds the binary. Use `make govulncheck` to scan all packages separately;
+it requires access to the Go vulnerability database. `make tools` installs pinned
+golangci-lint and govulncheck versions under `bin/tools`; verification installs
+missing tools automatically for local checks.
+The golangci-lint version is pinned in `.golangci-lint-version`; update it to a
+compatible release whenever upgrading Go.
 
-Run the coverage gate separately:
+Use `make coverage` for the 80% total statement-coverage gate. CI installs
+golangci-lint through its official action, using `.golangci-lint-version` just
+like Make, then runs `make fmt-check lint test build` with that binary's explicit
+path. The official Go govulncheck action installs and runs the latest scanner;
+local `make govulncheck` keeps its pinned version. CI validates Compose and
+publishes the image only from a successful `master` push.
 
-```bash
-make coverage
-```
+Dependencies are committed under `vendor/`; after changing them, run
+`go mod vendor` and commit the regenerated files. Builds, tests and lint use
+these vendored sources. The Docker build copies the context filtered by
+`.dockerignore` with `COPY . .` and compiles with networking disabled. Base
+images, development tools and the vulnerability database still require network
+access. The final image uses distroless static Debian with no shell or package
+manager, retaining HTTPS certificates, timezone data and the nonroot user.
 
-It writes ignored `coverage.out` and fails when total statement coverage is
-below 80%. Coverage includes calls across repository packages (`-coverpkg=./...`),
-including shared test helpers.
-
-## Security-only dependency updates
-
-Dependabot is configured for Go modules, Docker, and GitHub Actions with normal
-version-update pull requests disabled. Enable **Dependabot alerts** and
-**Dependabot security updates** under repository Settings > Security > Code
-security and analysis. Security advisories can then open update pull requests;
-new versions without a known vulnerability do not create pull requests.
+Dependabot alerts and security updates are enabled in the GitHub repository
+settings. Security updates create PRs for vulnerable Go modules and GitHub
+Actions; Go vendoring is maintained automatically. `.github/dependabot.yml`
+checks ordinary GitHub Actions version updates every Saturday at 09:00
+Europe/Moscow. Its numeric limit of 1000 open version-update PRs effectively
+removes the cap for this repository. Ordinary Go module and Docker version
+updates remain disabled. This does not scan OS packages inside Docker images
+or automatically merge security PRs.

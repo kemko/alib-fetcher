@@ -3,8 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/csv"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,9 +12,11 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -24,6 +26,7 @@ import (
 
 	"github.com/kemko/alib-fetcher/internal/alib"
 	"github.com/kemko/alib-fetcher/internal/config"
+	"github.com/kemko/alib-fetcher/internal/process"
 	"github.com/kemko/alib-fetcher/internal/store"
 	"github.com/kemko/alib-fetcher/internal/telegram"
 	"github.com/kemko/alib-fetcher/internal/testutil"
@@ -307,20 +310,376 @@ func Test_run_rejects_non_positive_forget_latest(t *testing.T) {
 	}
 }
 
-func Test_forgetLatestOption_rejects_malformed_values(t *testing.T) {
+func Test_parseCommandLine_accepts_each_mode(t *testing.T) {
+	t.Parallel()
+
+	testCases := map[string]struct {
+		arguments []string
+		want      commandOptions
+	}{
+		"once for every chat": {
+			arguments: []string{"alib-fetcher", "-once", "-config", "./config.toml"},
+			want: commandOptions{
+				configPath: "./config.toml",
+				once:       true,
+			},
+		},
+		"once for selected chat": {
+			arguments: []string{
+				"alib-fetcher", "-once", "-chat=-1001234567890", "-config", "./config.toml",
+			},
+			want: commandOptions{
+				configPath: "./config.toml",
+				chatID:     "-1001234567890",
+				once:       true,
+			},
+		},
+		"service": {
+			arguments: []string{"alib-fetcher", "-service", "-config", "./config.toml"},
+			want: commandOptions{
+				configPath: "./config.toml",
+				service:    true,
+			},
+		},
+		"once with inactive service and help": {
+			arguments: []string{"alib-fetcher", "-once", "-service=false", "--help=false"},
+			want: commandOptions{
+				configPath: "./config.toml",
+				once:       true,
+			},
+		},
+		"service with inactive once": {
+			arguments: []string{"alib-fetcher", "-service", "-once=false"},
+			want: commandOptions{
+				configPath: "./config.toml",
+				service:    true,
+			},
+		},
+		"decimal forget latest with inactive modes": {
+			arguments: []string{
+				"alib-fetcher", "-forget-latest=010", "-chat", "-100123", "-once=false", "-service=false",
+			},
+			want: commandOptions{
+				configPath: "./config.toml",
+				chatID:     "-100123",
+				forgetLatest: forgetLatestOption{
+					value: 10,
+					set:   true,
+				},
+			},
+		},
+		"forget latest": {
+			arguments: []string{
+				"alib-fetcher", "-forget-latest=7", "--chat", "@Books", "--config", "settings.toml",
+			},
+			want: commandOptions{
+				configPath: "settings.toml",
+				chatID:     "@books",
+				forgetLatest: forgetLatestOption{
+					value: 7,
+					set:   true,
+				},
+			},
+		},
+	}
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			var output, errors bytes.Buffer
+
+			got, err := parseCommandLineArgs(testCase.arguments, &output, &errors)
+
+			require.NoError(t, err)
+			require.Equal(t, testCase.want, got)
+			require.Empty(t, output.String())
+			require.Empty(t, errors.String())
+		})
+	}
+}
+
+func Test_parseCommandLine_rejects_invalid_arguments(t *testing.T) {
 	t.Parallel()
 
 	testCases := map[string]struct {
 		wantError string
 		arguments []string
 	}{
+		"missing mode": {
+			arguments: []string{"alib-fetcher", "-config", "settings.toml"},
+			wantError: "exactly one of",
+		},
+		"conflicting modes": {
+			arguments: []string{"alib-fetcher", "-once", "-service"},
+			wantError: "exactly one of",
+		},
+		"conflicting modes with inactive help": {
+			arguments: []string{"alib-fetcher", "--help=false", "-once", "-service"},
+			wantError: "exactly one of",
+		},
+		"inactive once": {
+			arguments: []string{"alib-fetcher", "-once=false"},
+			wantError: "exactly one of",
+		},
+		"inactive service": {
+			arguments: []string{"alib-fetcher", "-service=false"},
+			wantError: "exactly one of",
+		},
+		"forget latest without chat": {
+			arguments: []string{"alib-fetcher", "-forget-latest", "1"},
+			wantError: "-chat is required with -forget-latest",
+		},
+		"service with chat": {
+			arguments: []string{"alib-fetcher", "-service", "-chat=-100123"},
+			wantError: "-chat is incompatible with -service",
+		},
+		"unknown flag": {
+			arguments: []string{"alib-fetcher", "-once", "-unknown"},
+			wantError: "flag provided but not defined",
+		},
+		"unknown flag with inactive help": {
+			arguments: []string{"alib-fetcher", "--help=false", "-unknown"},
+			wantError: "flag provided but not defined",
+		},
+		"positional argument": {
+			arguments: []string{"alib-fetcher", "-once", "unexpected"},
+			wantError: "positional arguments",
+		},
+		"missing config value": {
+			arguments: []string{"alib-fetcher", "-once", "-config"},
+			wantError: "flag needs an argument",
+		},
+		"missing chat value": {
+			arguments: []string{"alib-fetcher", "-once", "-chat"},
+			wantError: "flag needs an argument",
+		},
+		"missing forget latest value": {
+			arguments: []string{"alib-fetcher", "-forget-latest"},
+			wantError: "flag needs an argument",
+		},
+		"invalid bool": {
+			arguments: []string{"alib-fetcher", "-once=maybe"},
+			wantError: "invalid value",
+		},
+		"zero forget latest": {
+			arguments: []string{"alib-fetcher", "-forget-latest=0", "-chat", "-100123"},
+			wantError: "-forget-latest must be positive",
+		},
+		"negative forget latest": {
+			arguments: []string{"alib-fetcher", "-forget-latest", "-1", "-chat", "-100123"},
+			wantError: "-forget-latest must be positive",
+		},
+		"overflowing forget latest": {
+			arguments: []string{"alib-fetcher", "-forget-latest", strings.Repeat("9", 100)},
+			wantError: "invalid value",
+		},
+		"non-numeric forget latest": {
+			arguments: []string{"alib-fetcher", "-forget-latest", "six"},
+			wantError: "invalid value",
+		},
+	}
+
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			var output, errors bytes.Buffer
+
+			_, err := parseCommandLineArgs(testCase.arguments, &output, &errors)
+
+			var commandErr commandError
+			require.ErrorAs(t, err, &commandErr)
+			require.ErrorContains(t, err, testCase.wantError)
+			require.Contains(t, output.String()+errors.String(), "USAGE:")
+		})
+	}
+}
+
+func Test_parseCommandLine_normalizes_chat_and_tracks_explicit_values(t *testing.T) {
+	t.Parallel()
+
+	testCases := map[string]struct {
+		arguments []string
+		want      commandOptions
+	}{
+		"negative chat with separate value": {
+			arguments: []string{"alib-fetcher", "-once", "-chat", "-100123"},
+			want: commandOptions{
+				configPath: "./config.toml",
+				once:       true,
+				chatID:     "-100123",
+			},
+		},
+		"negative chat with equals": {
+			arguments: []string{"alib-fetcher", "--once", "--chat=-100123"},
+			want: commandOptions{
+				configPath: "./config.toml",
+				once:       true,
+				chatID:     "-100123",
+			},
+		},
+		"channel is normalized": {
+			arguments: []string{"alib-fetcher", "-once", "-chat", "@Books"},
+			want: commandOptions{
+				configPath: "./config.toml",
+				once:       true,
+				chatID:     "@books",
+			},
+		},
+		"forget latest is explicitly set": {
+			arguments: []string{"alib-fetcher", "-forget-latest", "7", "-chat", "@BOOKS"},
+			want: commandOptions{
+				configPath: "./config.toml",
+				chatID:     "@books",
+				forgetLatest: forgetLatestOption{
+					value: 7,
+					set:   true,
+				},
+			},
+		},
+		"omitted values stay unset": {
+			arguments: []string{"alib-fetcher", "-once"},
+			want: commandOptions{
+				configPath: "./config.toml",
+				once:       true,
+			},
+		},
+	}
+
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			var output, errors bytes.Buffer
+
+			got, err := parseCommandLineArgs(testCase.arguments, &output, &errors)
+
+			require.NoError(t, err)
+			require.Equal(t, testCase.want, got)
+			require.Empty(t, output.String())
+			require.Empty(t, errors.String())
+		})
+	}
+}
+
+func Test_parseCommandLine_rejects_empty_or_invalid_chat(t *testing.T) {
+	t.Parallel()
+
+	for name, arguments := range map[string][]string{
+		"empty with equals":         {"alib-fetcher", "-once", "-chat="},
+		"empty with separate value": {"alib-fetcher", "-once", "-chat", ""},
+		"invalid value":             {"alib-fetcher", "-once", "-chat", "books"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var output, errors bytes.Buffer
+
+			_, err := parseCommandLineArgs(arguments, &output, &errors)
+
+			var commandErr commandError
+			require.ErrorAs(t, err, &commandErr)
+			require.Contains(t, output.String()+errors.String(), "USAGE:")
+		})
+	}
+}
+
+func Test_parseCommandLine_help_is_available_without_configuration(t *testing.T) {
+	t.Parallel()
+
+	for _, arguments := range [][]string{
+		{"alib-fetcher"},
+		{"alib-fetcher", "-h"},
+		{"alib-fetcher", "-help"},
+		{"alib-fetcher", "--help"},
+	} {
+		t.Run(strings.Join(arguments[1:], "_"), func(t *testing.T) {
+			var output, errors bytes.Buffer
+
+			options, err := parseCommandLineArgs(arguments, &output, &errors)
+
+			require.NoError(t, err)
+			require.True(t, options.help)
+			require.Contains(t, output.String(), "USAGE:")
+			require.Contains(t, output.String(), "-once")
+			require.Contains(t, output.String(), "-forget-latest")
+			require.Empty(t, errors.String())
+		})
+	}
+}
+
+func Test_main_subprocess_exit_codes(t *testing.T) {
+	t.Parallel()
+
+	missingConfig := filepath.Join(t.TempDir(), "missing.toml")
+	testCases := map[string]struct {
+		arguments []string
+		wantCode  int
+	}{
+		"help": {
+			arguments: []string{"-h"},
+			wantCode:  0,
+		},
+		"argument error": {
+			arguments: []string{"-unknown"},
+			wantCode:  2,
+		},
+		"argument error with inactive help": {
+			arguments: []string{"--help=false", "-unknown"},
+			wantCode:  2,
+		},
+		"conflicting modes with inactive help": {
+			arguments: []string{"--help=false", "-once", "-service"},
+			wantCode:  2,
+		},
+		"configuration error": {
+			arguments: []string{"-once", "-config", missingConfig},
+			wantCode:  1,
+		},
+		"configuration error with inactive help": {
+			arguments: []string{"-once", "--help=false", "-config", missingConfig},
+			wantCode:  1,
+		},
+	}
+
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			encodedArguments, err := json.Marshal(testCase.arguments)
+			require.NoError(t, err)
+			command := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestMainSubprocess$", "-test.v=false")
+			command.Env = append(os.Environ(),
+				"ALIB_FETCHER_MAIN_SUBPROCESS=1",
+				"ALIB_FETCHER_MAIN_ARGS="+string(encodedArguments),
+			)
+
+			output, err := command.CombinedOutput()
+
+			var exitErr *exec.ExitError
+			if testCase.wantCode == 0 {
+				require.NoError(t, err, string(output))
+			} else {
+				require.ErrorAs(t, err, &exitErr)
+				require.Equal(t, testCase.wantCode, exitErr.ExitCode(), string(output))
+			}
+		})
+	}
+}
+
+func TestMainSubprocess(t *testing.T) {
+	if os.Getenv("ALIB_FETCHER_MAIN_SUBPROCESS") != "1" {
+		return
+	}
+
+	var arguments []string
+	require.NoError(t, json.Unmarshal([]byte(os.Getenv("ALIB_FETCHER_MAIN_ARGS")), &arguments))
+	os.Args = append([]string{"alib-fetcher"}, arguments...)
+	main()
+}
+
+func Test_forgetLatestOption_rejects_malformed_values(t *testing.T) {
+	testCases := map[string]struct {
+		wantError string
+		arguments []string
+	}{
 		"non-numeric": {
 			arguments: []string{"-forget-latest", "six"},
-			wantError: "-forget-latest must be an integer",
+			wantError: "invalid value",
 		},
 		"overflowing": {
 			arguments: []string{"-forget-latest", strings.Repeat("9", 100)},
-			wantError: "-forget-latest must be an integer",
+			wantError: "invalid value",
 		},
 		"missing": {
 			arguments: []string{"-forget-latest"},
@@ -329,20 +688,14 @@ func Test_forgetLatestOption_rejects_malformed_values(t *testing.T) {
 	}
 	for name, testCase := range testCases {
 		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-
 			// Given
-			flags := flag.NewFlagSet("alib-fetcher", flag.ContinueOnError)
-			flags.SetOutput(io.Discard)
-			var option forgetLatestOption
-			flags.Var(&option, "forget-latest", "delete the latest state records, then exit")
+			useCommandLine(t, testCase.arguments...)
 
 			// When
-			err := flags.Parse(testCase.arguments)
+			_, err := parseCommandLine()
 
 			// Then
 			require.ErrorContains(t, err, testCase.wantError)
-			require.False(t, option.set)
 		})
 	}
 }
@@ -355,15 +708,436 @@ func Test_run_rejects_forget_latest_with_once(t *testing.T) {
 	err := run(slog.New(slog.DiscardHandler))
 
 	// Then
-	require.ErrorContains(t, err, "-forget-latest is incompatible with -once")
+	require.ErrorContains(t, err, "exactly one of")
+}
+
+func Test_run_without_arguments_only_prints_help(t *testing.T) {
+	useCommandLine(t)
+
+	require.NoError(t, run(slog.New(slog.DiscardHandler)))
+}
+
+func Test_run_help_does_not_read_configuration(t *testing.T) {
+	useCommandLine(t, "-help", "-config", filepath.Join(t.TempDir(), "missing.toml"))
+
+	require.NoError(t, run(slog.New(slog.DiscardHandler)))
+}
+
+func Test_run_rejects_positional_arguments_before_configuration(t *testing.T) {
+	useCommandLine(t, "-once", "unexpected")
+
+	err := run(slog.New(slog.DiscardHandler))
+
+	require.ErrorContains(t, err, "positional arguments")
+}
+
+func Test_run_rejects_unknown_chat_before_creating_adapters(t *testing.T) {
+	configPath := writeMainConfig(t, `[[chats]]
+chat_id = "-100"
+telegram_token = "secret"
+categories = ["tramka"]
+`)
+	useCommandLine(t, "-once", "-chat", "-101", "-config", configPath)
+
+	err := run(slog.New(slog.DiscardHandler))
+
+	require.ErrorContains(t, err, `unknown chat "-101"`)
+}
+
+func Test_run_once_isolates_recipients_and_retries_only_failed_delivery(t *testing.T) {
+	// Given
+	root := t.TempDir()
+	configPath := filepath.Join(root, "config.toml")
+	config := fmt.Sprintf(`state_path = %q
+http_timeout = "2s"
+alib_max_retries = 0
+
+[[chats]]
+chat_id = "-1001"
+telegram_token = "old-token"
+state_file = "first.db"
+categories = ["tramka"]
+
+[chats.filters]
+seria = ["Первый фильтр"]
+
+[[chats]]
+chat_id = "-1002"
+telegram_token = "new-token"
+state_file = "second.db"
+categories = ["detektivy"]
+
+[chats.filters]
+title = ["Второй фильтр"]
+`, root)
+	require.NoError(t, os.WriteFile(configPath, []byte(config), 0o600))
+
+	var alibPaths atomic.Int32
+	alibServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		alibPaths.Add(1)
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, err := fmt.Fprint(writer, testutil.ListingPage("Общая книга", "/shared.html", "100 руб."))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(alibServer.Close)
+	routeAlibRequestsTo(t, alibServer.URL)
+
+	var oldSends atomic.Int32
+	var newSends atomic.Int32
+	telegramServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/botold-token/sendRichMessage":
+			if oldSends.Add(1) == 1 {
+				writer.WriteHeader(http.StatusBadGateway)
+				_, err := io.WriteString(writer, `{"ok":false,"error_code":502,"description":"temporary failure"}`)
+				assert.NoError(t, err)
+
+				return
+			}
+		case "/botnew-token/sendRichMessage":
+			newSends.Add(1)
+		default:
+			t.Fatalf("unexpected Telegram request path %q", request.URL.Path)
+		}
+		writeTelegramResponse(t, writer, `{"ok":true,"result":{}}`)
+	}))
+	t.Cleanup(telegramServer.Close)
+	routeTelegramRequestsTo(t, telegramServer.URL)
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+
+	// When
+	useCommandLine(t, "-once", "-config", configPath)
+	firstErr := run(logger)
+	useCommandLine(t, "-once", "-config", configPath)
+	secondErr := run(logger)
+
+	// Then
+	require.Error(t, firstErr)
+	require.NoError(t, secondErr)
+	require.Equal(t, int32(8), alibPaths.Load())
+	require.Equal(t, int32(2), oldSends.Load())
+	require.Equal(t, int32(2), newSends.Load())
+
+	firstState, err := store.Open(filepath.Join(root, "first.db"), time.Now())
+	require.NoError(t, err)
+	firstPending, err := firstState.Pending(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, firstState.Close())
+	require.Empty(t, firstPending)
+	secondState, err := store.Open(filepath.Join(root, "second.db"), time.Now())
+	require.NoError(t, err)
+	secondPending, err := secondState.Pending(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, secondState.Close())
+	require.Empty(t, secondPending)
+	loggedChats := make(map[string]bool)
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		var event struct {
+			Message string `json:"msg"`
+			ChatID  string `json:"chat_id"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(line), &event))
+		if strings.HasPrefix(event.Message, "alib.page_") {
+			require.Contains(t, []string{"-1001", "-1002"}, event.ChatID)
+			loggedChats[event.ChatID] = true
+		}
+	}
+	require.Len(t, loggedChats, 2)
+}
+
+func Test_run_once_all_and_selected_chat_keep_other_state_untouched(t *testing.T) {
+	for _, selected := range []bool{false, true} {
+		name := "all"
+		if selected {
+			name = "selected"
+		}
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			configPath := filepath.Join(root, "config.toml")
+			content := fmt.Sprintf(`state_path = %q
+http_timeout = "2s"
+alib_max_retries = 0
+
+[[chats]]
+chat_id = "-1001"
+telegram_token = "first-token"
+categories = ["tramka"]
+
+[[chats]]
+chat_id = "-1002"
+telegram_token = "second-token"
+state_file = "archive.db"
+categories = ["detektivy"]
+`, root)
+			require.NoError(t, os.WriteFile(configPath, []byte(content), 0o600))
+
+			var alibPaths []string
+			var pathsMu sync.Mutex
+			alibServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				pathsMu.Lock()
+				alibPaths = append(alibPaths, request.URL.Path)
+				pathsMu.Unlock()
+				writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+				_, err := fmt.Fprint(writer, testutil.ListingPage("Книга", "/book.html", "100 руб."))
+				assert.NoError(t, err)
+			}))
+			t.Cleanup(alibServer.Close)
+			routeAlibRequestsTo(t, alibServer.URL)
+			telegramChats := make(chan string, 4)
+			telegramServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if strings.HasSuffix(request.URL.Path, "/sendRichMessage") {
+					telegramChats <- request.FormValue("chat_id")
+				}
+				writeTelegramResponse(t, writer, `{"ok":true,"result":{}}`)
+			}))
+			t.Cleanup(telegramServer.Close)
+			routeTelegramRequestsTo(t, telegramServer.URL)
+
+			archivePath := filepath.Join(root, "archive.db")
+			archive, err := store.Open(archivePath, time.Now())
+			require.NoError(t, err)
+			untouched := alib.Book{BuyURL: "https://example.com/untouched"}
+			_, err = archive.RecordDiscovered(context.Background(), []alib.Book{untouched}, time.Now())
+			require.NoError(t, err)
+			require.NoError(t, archive.Close())
+			before, err := os.ReadFile(archivePath)
+			require.NoError(t, err)
+
+			args := []string{"-once", "-config", configPath}
+			if selected {
+				args = append(args, "-chat", "-1001")
+			}
+			useCommandLine(t, args...)
+
+			// When
+			require.NoError(t, run(slog.New(slog.DiscardHandler)))
+
+			// Then
+			pathsMu.Lock()
+			gotPaths := append([]string(nil), alibPaths...)
+			pathsMu.Unlock()
+			if selected {
+				require.Equal(t, []string{"/tramka.phtml"}, gotPaths)
+				require.Equal(t, "-1001", <-telegramChats)
+			} else {
+				require.ElementsMatch(t, []string{"/tramka.phtml", "/detektivy.phtml"}, gotPaths)
+				require.ElementsMatch(t, []string{"-1001", "-1002"}, []string{<-telegramChats, <-telegramChats})
+			}
+			require.FileExists(t, filepath.Join(root, "-1001.db"))
+			require.FileExists(t, archivePath)
+			if selected {
+				require.NoFileExists(t, filepath.Join(root, "-1002.db"))
+			}
+			after, err := os.ReadFile(archivePath)
+			require.NoError(t, err)
+			if selected {
+				require.Equal(t, before, after)
+			}
+		})
+	}
+}
+
+func Test_run_forget_latest_uses_legacy_state_file_without_http_or_service_settings(t *testing.T) {
+	// Given
+	root := t.TempDir()
+	configPath := filepath.Join(root, "config.toml")
+	statePath := filepath.Join(root, "old-state.db")
+	content := fmt.Sprintf("state_path = %q\n\n[[chats]]\nchat_id = \"@Books\"\nstate_file = \"old-state.db\"\n", root)
+	require.NoError(t, os.WriteFile(configPath, []byte(content), 0o600))
+	state, err := store.Open(statePath, time.Now())
+	require.NoError(t, err)
+	_, err = state.RecordDiscovered(context.Background(), []alib.Book{{BuyURL: "https://example.com/old"}}, time.Now())
+	require.NoError(t, err)
+	require.NoError(t, state.Close())
+	before, err := os.ReadFile(statePath)
+	require.NoError(t, err)
+	useCommandLine(t, "-forget-latest", "1", "-chat", "@books", "-config", configPath)
+
+	// When
+	err = run(slog.New(slog.DiscardHandler))
+
+	// Then
+	require.NoError(t, err)
+	after, err := os.ReadFile(statePath)
+	require.NoError(t, err)
+	require.NotEqual(t, before, after)
+}
+
+func Test_run_rejects_cli_syntax_before_reading_config_or_opening_state(t *testing.T) {
+	for _, arguments := range [][]string{
+		{"-once", "-config"},
+		{"-unknown"},
+		{"-once", "unexpected"},
+		{"-once", "-chat="},
+		{"-once", "-chat", ""},
+		{"-service", "-chat="},
+		{"-forget-latest", "1", "-chat="},
+	} {
+		t.Run(strings.Join(arguments, "_"), func(t *testing.T) {
+			missingConfig := filepath.Join(t.TempDir(), "missing.toml")
+			useCommandLine(t, append(arguments, "-config", missingConfig)...)
+			err := run(slog.New(slog.DiscardHandler))
+			var argumentErr commandError
+			require.ErrorAs(t, err, &argumentErr)
+			require.NoFileExists(t, missingConfig)
+		})
+	}
+}
+
+func Test_service_reload_applies_new_search_token_and_state_after_inflight_send(t *testing.T) {
+	// Given
+	root := t.TempDir()
+	configPath := filepath.Join(root, "config.toml")
+	initialConfig := fmt.Sprintf(`state_path = %q
+cron_schedule = "@every 1s"
+timezone = "UTC"
+run_on_startup = true
+http_timeout = "10s"
+alib_max_retries = 0
+
+[[chats]]
+chat_id = "-1001"
+telegram_token = "old-token"
+state_file = "old.db"
+categories = ["tramka"]
+`, root)
+	updatedConfig := fmt.Sprintf(`state_path = %q
+cron_schedule = "@every 1s"
+timezone = "UTC"
+run_on_startup = true
+http_timeout = "10s"
+alib_max_retries = 0
+
+[[chats]]
+chat_id = "-1001"
+telegram_token = "new-token"
+state_file = "new.db"
+categories = ["detektivy"]
+`, root)
+	require.NoError(t, os.WriteFile(configPath, []byte(initialConfig), 0o600))
+
+	oldSendStarted := make(chan struct{})
+	releaseOldSend := make(chan struct{})
+	newSendStarted := make(chan struct{})
+	var alibPathsMu sync.Mutex
+	var alibPaths []string
+	alibServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		alibPathsMu.Lock()
+		alibPaths = append(alibPaths, request.URL.Path)
+		alibPathsMu.Unlock()
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, err := fmt.Fprint(writer, testutil.ListingPage("Книга", "/book.html", "100 руб."))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(alibServer.Close)
+	routeAlibRequestsTo(t, alibServer.URL)
+	telegramServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/botold-token/sendRichMessage":
+			select {
+			case <-oldSendStarted:
+			default:
+				close(oldSendStarted)
+			}
+			select {
+			case <-releaseOldSend:
+			case <-request.Context().Done():
+				return
+			}
+		case "/botnew-token/sendRichMessage":
+			select {
+			case <-newSendStarted:
+			default:
+				close(newSendStarted)
+			}
+		case "/botold-token/getUpdates", "/botnew-token/getUpdates":
+			writeTelegramResponse(t, writer, `{"ok":true,"result":[]}`)
+
+			return
+		default:
+			t.Fatalf("unexpected Telegram request path %q", request.URL.Path)
+		}
+		writeTelegramResponse(t, writer, `{"ok":true,"result":{}}`)
+	}))
+	t.Cleanup(telegramServer.Close)
+	routeTelegramRequestsTo(t, telegramServer.URL)
+
+	reloadPending := make(chan struct{})
+	logger := slog.New(slog.NewJSONHandler(&reloadLogSignal{pending: reloadPending}, nil))
+	settings, err := config.Load(configPath)
+	require.NoError(t, err)
+	factory := newRuntimeFactory(logger)
+	initial, err := factory.snapshot(settings, "")
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- process.RunReloadable(ctx, initial, func(loadCtx context.Context) (process.ReloadSnapshot, error) {
+			latest, loadErr := config.Load(configPath)
+			if loadErr != nil {
+				return process.ReloadSnapshot{}, loadErr
+			}
+
+			return factory.snapshot(latest, "")
+		}, logger)
+	}()
+	select {
+	case <-oldSendStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("initial digest did not reach Telegram")
+	}
+
+	// When
+	temporaryConfig := configPath + ".tmp"
+	require.NoError(t, os.WriteFile(temporaryConfig, []byte(updatedConfig), 0o600))
+	require.NoError(t, os.Rename(temporaryConfig, configPath))
+	select {
+	case <-reloadPending:
+	case <-time.After(5 * time.Second):
+		t.Fatal("reload did not pause new digests")
+	}
+	require.NoFileExists(t, filepath.Join(root, "new.db"))
+	close(releaseOldSend)
+	select {
+	case <-newSendStarted:
+	case <-time.After(8 * time.Second):
+		cancel()
+		<-done
+		t.Fatal("reloaded digest did not reach Telegram")
+	}
+	cancel()
+
+	// Then
+	require.NoError(t, <-done)
+	alibPathsMu.Lock()
+	gotAlibPaths := append([]string(nil), alibPaths...)
+	alibPathsMu.Unlock()
+	require.Contains(t, gotAlibPaths, "/tramka.phtml")
+	require.Contains(t, gotAlibPaths, "/detektivy.phtml")
+	require.FileExists(t, filepath.Join(root, "old.db"))
+	require.FileExists(t, filepath.Join(root, "new.db"))
+}
+
+type reloadLogSignal struct {
+	pending chan struct{}
+	once    sync.Once
+}
+
+func (signal *reloadLogSignal) Write(data []byte) (int, error) {
+	if bytes.Contains(data, []byte(`"msg":"config.reload_pending"`)) {
+		signal.once.Do(func() { close(signal.pending) })
+	}
+	return len(data), nil
 }
 
 func Test_run_forget_latest_only_requires_state_path(t *testing.T) {
 	// Given
-	useCommandLine(t, "-forget-latest", "1")
 	statePath := filepath.Join(t.TempDir(), "state.db")
 	setEnvironmentAbsentDigestConfiguration(t)
-	t.Setenv("STATE_PATH", statePath)
+	setMaintenanceConfig(t, statePath, "-100123")
+	useCommandLine(t, "-forget-latest", "1", "-chat", "-100123", "-config", os.Getenv("ALIB_TEST_CONFIG"))
 	state, err := store.Open(statePath, time.Now())
 	require.NoError(t, err)
 	book := alib.Book{BuyURL: "https://example.com/book"}
@@ -388,11 +1162,7 @@ func Test_run_forget_latest_documented_cli_scenario_deletes_latest_records_witho
 	// Given
 	statePath := filepath.Join(t.TempDir(), "state.db")
 	setEnvironmentAbsentDigestConfiguration(t)
-	t.Setenv("STATE_PATH", statePath)
-	// The Telegram API is intentionally unreachable: maintenance mode must not
-	// construct the Alib or Telegram adapters that would use it.
-	t.Setenv("TELEGRAM_API_BASE", "http://127.0.0.1:1")
-
+	setMaintenanceConfig(t, statePath, "-100123")
 	books := make([]alib.Book, 8)
 	for index := range books {
 		books[index] = alib.Book{BuyURL: fmt.Sprintf("https://example.com/book-%d", index)}
@@ -402,7 +1172,7 @@ func Test_run_forget_latest_documented_cli_scenario_deletes_latest_records_witho
 	_, err = state.RecordDiscovered(context.Background(), books, time.Now())
 	require.NoError(t, err)
 	require.NoError(t, state.Close())
-	useCommandLine(t, "-forget-latest", "6")
+	useCommandLine(t, "-forget-latest", "6", "-chat", "-100123", "-config", os.Getenv("ALIB_TEST_CONFIG"))
 
 	// When
 	err = run(slog.New(slog.DiscardHandler))
@@ -419,20 +1189,32 @@ func Test_run_forget_latest_documented_cli_scenario_deletes_latest_records_witho
 
 func Test_run_rejects_missing_Alib_tracking_configuration_before_http(t *testing.T) {
 	// Given
-	useOnceMode(t)
-	setEnvironmentAbsentDigestConfiguration(t)
-	t.Setenv("TELEGRAM_BOT_TOKEN", "test-token")
-	t.Setenv("TELEGRAM_CHAT_ID", "-100123")
-	t.Setenv("TELEGRAM_API_BASE", "http://127.0.0.1:1")
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(configPath, []byte("[[chats]]\nchat_id = \"-100123\"\ntelegram_token = \"test-token\"\n"), 0o600))
+	useCommandLine(t, "-once", "-config", configPath)
 
 	// When
 	err := run(slog.New(slog.DiscardHandler))
 
 	// Then
 	require.ErrorIs(t, err, config.ErrInvalid)
-	require.ErrorContains(t, err, "ALIB_CATEGORIES")
-	require.ErrorContains(t, err, "ALIB_SERIES")
-	require.ErrorContains(t, err, "ALIB_PUBLISHERS")
+	require.ErrorContains(t, err, "categories, filters, and queries")
+}
+
+func setMaintenanceConfig(t *testing.T, statePath, chatID string) {
+	t.Helper()
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	content := fmt.Sprintf("state_path = %q\n\n[[chats]]\nchat_id = %q\nstate_file = %q\n",
+		filepath.Dir(statePath), chatID, filepath.Base(statePath))
+	require.NoError(t, os.WriteFile(configPath, []byte(content), 0o600))
+	t.Setenv("ALIB_TEST_CONFIG", configPath)
+}
+
+func writeMainConfig(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	return path
 }
 
 func Test_run_sends_only_last_wired_message_with_sound(t *testing.T) {
@@ -474,7 +1256,7 @@ func Test_run_sends_only_last_wired_message_with_sound(t *testing.T) {
 	t.Setenv("ALIB_CATEGORIES", "tramka")
 	t.Setenv("ALIB_SERIES", "")
 	t.Setenv("ALIB_PUBLISHERS", "")
-	t.Setenv("TELEGRAM_API_BASE", telegramServer.URL)
+	routeTelegramRequestsTo(t, telegramServer.URL)
 	t.Setenv("HTTP_TIMEOUT", "2s")
 	t.Setenv("ALIB_MAX_RETRIES", "0")
 	t.Setenv("MESSAGE_LIMIT", "64")
@@ -592,15 +1374,16 @@ func Test_run_once_fetches_categories_and_series_in_order_and_sends_partial_dedu
 	t.Setenv("ALIB_CATEGORIES", "first,broken")
 	t.Setenv("ALIB_SERIES", `"Серия, тома",changed`)
 	t.Setenv("MESSAGE_LIMIT", strconv.Itoa(messageLimit))
-	settings, err := config.Load()
+	writeEnvironmentConfig(t, os.Getenv("ALIB_TEST_CONFIG"))
+	settings, err := config.Load(os.Getenv("ALIB_TEST_CONFIG"))
 	require.NoError(t, err)
 	require.Equal(t, []string{
 		"https://www.alib.ru/first.phtml?tnew=7",
 		"https://www.alib.ru/broken.phtml?tnew=7",
 		"https://alib.ru/findp.php4?seria=%D1%E5%F0%E8%FF%2C+%F2%EE%EC%E0&lday=7",
 		"https://alib.ru/findp.php4?seria=changed&lday=7",
-	}, settings.AlibURLs)
-	settings.AlibURLs = localAlibURLs(t, alibServer.URL, settings.AlibURLs)
+	}, settings.Chats[0].AlibURLs)
+	settings.Chats[0].AlibURLs = localAlibURLs(t, alibServer.URL, settings.Chats[0].AlibURLs)
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
@@ -645,13 +1428,13 @@ func Test_run_once_fetches_categories_and_series_in_order_and_sends_partial_dedu
 	require.Equal(t, 1, strings.Count(logOutput, `"msg":"alib.page_download_failed"`))
 	require.Equal(t, 2, strings.Count(logOutput, `"msg":"alib.page_parsed"`))
 	require.Equal(t, 1, strings.Count(logOutput, `"msg":"alib.page_parse_failed"`))
-	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","index":0,"url":"`+alibServer.URL+`/first.phtml?tnew=7"`)
-	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","index":2,"url":"`+alibServer.URL+`/findp.php4?seria=%D1%E5%F0%E8%FF%2C+%F2%EE%EC%E0&lday=7"`)
-	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","index":3,"url":"`+alibServer.URL+`/findp.php4?seria=changed&lday=7"`)
-	require.Contains(t, logOutput, `"msg":"alib.page_download_failed","index":1,"url":"`+alibServer.URL+`/broken.phtml?tnew=7"`)
-	require.Contains(t, logOutput, `"msg":"alib.page_parsed","index":0,"url":"`+alibServer.URL+`/first.phtml?tnew=7","books":2`)
-	require.Contains(t, logOutput, `"msg":"alib.page_parsed","index":2,"url":"`+alibServer.URL+`/findp.php4?seria=%D1%E5%F0%E8%FF%2C+%F2%EE%EC%E0&lday=7","books":1`)
-	require.Contains(t, logOutput, `"msg":"alib.page_parse_failed","index":3,"url":"`+alibServer.URL+`/findp.php4?seria=changed&lday=7"`)
+	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","chat_id":"-100123","index":0,"url":"`+alibServer.URL+`/first.phtml?tnew=7"`)
+	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","chat_id":"-100123","index":2,"url":"`+alibServer.URL+`/findp.php4?seria=%D1%E5%F0%E8%FF%2C+%F2%EE%EC%E0&lday=7"`)
+	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","chat_id":"-100123","index":3,"url":"`+alibServer.URL+`/findp.php4?seria=changed&lday=7"`)
+	require.Contains(t, logOutput, `"msg":"alib.page_download_failed","chat_id":"-100123","index":1,"url":"`+alibServer.URL+`/broken.phtml?tnew=7"`)
+	require.Contains(t, logOutput, `"msg":"alib.page_parsed","chat_id":"-100123","index":0,"url":"`+alibServer.URL+`/first.phtml?tnew=7","books":2`)
+	require.Contains(t, logOutput, `"msg":"alib.page_parsed","chat_id":"-100123","index":2,"url":"`+alibServer.URL+`/findp.php4?seria=%D1%E5%F0%E8%FF%2C+%F2%EE%EC%E0&lday=7","books":1`)
+	require.Contains(t, logOutput, `"msg":"alib.page_parse_failed","chat_id":"-100123","index":3,"url":"`+alibServer.URL+`/findp.php4?seria=changed&lday=7"`)
 	require.Less(t,
 		strings.LastIndex(logOutput, `"msg":"alib.page_downloaded"`),
 		strings.Index(logOutput, `"msg":"alib.page_parsed"`),
@@ -740,10 +1523,10 @@ func Test_run_once_sends_notification_for_all_correct_empty_pages(t *testing.T) 
 	logOutput := logs.String()
 	require.Equal(t, 2, strings.Count(logOutput, `"msg":"alib.page_downloaded"`))
 	require.Equal(t, 2, strings.Count(logOutput, `"msg":"alib.page_parsed"`))
-	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","index":0,"url":"`+alibServer.URL+`/empty-one?first=true"`)
-	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","index":1,"url":"`+alibServer.URL+`/empty-two?second=true"`)
-	require.Contains(t, logOutput, `"msg":"alib.page_parsed","index":0,"url":"`+alibServer.URL+`/empty-one?first=true","books":0`)
-	require.Contains(t, logOutput, `"msg":"alib.page_parsed","index":1,"url":"`+alibServer.URL+`/empty-two?second=true","books":0`)
+	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","chat_id":"-100123","index":0,"url":"`+alibServer.URL+`/empty-one?first=true"`)
+	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","chat_id":"-100123","index":1,"url":"`+alibServer.URL+`/empty-two?second=true"`)
+	require.Contains(t, logOutput, `"msg":"alib.page_parsed","chat_id":"-100123","index":0,"url":"`+alibServer.URL+`/empty-one?first=true","books":0`)
+	require.Contains(t, logOutput, `"msg":"alib.page_parsed","chat_id":"-100123","index":1,"url":"`+alibServer.URL+`/empty-two?second=true","books":0`)
 	require.Contains(t, logOutput, `"msg":"digest.completed"`)
 	require.Contains(t, logOutput, `"fetched":0`)
 	require.Contains(t, logOutput, `"new":0`)
@@ -839,13 +1622,13 @@ func Test_run_once_fails_after_requesting_and_logging_all_failed_pages(t *testin
 	require.Equal(t, 1, strings.Count(logOutput, `"msg":"alib.page_downloaded"`))
 	require.Equal(t, 1, strings.Count(logOutput, `"msg":"alib.page_parse_failed"`))
 	require.NotContains(t, logOutput, `"msg":"alib.page_parsed"`)
-	require.Contains(t, logOutput, `"msg":"alib.page_download_failed","index":0,"url":"`+
+	require.Contains(t, logOutput, `"msg":"alib.page_download_failed","chat_id":"-100123","index":0,"url":"`+
 		alibServer.URL+`/status-one?status=one"`)
-	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","index":1,"url":"`+
+	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","chat_id":"-100123","index":1,"url":"`+
 		alibServer.URL+`/broken?scope=broken"`)
-	require.Contains(t, logOutput, `"msg":"alib.page_parse_failed","index":1,"url":"`+
+	require.Contains(t, logOutput, `"msg":"alib.page_parse_failed","chat_id":"-100123","index":1,"url":"`+
 		alibServer.URL+`/broken?scope=broken"`)
-	require.Contains(t, logOutput, `"msg":"alib.page_download_failed","index":2,"url":"`+
+	require.Contains(t, logOutput, `"msg":"alib.page_download_failed","chat_id":"-100123","index":2,"url":"`+
 		alibServer.URL+`/status-two?status=two"`)
 	require.NotContains(t, logOutput, `"msg":"alib.page_failed"`)
 	require.Contains(t, logOutput, `"msg":"digest.failed"`)
@@ -858,9 +1641,15 @@ func useOnceMode(t *testing.T) {
 
 func runWithAlibURLs(t *testing.T, logger *slog.Logger, endpoints ...string) error {
 	t.Helper()
-	settings, err := config.Load()
+	configPath := os.Getenv("ALIB_TEST_CONFIG")
+	if configPath == "" {
+		configPath = filepath.Join(t.TempDir(), "config.toml")
+		t.Setenv("ALIB_TEST_CONFIG", configPath)
+	}
+	writeEnvironmentConfig(t, configPath)
+	settings, err := config.Load(configPath)
 	require.NoError(t, err)
-	settings.AlibURLs = append([]string(nil), endpoints...)
+	settings.Chats[0].AlibURLs = append([]string(nil), endpoints...)
 
 	return runWithConfig(logger, settings, true)
 }
@@ -910,17 +1699,36 @@ func routeAlibRequestsTo(t *testing.T, base string) {
 	})
 }
 
+func routeTelegramRequestsTo(t *testing.T, base string) {
+	t.Helper()
+	target, err := url.Parse(base)
+	require.NoError(t, err)
+	originalTransport := http.DefaultTransport
+	t.Cleanup(func() {
+		http.DefaultTransport = originalTransport
+	})
+	http.DefaultTransport = roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Host != "api.telegram.org" {
+			return originalTransport.RoundTrip(request)
+		}
+
+		routedRequest := request.Clone(request.Context())
+		routedURL := *request.URL
+		routedURL.Scheme = target.Scheme
+		routedURL.Host = target.Host
+		routedRequest.URL = &routedURL
+
+		return originalTransport.RoundTrip(routedRequest)
+	})
+}
+
 func useCommandLine(t *testing.T, arguments ...string) {
 	t.Helper()
 
-	originalCommandLine := flag.CommandLine
 	originalArgs := os.Args
 	t.Cleanup(func() {
-		flag.CommandLine = originalCommandLine
 		os.Args = originalArgs
 	})
-	flag.CommandLine = flag.NewFlagSet("alib-fetcher", flag.ContinueOnError)
-	flag.CommandLine.SetOutput(io.Discard)
 	os.Args = append([]string{"alib-fetcher"}, arguments...)
 }
 
@@ -934,7 +1742,6 @@ func setEnvironmentAbsentDigestConfiguration(t *testing.T) {
 		"ALIB_CATEGORIES",
 		"ALIB_SERIES",
 		"ALIB_PUBLISHERS",
-		"TELEGRAM_API_BASE",
 		"HTTP_TIMEOUT",
 		"MESSAGE_LIMIT",
 		"RUN_ON_STARTUP",
@@ -978,6 +1785,13 @@ func decodeTelegramMessage(t *testing.T, request *http.Request) telegrambot.Send
 	return payload
 }
 
+func writeTelegramResponse(t *testing.T, writer http.ResponseWriter, body string) {
+	t.Helper()
+	writer.Header().Set("Content-Type", "application/json")
+	_, err := io.WriteString(writer, body)
+	require.NoError(t, err)
+}
+
 func setRunEnvironment(t *testing.T, telegramAPIBase, statePath string) {
 	t.Helper()
 
@@ -990,10 +1804,89 @@ func setRunEnvironment(t *testing.T, telegramAPIBase, statePath string) {
 	t.Setenv("ALIB_CATEGORIES", "tramka")
 	t.Setenv("ALIB_SERIES", "")
 	t.Setenv("ALIB_PUBLISHERS", "")
-	t.Setenv("TELEGRAM_API_BASE", telegramAPIBase)
+	routeTelegramRequestsTo(t, telegramAPIBase)
 	t.Setenv("HTTP_TIMEOUT", "2s")
 	t.Setenv("ALIB_MAX_RETRIES", "0")
 	t.Setenv("MESSAGE_LIMIT", "4000")
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	t.Setenv("ALIB_TEST_CONFIG", configPath)
+	writeEnvironmentConfig(t, configPath)
+	os.Args = append(os.Args, "-config", configPath)
+}
+
+func writeEnvironmentConfig(t *testing.T, configPath string) {
+	t.Helper()
+	statePath := os.Getenv("STATE_PATH")
+	stateDir, stateFile := filepath.Dir(statePath), filepath.Base(statePath)
+	if statePath == "" {
+		stateDir, stateFile = ".", "state.db"
+	}
+	categories := csvArray(t, os.Getenv("ALIB_CATEGORIES"))
+	series := csvArray(t, os.Getenv("ALIB_SERIES"))
+	publishers := csvArray(t, os.Getenv("ALIB_PUBLISHERS"))
+	var builder strings.Builder
+	_, err := fmt.Fprintf(&builder, "state_path = %s\ncron_schedule = %s\ntimezone = %s\nrun_on_startup = %s\n",
+		strconv.Quote(stateDir), strconv.Quote(valueOr(os.Getenv("CRON_SCHEDULE"), "0 0 * * *")),
+		strconv.Quote(valueOr(os.Getenv("TIMEZONE"), "UTC")), valueOr(os.Getenv("RUN_ON_STARTUP"), "true"))
+	require.NoError(t, err)
+	if value := os.Getenv("HTTP_TIMEOUT"); value != "" {
+		_, err = fmt.Fprintf(&builder, "http_timeout = %s\n", strconv.Quote(value))
+		require.NoError(t, err)
+	}
+	if value := os.Getenv("ALIB_MAX_RETRIES"); value != "" {
+		_, err = fmt.Fprintf(&builder, "alib_max_retries = %s\n", value)
+		require.NoError(t, err)
+	}
+	if value := os.Getenv("MESSAGE_LIMIT"); value != "" {
+		_, err = fmt.Fprintf(&builder, "message_limit = %s\n", value)
+		require.NoError(t, err)
+	}
+	if freshBooks := os.Getenv("FRESH_BOOKS"); freshBooks != "" {
+		_, err = fmt.Fprintf(&builder, "fresh_books = %s\n", strconv.Quote(freshBooks))
+		require.NoError(t, err)
+	}
+	_, err = fmt.Fprintf(&builder, "\n[[chats]]\nchat_id = %s\ntelegram_token = %s\nstate_file = %s\ncategories = %s\n",
+		strconv.Quote(os.Getenv("TELEGRAM_CHAT_ID")), strconv.Quote(os.Getenv("TELEGRAM_BOT_TOKEN")),
+		strconv.Quote(stateFile), tomlArray(categories))
+	require.NoError(t, err)
+	if len(series) > 0 || len(publishers) > 0 {
+		_, err = builder.WriteString("\n[chats.filters]\n")
+		require.NoError(t, err)
+		if len(series) > 0 {
+			_, err = fmt.Fprintf(&builder, "seria = %s\n", tomlArray(series))
+			require.NoError(t, err)
+		}
+		if len(publishers) > 0 {
+			_, err = fmt.Fprintf(&builder, "izdat = %s\n", tomlArray(publishers))
+			require.NoError(t, err)
+		}
+	}
+	require.NoError(t, os.WriteFile(configPath, []byte(builder.String()), 0o600))
+}
+
+func csvArray(t *testing.T, value string) []string {
+	t.Helper()
+	if value == "" {
+		return nil
+	}
+	items, err := csv.NewReader(strings.NewReader(value)).Read()
+	require.NoError(t, err)
+	return items
+}
+
+func tomlArray(values []string) string {
+	quoted := make([]string, len(values))
+	for index, value := range values {
+		quoted[index] = strconv.Quote(strings.TrimSpace(value))
+	}
+	return "[" + strings.Join(quoted, ", ") + "]"
+}
+
+func valueOr(value, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 func unsetEnvironment(t *testing.T, key string) {

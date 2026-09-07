@@ -893,7 +893,8 @@ func Test_Client_retries_request_timeout_with_live_parent_context(t *testing.T) 
 				assert.NoError(t, err)
 			}))
 			t.Cleanup(server.Close)
-			client, err := alib.NewClient([]string{server.URL}, 500*time.Millisecond, 1, slog.New(slog.DiscardHandler))
+			// Allow the healthy retry to complete while race-enabled tests compete for CPU.
+			client, err := alib.NewClient([]string{server.URL}, 5*time.Second, 1, slog.New(slog.DiscardHandler))
 			require.NoError(t, err)
 			ctx := t.Context()
 

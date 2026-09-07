@@ -5,18 +5,18 @@
 `alib-fetcher` is a small always-on Go service. It fetches the newest listings
 from one or more configured Alib pages, records discovered books in an embedded
 bbolt database, renders pending books as Telegram HTML messages, sends them to
-one chat, and records successful deliveries in the same database.
+configured chats, and records successful deliveries in each chat's database.
 
 The module is `github.com/kemko/alib-fetcher`. The executable entry point is
-`./cmd/alib-fetcher`. Go 1.26.5 is the supported toolchain; `make tools`
-installs the pinned golangci-lint v2 release.
+`./cmd/alib-fetcher`. Go 1.27.1 is the supported toolchain; `make tools`
+installs the pinned golangci-lint v2 and govulncheck releases.
 
 ## Runtime flow and invariants
 
 One digest cycle is deliberately ordered as follows:
 
 1. Remove sent records strictly older than 14 days.
-2. Build pages from `ALIB_CATEGORIES`, `ALIB_SERIES`, then `ALIB_PUBLISHERS`,
+2. Build pages from the chat's `categories`, `filters`, then `queries`,
    and download all generated Alib endpoints sequentially, retaining successful
    response bodies and their source order.
 3. Parse successful responses only after all downloads finish, then combine and
@@ -50,10 +50,10 @@ Preserve these semantics:
 - `State.Pending` returns records in first-discovery/source order, not bbolt key
   sort order; the digest sends year `0` records first, then recognized years in
   descending order, with stable first-discovery order within each group.
-- `MESSAGE_LIMIT` counts Unicode runes in displayed Rich Message text after
+- `message_limit` counts Unicode runes in displayed Rich Message text after
   parsing HTML; formatting tags and URL attribute values do not count, while
   encoded text and `<br/>` line breaks do. A listing's `Content` is shortened
-  with `…` to the longest prefix that fits within `MESSAGE_LIMIT - 1` displayed
+  with `…` to the longest prefix that fits within `message_limit - 1` displayed
   runes. If mandatory displayed fields plus minimal content still cannot fit,
   it remains pending and must not block other renderable pending listings;
   `digest.ErrMessageTooLong` is reported.
@@ -94,16 +94,17 @@ Preserve these semantics:
   `фото`; database open does not rewrite them, and the next mutating write uses
   the current `photos` schema.
 - Service mode runs one cycle immediately after startup by default, then follows
-  the cron schedule. `RUN_ON_STARTUP=false` skips the startup cycle. Overlapping
-  cron jobs are skipped.
+  the cron schedule. `run_on_startup = false` skips the startup cycle.
+  Overlapping cron jobs for the same chat are skipped.
 - Service mode starts SDK-managed polling for Telegram `callback_query` updates
   registered for the stable `telegram.RefreshCallbackData` value. `-once` sends
   the refresh button whenever it sends a digest message, including the empty
   notification, but never starts the SDK listener.
 - Refresh callbacks run through the same digest path and bbolt state path as
   startup and scheduled jobs. Startup, scheduled, and refresh-triggered digests
-  share one process-local runner lock; scheduled and refresh-triggered digests
-  skip when another digest is already running.
+  share one process-local runner lock per chat; scheduled and refresh-triggered
+  digests skip when another digest for that chat is already running. Different
+  chats run independently. Chats sharing a token use one SDK client and poller.
 - Callback polling must continue while a refresh-triggered digest is running so
   duplicate button presses can be answered and skipped. The SDK owns update
   offsets and polling retry/backoff; polling errors are reported through the
@@ -116,7 +117,7 @@ Preserve these semantics:
   with `Формирование дайджеста запущено`; the digest continues in the
   background on the service lifetime context and has no overall deadline.
   Digest results and errors are recorded in `digest.completed` and
-  `digest.failed`; `HTTP_TIMEOUT` still applies to each external request.
+  `digest.failed`; `http_timeout` still applies to each external request.
   Toast display duration is controlled by the Telegram client; the Bot API
   cannot guarantee an exact duration.
 - For refresh-triggered digests, remove the clicked message's old reply markup
@@ -131,15 +132,19 @@ Preserve these semantics:
 
 ## Repository map
 
-- `cmd/alib-fetcher/main.go`: thin bootstrap wiring for JSON logging, `-once`,
-  `-forget-latest`, configuration loading, adapter construction, signal
-  context, `internal/process.Run`, and `internal/process.ForgetLatest`.
+- `cmd/alib-fetcher/main.go`: bootstrap wiring for the `urfave/cli` v3.11.0
+  command-line interface, JSON logging, CLI modes, TOML loading, per-chat
+  adapters, shared-token clients, and signal context.
+  Uses `process.RunRecipients` for once mode, `process.RunReloadable` for
+  service mode, and `process.ForgetLatestForChat` for maintenance.
 - `internal/process`: service process lifecycle orchestration, state DB open
   lifetime, startup and scheduled digest runs, robfig/cron lifecycle, refresh
-  callback policy and listener lifecycle, shared digest-runner concurrency, and
-  the state-only forget-latest maintenance operation.
-- `internal/config`: environment loading, generated category/series/publisher
-  endpoints, defaults, and validation.
+  callback policy and listener lifecycle, per-chat runner concurrency,
+  configuration generations, and the state-only forget-latest operation.
+- `internal/config`: strict TOML loading through `github.com/pelletier/go-toml/v2`,
+  generated category/filter/query endpoints, defaults, and validation. Service
+  and maintenance loading share state-mapping validation, including existing
+  filesystem alias checks.
 - `internal/alib`: HTTP client plus charset-aware, DOM-first HTML parser. The
   real page may be Windows-1251. Listings are recognized inside `<p>` elements
   by a title in `<b>` and a `Купить` link; seller links contain `bs.php4`.
@@ -169,72 +174,78 @@ Preserve these semantics:
 - `internal/testutil`: shared test helpers `RenderChunks`, `DisplayedRuneCount`,
   and `ListingPage`. Import only from tests; keep displayed-rune counting
   independent of the production renderer.
-- `Dockerfile`: multi-stage static build; final distroless Debian image runs as
+- `Dockerfile`: copies the filtered context with `COPY . .` and compiles from
+  `vendor` with networking disabled; final distroless Debian image runs as
   UID/GID 65532 (`nonroot`) and stores state under `/var/lib/alib-fetcher`.
 - `docker-compose.yml`: read-only, capability-dropped service with a persistent
   named state volume.
-- `.github/workflows/ci.yml`: runs `make verify` and `govulncheck` on pushes/PRs
+- `.github/workflows/ci.yml`: installs golangci-lint with its official action,
+  runs `make fmt-check lint test build`, and uses the official govulncheck action on pushes/PRs
   to `master`, then validates Compose and builds the production image. Pull
   requests never log in or push; a successful `master` push publishes
   `ghcr.io/${github.repository}:latest` from its single image build. Ordinary
-  quality commands must not be duplicated in CI.
-- `.github/dependabot.yml`: normal scheduled version PRs are disabled; updates
-  are intended to be security-only through repository security settings.
+  quality commands must not be duplicated in CI. Local `make verify` retains all checks.
+- `.github/dependabot.yml`: GitHub Actions version updates run weekly on Saturday
+  at 09:00 Europe/Moscow, with a numeric limit of 1000 open PRs. Ordinary Go module
+  and Docker version updates are disabled; security updates use repository settings.
 
 ## Configuration contract
 
-Required for digest and service modes; `-forget-latest` reads only `STATE_PATH`
-and ignores the remaining service configuration:
+The process reads strict TOML from `./config.toml` or `-config PATH`. Global
+fields are `state_path` (default `/var/lib/alib-fetcher`, a directory),
+`cron_schedule` (`0 0 * * *`), `timezone` (`Europe/Moscow`), `run_on_startup`
+(`true`), `fresh_books` (empty), `http_timeout` (`30s`), `alib_max_retries`
+(`3`), and `message_limit` (`32000`, range `64..32768`). Relative
+`state_path` values are resolved from the config directory.
 
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_CHAT_ID` (signed decimal `int64` chat ID or non-empty `@channel`
-  username, with no whitespace)
+Each `[[chats]]` entry has `chat_id` (signed decimal `int64` or non-empty
+`@channel`), `telegram_token`, optional `state_file`, and search sources. A
+missing `state_file` uses `<normalized chat_id>.db`; numeric IDs use canonical
+decimal form and usernames are lowercased. A state file is only a filename:
+absolute paths, separators, NUL, `.`, and `..` are rejected. Normalized IDs and
+resolved state files must be unique. State filenames are compared after Unicode
+normalization and without regard to case on every platform, even before files
+exist; configured database paths are not rewritten. The old single-file setting
+`STATE_PATH=/path/state.db` maps to `state_path = "/path"` and
+`state_file = "state.db"`; the existing database is opened in place.
 
-Optional defaults:
+Search sources are `categories`, `filters`, and `queries`. Categories contain
+non-empty ASCII-letter names and use `tnew=7`. The supported form fields are
+`author`, `title`, `seria`, `izdat`, `gorodiz`, `isbnp`, `god1`, `god2`,
+`cena1`, `cena2`, `sod`, `bsonly`, `gorod`, `lday`, `noreprint`, `nograv`,
+`fotoonly`, `minus`, `sumfind`, `tipfind`, and `sortby`. Values are strings;
+checkboxes (`noreprint`, `nograv`, `fotoonly`) accept only `da`, `sumfind`
+accepts `1..5`, `sortby` accepts `0..10`, and `tipfind` accepts the Alib rubric
+identifiers. Missing `lday` becomes `7`. Each filter value creates one
+request; each query map creates one request with all its fields. Requests run
+in category, form-field, then query order; duplicate URLs are removed after
+the first. Values are encoded in Windows-1251, then URL-escaped. Every chat
+needs at least one source.
 
-| Variable | Default | Validation/meaning |
-| --- | --- | --- |
-| `CRON_SCHEDULE` | `0 0 * * *` | robfig standard five-field cron; descriptors such as `@hourly` and `@every 6h` are accepted |
-| `TIMEZONE` | `Europe/Moscow` | IANA location used by cron and publication-year markers |
-| `RUN_ON_STARTUP` | `true` | whether service mode runs one digest cycle immediately after startup |
-| `FRESH_BOOKS` | empty | optional inclusive `✨` threshold: `age:N` or `since:YYYY`; empty disables only `✨` |
-| `STATE_PATH` | `/var/lib/alib-fetcher/state.db` | bbolt database; parent directories are created with mode `0750`, DB with `0600` |
-| `ALIB_CATEGORIES` | empty | Optional one-record CSV list of non-empty ASCII-letter category names; each becomes `https://www.alib.ru/<category>.phtml?tnew=7` |
-| `ALIB_SERIES` | empty | Optional one-record CSV list of Unicode series names representable in Windows-1251; each becomes `https://alib.ru/findp.php4?seria=<encoded>&lday=7` |
-| `ALIB_PUBLISHERS` | empty | Optional one-record CSV list of Unicode publisher names representable in Windows-1251; each becomes `https://alib.ru/findp.php4?izdat=<encoded>&lday=7` |
-| `ALIB_MAX_RETRIES` | `3` | Number of additional attempts after the first failed Alib request; `0` disables retries; cenkalti/backoff delays are 1, 2, 4, 8, 16, then 30 seconds, capped at 30 seconds |
-| `TELEGRAM_API_BASE` | `https://api.telegram.org` | HTTP(S) API base; override it in tests |
-| `HTTP_TIMEOUT` | `30s` | positive Go duration applied per external request |
-| `MESSAGE_LIMIT` | `32000` | displayed Rich Message text rune count after HTML parsing, allowed range 64..32768 |
+`-service` runs all chats with independent runners, shared-token polling, and
+config watching. `-once` runs all chats or the selected `-chat` without
+scheduling, polling, or watching. `-forget-latest N` requires `-chat` and reads
+only the state mapping; it needs no token, source, or schedule and makes no
+HTTP requests. Exactly one mode is required; no arguments and help print the
+usage. Unknown or incompatible arguments exit 2; config and runtime failures
+exit 1. Tokens and TOML contents are never logged.
 
-Invalid configuration, including a malformed or overflowing
-`TELEGRAM_CHAT_ID`, prevents process startup. Errors name the invalid variable.
-`ALIB_CATEGORIES`, `ALIB_SERIES`, and `ALIB_PUBLISHERS` are optional separately,
-but at least one must contain a non-empty CSV list. Lists reject empty elements
-and malformed quotes; surrounding whitespace is trimmed. Categories accept only
-ASCII letters. Series and publishers are entered as Unicode, including commas
-when CSV-quoted, but each value must be representable in Windows-1251. Their
-Windows-1251 bytes are percent-encoded as one `seria` or `izdat` query value; an
-unrepresentable character is a configuration error naming the source variable.
-Generated endpoints always use the fixed seven-day window (`tnew=7` for
-categories and `lday=7` for series and publishers), retaining
-category-then-series-then-publisher order and ignoring repeated series or
-publisher names after their first occurrence.
-Never log or expose the bot token; note that the SDK internally puts it in the
-Bot API URL.
+`fresh_books` controls the optional `✨` marker, without filtering listings.
+`age:N` uses the inclusive threshold `current local year - N`; `since:YYYY`
+uses that inclusive year. Empty disables only `✨`. The configured `timezone`
+controls the current year (`🔥`), previous year in January (also `🔥`), and
+future years (`🛸`); unknown years also receive `🛸`.
 
-`FRESH_BOOKS=age:N` accepts a non-negative integer and sets the inclusive lower
-year to `current local year - N`; `age:0` therefore includes only the current
-year. `FRESH_BOOKS=since:YYYY` accepts a four-digit inclusive lower year. Empty
-or absent `FRESH_BOOKS` disables `✨`, not `🔥`. The cycle time in `TIMEZONE`
-controls classification: the current year gets `🔥`; in January, the previous
-year also gets `🔥` regardless of the optional threshold. Other recognized
-years from the threshold through the current year get `✨`. A recognized year
-greater than the current year gets `🛸` independently of `FRESH_BOOKS`; a year
-`0` also gets `🛸`, while other unrecognized years get no marker. The recognized
-year is the last four-digit year in the bibliography followed by `г` or `г.`;
-years elsewhere in
-the listing do not participate.
+Service mode checks the config file every second. Valid changes stop new
+digests while active work finishes with its old snapshot; polling continues
+answering and skipping refresh presses during this drain. After the drain, old
+polling is joined and the file is rechecked before applying the valid snapshot.
+An invalid or reverted candidate restores the previous configuration. Existing
+chats do not repeat startup work; new chats follow `run_on_startup`. Unchanged
+settings, including comment-only edits, do not restart work. Retained tokens
+keep their polling offsets, and timeouts change only after old requests stop.
+Removing a chat preserves its database; changing a state path switches files
+without migrating history. Repeated identical reload failures log once.
 
 ## Digest and transport details
 
@@ -265,7 +276,7 @@ of displayed Rich Message text after HTML parsing: formatting tags and URL
 attribute values do not consume the limit, while encoded text and `<br/>` line
 breaks do. Chunks may split only between listings. Content that exceeds the
 limit is truncated before HTML escaping to the longest prefix plus `…` that
-fits within `MESSAGE_LIMIT - 1`; only `Content` is shortened. If mandatory
+fits within `message_limit - 1`; only `Content` is shortened. If mandatory
 displayed fields plus minimal content still cannot fit, the listing returns
 `digest.ErrMessageTooLong`.
 
@@ -276,7 +287,7 @@ order and repeats; empty captions use `фото`.
 The Alib client accepts one or more HTTP(S) endpoints, sends
 `User-Agent: alib-fetcher/1.0`, and requires HTTP 200. Failed page requests use
 the cenkalti/backoff exponential backoff with delays of 1, 2, 4, 8, 16, then 30
-seconds, capped at 30 seconds. `ALIB_MAX_RETRIES` sets additional attempts per
+seconds, capped at 30 seconds. `alib_max_retries` sets additional attempts per
 page; the default is three and `0` disables retries. Each attempt uses the
 configured HTTP timeout and the parent context. All attempts for one URL finish
 before the next URL starts, and all downloads finish before successful responses
@@ -307,12 +318,15 @@ Structured logs go to stdout. Stable event names are `scheduler.started`,
 `scheduler.stopped`, `digest.started`, `digest.completed`, `digest.failed`,
 `alib.page_downloaded`, `alib.page_download_failed`, `alib.page_parsed`,
 `alib.page_parse_failed`, `callback.poll_failed`, `callback.answer_failed`,
-`state.forget_latest.completed`, and `service.failed`; digest completion fields
+`state.forget_latest.completed`, `config.reload_pending`, `config.reloaded`,
+`config.reload_failed`, and `service.failed`; digest completion fields
 are `fetched`, `new`, `failed`, `pruned`, and `sent`, while forget-latest completion fields
 are `requested` and `deleted`. Every Alib page event includes the zero-based
 `index` and full configured endpoint `url`, including GET parameters and
 fragments; download events include the one-based per-page `attempt`,
 `alib.page_parsed` includes `books`, and failed events include `error`.
+Recipient-specific events include `chat_id`, including Alib page events and
+matched callback answer failures. Shared polling errors have no single chat ID.
 Keep slog attributes typed, snake_case, and free of secrets. Generated
 page URLs are credential-free and are logged in full as configured endpoints.
 
@@ -327,32 +341,36 @@ make verify
 ```
 
 It checks formatting, runs strict golangci-lint, executes race-enabled shuffled
-tests without cache, and builds the binary. It does not silently rewrite source
-files. The Makefile must remain sufficient and working for the full development
-cycle, including from a clean checkout:
+tests without cache, scans vulnerabilities with govulncheck, and builds the binary.
+It does not silently rewrite source files. The Makefile must remain sufficient
+and working for the full development cycle, including from a clean checkout:
 
 - `make fmt` formats all Go code with the configured golangci-lint formatters.
 - `make fmt-check` fails and prints a diff when Go code is not formatted.
 - `make lint` runs the complete configured linter set.
+- `make govulncheck` scans all packages using the Go vulnerability database.
 - `make test` runs the complete test suite with the race detector, shuffled
   order, and no result cache.
 - `make coverage` writes `coverage.out` and fails when total statement coverage
   is below 80%. It includes calls across repository packages with `-coverpkg=./...`.
 - `make build` compiles `bin/alib-fetcher` with reproducible path trimming.
-- `make tools` installs the exact golangci-lint version used by CI under the
-  ignored project-local `bin/tools` tree.
-- `make verify` runs `fmt-check`, `lint`, `test`, and `build`; it is also the
-  default `make` target and provisions the pinned tool automatically.
+- `make tools` installs pinned golangci-lint and govulncheck versions under the
+  ignored project-local `bin/tools` tree. `.golangci-lint-version` is shared
+  with the official CI installer; CI's official govulncheck action uses latest.
+- `make verify` runs `fmt-check`, `lint`, `test`, `govulncheck`, and `build`; it is
+  also the default `make` target and provisions the pinned tools automatically.
 
 When requirements change, update Makefile targets so these commands keep doing
 what their names promise. CI and agent workflows must call the Make targets,
-not duplicate their underlying `go` or `golangci-lint` commands. Any
+not duplicate their underlying `go` or `golangci-lint` commands. The official
+govulncheck action owns the CI vulnerability scan. Any
 environment-specific setup belongs inside or under the Make targets rather
 than in undocumented one-off verification commands.
 
-Quality targets must invoke repository-managed tools by explicit paths. Never
+Quality targets must invoke repository-managed tools by explicit paths. CI may
+pass the absolute golangci-lint path installed by the official action. Never
 accept a successful verification from an arbitrary same-named executable found
-earlier in `PATH`; `make tools` and `make verify` must use the same binary.
+earlier in `PATH`; local `make tools` and `make verify` must use the same binary.
 
 The lint configuration is intentionally strict. Important local constraints
 include 120-column lines, gofumpt/goimports formatting, exhaustive error
@@ -371,18 +389,21 @@ retention boundaries, message limits, startup scheduling, and cancellation.
 Useful local run commands:
 
 ```bash
-TELEGRAM_BOT_TOKEN=... TELEGRAM_CHAT_ID=... STATE_PATH=./data/state.db \
-  go run ./cmd/alib-fetcher -once
+go run ./cmd/alib-fetcher -once -config ./config.toml
 
-TELEGRAM_BOT_TOKEN=... TELEGRAM_CHAT_ID=... CRON_SCHEDULE='*/30 * * * *' \
-  STATE_PATH=./data/state.db go run ./cmd/alib-fetcher
+go run ./cmd/alib-fetcher -once -chat=-1001234567890 -config ./config.toml
+
+go run ./cmd/alib-fetcher -service -config ./config.toml
+
+go run ./cmd/alib-fetcher -forget-latest 10 -chat=-1001234567890 \
+  -config ./config.toml
 ```
 
-Local files `.env`, `.env.*`, `data/`, `bin/`, `coverage.out`, and `tnew7.txt`
-are ignored; a credential-free `.env.example` may be tracked. `.env*`, local
-data, and database files are excluded from the Docker build context. Do not
-commit credentials, state databases, captured production data, or generated
-binaries.
+Local files `.env`, `.env.*`, `config.toml`, `config/`, `data/`, `bin/`,
+`coverage.out`, and `tnew7.txt` are ignored. The credential-free
+`config.example.toml` remains tracked. Local configs, data, and database files
+are excluded from the Docker build context. Do not commit credentials, state
+databases, captured production data, or generated binaries.
 
 ## Change and commit policy
 
@@ -417,9 +438,10 @@ volume mounted at `/var/lib/alib-fetcher`; do not move mutable state elsewhere
 without updating the image, Compose, and README together. Preserve the nonroot
 runtime, capability drop, and `no-new-privileges` hardening.
 
-For Compose, `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` must come from the
-environment. `FRESH_BOOKS`, `TIMEZONE`, and `ALIB_FETCHER_IMAGE` are
-credential-free runtime overrides; Compose passes an empty `FRESH_BOOKS` by
-default. Never bake secrets into the image or commit them in Compose. Local
-`.env` files must stay untracked and out of the Docker build context;
-`.env.example` must never contain credentials.
+Compose mounts the local `config/` directory read-only at
+`/etc/alib-fetcher` and starts `-service -config /etc/alib-fetcher/config.toml`.
+Write a replacement beside the live file and rename it atomically in the same
+directory; this makes complete TOML snapshots visible to the container. The
+mounted file must be readable by UID/GID 65532 and contains Telegram tokens, so
+keep the directory private. `ALIB_FETCHER_IMAGE` is the only Compose
+environment override. Never bake secrets into the image or commit them.
