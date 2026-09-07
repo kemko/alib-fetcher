@@ -203,7 +203,6 @@ Optional defaults:
 | `ALIB_SERIES` | empty | Optional one-record CSV list of Unicode series names representable in Windows-1251; each becomes `https://alib.ru/findp.php4?seria=<encoded>&lday=7` |
 | `ALIB_PUBLISHERS` | empty | Optional one-record CSV list of Unicode publisher names representable in Windows-1251; each becomes `https://alib.ru/findp.php4?izdat=<encoded>&lday=7` |
 | `ALIB_MAX_RETRIES` | `3` | Number of additional attempts after the first failed Alib request; `0` disables retries; cenkalti/backoff delays are 1, 2, 4, 8, 16, then 30 seconds, capped at 30 seconds |
-| `TELEGRAM_API_BASE` | `https://api.telegram.org` | HTTP(S) API base; override it in tests |
 | `HTTP_TIMEOUT` | `30s` | positive Go duration applied per external request |
 | `MESSAGE_LIMIT` | `32000` | displayed Rich Message text rune count after HTML parsing, allowed range 64..32768 |
 

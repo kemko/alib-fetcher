@@ -27,7 +27,6 @@ const (
 	defaultMessageLimit      = 32000
 	defaultRunOnStartup      = true
 	defaultStatePath         = "/var/lib/alib-fetcher/state.db"
-	defaultTelegramAPIBase   = "https://api.telegram.org"
 	defaultTimezone          = "Europe/Moscow"
 	telegramHardMessageLimit = 32768
 )
@@ -56,18 +55,17 @@ func (policy FreshBooksPolicy) LowerYear(currentYear int) int {
 
 // Config contains validated process configuration.
 type Config struct {
-	Location        *time.Location
-	FreshBooks      *FreshBooksPolicy
-	TelegramToken   string
-	TelegramChatID  string
-	TelegramAPIBase string
-	StatePath       string
-	cronSpec        string
-	AlibURLs        []string
-	AlibMaxRetries  int
-	HTTPTimeout     time.Duration
-	MessageLimit    int
-	RunOnStartup    bool
+	Location       *time.Location
+	FreshBooks     *FreshBooksPolicy
+	TelegramToken  string
+	TelegramChatID string
+	StatePath      string
+	cronSpec       string
+	AlibURLs       []string
+	AlibMaxRetries int
+	HTTPTimeout    time.Duration
+	MessageLimit   int
+	RunOnStartup   bool
 }
 
 // Load reads and validates process environment variables.
@@ -85,10 +83,9 @@ func Load() (Config, error) {
 	}
 
 	settings := Config{
-		TelegramToken:   token,
-		TelegramChatID:  chatID,
-		TelegramAPIBase: valueOrDefault("TELEGRAM_API_BASE", defaultTelegramAPIBase),
-		StatePath:       LoadStatePath(),
+		TelegramToken:  token,
+		TelegramChatID: chatID,
+		StatePath:      LoadStatePath(),
 	}
 	var err error
 	settings.AlibURLs, err = buildAlibURLs()

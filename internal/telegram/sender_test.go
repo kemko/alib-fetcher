@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -35,12 +36,7 @@ func Test_Sender_posts_silent_rich_HTML_message(t *testing.T) {
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	sender, err := telegram.NewSender(telegram.Config{
-		APIBase: server.URL,
-		Token:   "test-token",
-		ChatID:  "-100123",
-		Timeout: 2 * time.Second,
-	})
+	sender, err := newTestSender(server.URL)
 	require.NoError(t, err)
 
 	// When
@@ -63,12 +59,7 @@ func Test_Sender_posts_audible_HTML_message_with_notification_enabled(t *testing
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	sender, err := telegram.NewSender(telegram.Config{
-		APIBase: server.URL,
-		Token:   "test-token",
-		ChatID:  "-100123",
-		Timeout: 2 * time.Second,
-	})
+	sender, err := newTestSender(server.URL)
 	require.NoError(t, err)
 
 	// When
@@ -105,12 +96,7 @@ func Test_Sender_posts_refresh_button_when_requested(t *testing.T) {
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	sender, err := telegram.NewSender(telegram.Config{
-		APIBase: server.URL,
-		Token:   "test-token",
-		ChatID:  "-100123",
-		Timeout: 2 * time.Second,
-	})
+	sender, err := newTestSender(server.URL)
 	require.NoError(t, err)
 
 	// When
@@ -184,12 +170,7 @@ func Test_Sender_reports_response_errors(t *testing.T) {
 				assert.NoError(t, err)
 			}))
 			t.Cleanup(server.Close)
-			sender, err := telegram.NewSender(telegram.Config{
-				APIBase: server.URL,
-				Token:   "test-token",
-				ChatID:  "-100123",
-				Timeout: 2 * time.Second,
-			})
+			sender, err := newTestSender(server.URL)
 			require.NoError(t, err)
 
 			// When
@@ -205,7 +186,7 @@ func Test_Sender_reports_response_errors(t *testing.T) {
 	}
 }
 
-func Test_Sender_redacts_token_and_API_URL_from_rejection(t *testing.T) {
+func Test_Sender_redacts_token_from_rejection(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -219,12 +200,7 @@ func Test_Sender_redacts_token_and_API_URL_from_rejection(t *testing.T) {
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	sender, err := telegram.NewSender(telegram.Config{
-		APIBase: server.URL,
-		Token:   "test-token",
-		ChatID:  "missing",
-		Timeout: 2 * time.Second,
-	})
+	sender, err := newTestSenderWithChat(server.URL, "missing")
 	require.NoError(t, err)
 
 	// When
@@ -233,7 +209,6 @@ func Test_Sender_redacts_token_and_API_URL_from_rejection(t *testing.T) {
 	// Then
 	require.ErrorIs(t, err, telegram.ErrRejected)
 	assert.NotContains(t, err.Error(), "test-token")
-	assert.NotContains(t, err.Error(), server.URL)
 }
 
 func Test_Sender_exposes_Telegram_retry_delay(t *testing.T) {
@@ -252,12 +227,7 @@ func Test_Sender_exposes_Telegram_retry_delay(t *testing.T) {
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	sender, err := telegram.NewSender(telegram.Config{
-		APIBase: server.URL,
-		Token:   "test-token",
-		ChatID:  "-100123",
-		Timeout: 2 * time.Second,
-	})
+	sender, err := newTestSender(server.URL)
 	require.NoError(t, err)
 
 	// When
@@ -276,59 +246,17 @@ func Test_NewSender_validates_configuration(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name   string
-		config telegram.Config
+		name    string
+		token   string
+		timeout time.Duration
 	}{
 		{
-			name: "unsupported scheme",
-			config: telegram.Config{
-				APIBase: "file:///tmp",
-				Token:   "test-token",
-				ChatID:  "-100123",
-				Timeout: 2 * time.Second,
-			},
+			name:    "missing token",
+			timeout: 2 * time.Second,
 		},
 		{
-			name: "malformed URL",
-			config: telegram.Config{
-				APIBase: "://",
-				Token:   "test-token",
-				ChatID:  "-100123",
-				Timeout: 2 * time.Second,
-			},
-		},
-		{
-			name: "missing host",
-			config: telegram.Config{
-				APIBase: "https:///telegram",
-				Token:   "test-token",
-				ChatID:  "-100123",
-				Timeout: 2 * time.Second,
-			},
-		},
-		{
-			name: "missing token",
-			config: telegram.Config{
-				APIBase: "https://api.telegram.org",
-				ChatID:  "-100123",
-				Timeout: 2 * time.Second,
-			},
-		},
-		{
-			name: "missing chat",
-			config: telegram.Config{
-				APIBase: "https://api.telegram.org",
-				Token:   "test-token",
-				Timeout: 2 * time.Second,
-			},
-		},
-		{
-			name: "non-positive timeout",
-			config: telegram.Config{
-				APIBase: "https://api.telegram.org",
-				Token:   "test-token",
-				ChatID:  "-100123",
-			},
+			name:  "non-positive timeout",
+			token: "test-token",
 		},
 	}
 
@@ -337,11 +265,14 @@ func Test_NewSender_validates_configuration(t *testing.T) {
 			t.Parallel()
 
 			// When
-			sender, err := telegram.NewSender(tt.config)
+			client, err := telegram.NewClient(telegram.ClientConfig{
+				Token:   tt.token,
+				Timeout: tt.timeout,
+			})
 
 			// Then
 			require.Error(t, err)
-			require.Nil(t, sender)
+			require.Nil(t, client)
 		})
 	}
 }
@@ -350,16 +281,110 @@ func Test_NewSender_accepts_short_positive_timeout(t *testing.T) {
 	t.Parallel()
 
 	// When
-	sender, err := telegram.NewSender(telegram.Config{
-		APIBase: "https://api.telegram.org",
+	client, err := telegram.NewClient(telegram.ClientConfig{
 		Token:   "test-token",
-		ChatID:  "-100123",
 		Timeout: time.Millisecond,
 	})
 
 	// Then
 	require.NoError(t, err)
-	require.NotNil(t, sender)
+	require.NotNil(t, client)
+}
+
+func Test_Client_rejects_an_empty_chat_id(t *testing.T) {
+	t.Parallel()
+
+	client, err := telegram.NewClient(telegram.ClientConfig{
+		Token:   "test-token",
+		Timeout: time.Second,
+	})
+	require.NoError(t, err)
+
+	sender, err := client.NewSender(" ")
+	require.Error(t, err)
+	require.Nil(t, sender)
+}
+
+func Test_Client_shares_one_SDK_client_between_chat_senders(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	var requests []string
+	transport := roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		require.NoError(t, request.ParseMultipartForm(1<<20))
+		requests = append(requests, fmt.Sprintf("%s %s", request.URL, request.FormValue("chat_id")))
+		return &http.Response{
+			Status:     "200 OK",
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"ok":true,"result":{}}`)),
+			Request:    request,
+		}, nil
+	})
+	client, err := telegram.NewClient(telegram.ClientConfig{
+		Token:      "shared-token",
+		Timeout:    2 * time.Second,
+		HTTPClient: &http.Client{Transport: transport},
+	})
+	require.NoError(t, err)
+	first, err := client.NewSender("-100123")
+	require.NoError(t, err)
+	second, err := client.NewSender("@books")
+	require.NoError(t, err)
+
+	// When
+	require.NoError(t, first.Send(context.Background(), "first", false, false))
+	require.NoError(t, second.Send(context.Background(), "second", false, false))
+
+	// Then
+	require.Equal(t, []string{
+		"https://api.telegram.org/botshared-token/sendRichMessage -100123",
+		"https://api.telegram.org/botshared-token/sendRichMessage @books",
+	}, requests)
+}
+
+func Test_Client_uses_each_token_with_the_standard_API_endpoint(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	var requests []string
+	transport := roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		require.NoError(t, request.ParseMultipartForm(1<<20))
+		requests = append(requests, fmt.Sprintf("%s %s", request.URL, request.FormValue("chat_id")))
+		return &http.Response{
+			Status:     "200 OK",
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"ok":true,"result":{}}`)),
+			Request:    request,
+		}, nil
+	})
+	newClient := func(token string) *telegram.Client {
+		client, clientErr := telegram.NewClient(telegram.ClientConfig{
+			Token:      token,
+			Timeout:    2 * time.Second,
+			HTTPClient: &http.Client{Transport: transport},
+		})
+		require.NoError(t, clientErr)
+
+		return client
+	}
+	first := newClient("first-token")
+	firstSender, err := first.NewSender("-100123")
+	require.NoError(t, err)
+	second := newClient("second-token")
+	secondSender, err := second.NewSender("-100124")
+	require.NoError(t, err)
+
+	// When
+	require.NoError(t, firstSender.Send(context.Background(), "first", false, false))
+	require.NoError(t, secondSender.Send(context.Background(), "second", false, false))
+
+	// Then
+	require.Equal(t, []string{
+		"https://api.telegram.org/botfirst-token/sendRichMessage -100123",
+		"https://api.telegram.org/botsecond-token/sendRichMessage -100124",
+	}, requests)
 }
 
 func Test_Sender_uses_HTTP_status_for_undecodable_HTTP_rejection(t *testing.T) {
@@ -385,12 +410,7 @@ func Test_Sender_uses_HTTP_status_for_undecodable_HTTP_rejection(t *testing.T) {
 				assert.NoError(t, err)
 			}))
 			t.Cleanup(server.Close)
-			sender, err := telegram.NewSender(telegram.Config{
-				APIBase: server.URL,
-				Token:   "test-token",
-				ChatID:  "-100123",
-				Timeout: 2 * time.Second,
-			})
+			sender, err := newTestSender(server.URL)
 			require.NoError(t, err)
 
 			// When
@@ -413,12 +433,7 @@ func Test_Sender_rejects_oversized_API_response(t *testing.T) {
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	sender, err := telegram.NewSender(telegram.Config{
-		APIBase: server.URL,
-		Token:   "test-token",
-		ChatID:  "-100123",
-		Timeout: 2 * time.Second,
-	})
+	sender, err := newTestSender(server.URL)
 	require.NoError(t, err)
 
 	// When
@@ -436,12 +451,7 @@ func Test_Sender_returns_request_error_for_transport_failure(t *testing.T) {
 
 	// Given
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	sender, err := telegram.NewSender(telegram.Config{
-		APIBase: server.URL,
-		Token:   "test-token",
-		ChatID:  "-100123",
-		Timeout: 2 * time.Second,
-	})
+	sender, err := newTestSender(server.URL)
 	require.NoError(t, err)
 	server.Close()
 
@@ -456,10 +466,8 @@ func Test_Sender_returns_context_error_when_request_is_canceled(t *testing.T) {
 	t.Parallel()
 
 	// Given
-	sender, err := telegram.NewSender(telegram.Config{
-		APIBase: "https://api.telegram.org",
+	client, err := telegram.NewClient(telegram.ClientConfig{
 		Token:   "test-token",
-		ChatID:  "-100123",
 		Timeout: 2 * time.Second,
 	})
 	require.NoError(t, err)
@@ -467,6 +475,8 @@ func Test_Sender_returns_context_error_when_request_is_canceled(t *testing.T) {
 	cancel()
 
 	// When
+	sender, err := client.NewSender("-100123")
+	require.NoError(t, err)
 	err = sender.Send(ctx, "digest", false, false)
 
 	// Then

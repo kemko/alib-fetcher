@@ -17,7 +17,6 @@ services:
       ALIB_SERIES: "${ALIB_SERIES:-}"
       ALIB_PUBLISHERS: "${ALIB_PUBLISHERS:-}"
       ALIB_MAX_RETRIES: ${ALIB_MAX_RETRIES:-3}
-      TELEGRAM_API_BASE: ${TELEGRAM_API_BASE:-https://api.telegram.org}
       HTTP_TIMEOUT: ${HTTP_TIMEOUT:-30s}
       MESSAGE_LIMIT: ${MESSAGE_LIMIT:-32000}
     volumes:

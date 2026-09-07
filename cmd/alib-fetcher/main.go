@@ -67,12 +67,14 @@ func runWithConfig(logger *slog.Logger, settings config.Config, once bool) error
 	if err != nil {
 		return err
 	}
-	telegramAdapter, err := telegram.NewSender(telegram.Config{
-		APIBase: settings.TelegramAPIBase,
+	telegramClient, err := telegram.NewClient(telegram.ClientConfig{
 		Token:   settings.TelegramToken,
-		ChatID:  settings.TelegramChatID,
 		Timeout: settings.HTTPTimeout,
 	})
+	if err != nil {
+		return err
+	}
+	telegramAdapter, err := telegramClient.NewSender(settings.TelegramChatID)
 	if err != nil {
 		return err
 	}
@@ -97,7 +99,7 @@ func runWithConfig(logger *slog.Logger, settings config.Config, once bool) error
 		RunOnStartup:   settings.RunOnStartup,
 		StatePath:      settings.StatePath,
 		TelegramChatID: settings.TelegramChatID,
-	}, dependencies, telegramAdapter, once, logger)
+	}, dependencies, telegramClient, once, logger)
 }
 
 type forgetLatestOption struct {

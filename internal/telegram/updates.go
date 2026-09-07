@@ -23,8 +23,8 @@ type CallbackHandler func(context.Context, Callback)
 type CallbackErrorHandler func(context.Context, error)
 
 // ListenCallbacks runs SDK-managed polling until ctx is canceled.
-func (s *Sender) ListenCallbacks(ctx context.Context, handle CallbackHandler, reportError CallbackErrorHandler) {
-	handlerID := s.bot.RegisterHandler(
+func (c *Client) ListenCallbacks(ctx context.Context, handle CallbackHandler, reportError CallbackErrorHandler) {
+	handlerID := c.bot.RegisterHandler(
 		telegrambot.HandlerTypeCallbackQueryData,
 		RefreshCallbackData,
 		telegrambot.MatchTypeExact,
@@ -36,32 +36,32 @@ func (s *Sender) ListenCallbacks(ctx context.Context, handle CallbackHandler, re
 			handle(ctx, callbackFromSDK(update.CallbackQuery))
 		},
 	)
-	defer s.bot.UnregisterHandler(handlerID)
+	defer c.bot.UnregisterHandler(handlerID)
 
 	errorsDone := make(chan struct{})
 	go func() {
 		defer close(errorsDone)
-		s.reportCallbackErrors(ctx, reportError)
+		c.reportCallbackErrors(ctx, reportError)
 	}()
-	s.bot.Start(ctx)
+	c.bot.Start(ctx)
 	<-errorsDone
 }
 
 // AnswerCallback acknowledges a Telegram callback query.
-func (s *Sender) AnswerCallback(ctx context.Context, callbackID string, text string) error {
+func (c *Client) AnswerCallback(ctx context.Context, callbackID string, text string) error {
 	sdkCtx, call := beginSDKCall(ctx)
-	_, err := s.bot.AnswerCallbackQuery(sdkCtx, &telegrambot.AnswerCallbackQueryParams{
+	_, err := c.bot.AnswerCallbackQuery(sdkCtx, &telegrambot.AnswerCallbackQueryParams{
 		CallbackQueryID: callbackID,
 		Text:            text,
 	})
 
-	return s.normalizeSDKCallError(ctx, call, err)
+	return c.normalizeSDKCallError(ctx, call, err)
 }
 
 // RemoveReplyMarkup removes the inline keyboard from a message.
-func (s *Sender) RemoveReplyMarkup(ctx context.Context, chatID int64, messageID int) error {
+func (c *Client) RemoveReplyMarkup(ctx context.Context, chatID int64, messageID int) error {
 	sdkCtx, call := beginSDKCall(ctx)
-	_, err := s.bot.EditMessageReplyMarkup(sdkCtx, &telegrambot.EditMessageReplyMarkupParams{
+	_, err := c.bot.EditMessageReplyMarkup(sdkCtx, &telegrambot.EditMessageReplyMarkupParams{
 		ChatID:    chatID,
 		MessageID: messageID,
 		ReplyMarkup: models.InlineKeyboardMarkup{
@@ -69,20 +69,20 @@ func (s *Sender) RemoveReplyMarkup(ctx context.Context, chatID int64, messageID 
 		},
 	})
 
-	return s.normalizeSDKCallError(ctx, call, err)
+	return c.normalizeSDKCallError(ctx, call, err)
 }
 
-func (s *Sender) reportCallbackErrors(ctx context.Context, reportError CallbackErrorHandler) {
+func (c *Client) reportCallbackErrors(ctx context.Context, reportError CallbackErrorHandler) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case sdkErr := <-s.sdkErrors:
+		case sdkErr := <-c.sdkErrors:
 			if ctx.Err() != nil {
 				return
 			}
 			if reportError != nil {
-				reportError(ctx, s.normalizeSDKError(ctx, sdkErr))
+				reportError(ctx, c.normalizeSDKError(ctx, sdkErr))
 			}
 		}
 	}

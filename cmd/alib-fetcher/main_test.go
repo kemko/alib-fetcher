@@ -389,10 +389,6 @@ func Test_run_forget_latest_documented_cli_scenario_deletes_latest_records_witho
 	statePath := filepath.Join(t.TempDir(), "state.db")
 	setEnvironmentAbsentDigestConfiguration(t)
 	t.Setenv("STATE_PATH", statePath)
-	// The Telegram API is intentionally unreachable: maintenance mode must not
-	// construct the Alib or Telegram adapters that would use it.
-	t.Setenv("TELEGRAM_API_BASE", "http://127.0.0.1:1")
-
 	books := make([]alib.Book, 8)
 	for index := range books {
 		books[index] = alib.Book{BuyURL: fmt.Sprintf("https://example.com/book-%d", index)}
@@ -423,7 +419,6 @@ func Test_run_rejects_missing_Alib_tracking_configuration_before_http(t *testing
 	setEnvironmentAbsentDigestConfiguration(t)
 	t.Setenv("TELEGRAM_BOT_TOKEN", "test-token")
 	t.Setenv("TELEGRAM_CHAT_ID", "-100123")
-	t.Setenv("TELEGRAM_API_BASE", "http://127.0.0.1:1")
 
 	// When
 	err := run(slog.New(slog.DiscardHandler))
@@ -474,7 +469,7 @@ func Test_run_sends_only_last_wired_message_with_sound(t *testing.T) {
 	t.Setenv("ALIB_CATEGORIES", "tramka")
 	t.Setenv("ALIB_SERIES", "")
 	t.Setenv("ALIB_PUBLISHERS", "")
-	t.Setenv("TELEGRAM_API_BASE", telegramServer.URL)
+	routeTelegramRequestsTo(t, telegramServer.URL)
 	t.Setenv("HTTP_TIMEOUT", "2s")
 	t.Setenv("ALIB_MAX_RETRIES", "0")
 	t.Setenv("MESSAGE_LIMIT", "64")
@@ -910,6 +905,29 @@ func routeAlibRequestsTo(t *testing.T, base string) {
 	})
 }
 
+func routeTelegramRequestsTo(t *testing.T, base string) {
+	t.Helper()
+	target, err := url.Parse(base)
+	require.NoError(t, err)
+	originalTransport := http.DefaultTransport
+	t.Cleanup(func() {
+		http.DefaultTransport = originalTransport
+	})
+	http.DefaultTransport = roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Host != "api.telegram.org" {
+			return originalTransport.RoundTrip(request)
+		}
+
+		routedRequest := request.Clone(request.Context())
+		routedURL := *request.URL
+		routedURL.Scheme = target.Scheme
+		routedURL.Host = target.Host
+		routedRequest.URL = &routedURL
+
+		return originalTransport.RoundTrip(routedRequest)
+	})
+}
+
 func useCommandLine(t *testing.T, arguments ...string) {
 	t.Helper()
 
@@ -934,7 +952,6 @@ func setEnvironmentAbsentDigestConfiguration(t *testing.T) {
 		"ALIB_CATEGORIES",
 		"ALIB_SERIES",
 		"ALIB_PUBLISHERS",
-		"TELEGRAM_API_BASE",
 		"HTTP_TIMEOUT",
 		"MESSAGE_LIMIT",
 		"RUN_ON_STARTUP",
@@ -990,7 +1007,7 @@ func setRunEnvironment(t *testing.T, telegramAPIBase, statePath string) {
 	t.Setenv("ALIB_CATEGORIES", "tramka")
 	t.Setenv("ALIB_SERIES", "")
 	t.Setenv("ALIB_PUBLISHERS", "")
-	t.Setenv("TELEGRAM_API_BASE", telegramAPIBase)
+	routeTelegramRequestsTo(t, telegramAPIBase)
 	t.Setenv("HTTP_TIMEOUT", "2s")
 	t.Setenv("ALIB_MAX_RETRIES", "0")
 	t.Setenv("MESSAGE_LIMIT", "4000")

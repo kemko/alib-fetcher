@@ -55,7 +55,7 @@ func Test_Sender_does_not_report_close_failure_as_poll_error(t *testing.T) {
 
 	// Then
 	require.NoError(t, err)
-	assert.Empty(t, sender.sdkErrors)
+	assert.Empty(t, sender.client.sdkErrors)
 }
 
 func Test_Sender_limits_API_response_read(t *testing.T) {
@@ -167,12 +167,10 @@ func newTestSenderWithBody(t *testing.T, body io.ReadCloser) *Sender {
 
 func newTestSenderWithTransport(t *testing.T, transport http.RoundTripper) *Sender {
 	t.Helper()
-	sender, err := newSender(Config{
-		APIBase: "https://api.telegram.org",
+	sender, err := newSender(ClientConfig{
 		Token:   "test-token",
-		ChatID:  "-100123",
 		Timeout: 2 * time.Second,
-	}, &http.Client{Transport: transport})
+	}, &http.Client{Transport: transport}, "-100123")
 	require.NoError(t, err)
 
 	return sender

@@ -22,7 +22,6 @@ func Test_Load_applies_service_defaults(t *testing.T) {
 		"TIMEZONE":           "",
 		"STATE_PATH":         "",
 		"ALIB_MAX_RETRIES":   "",
-		"TELEGRAM_API_BASE":  "",
 		"HTTP_TIMEOUT":       "",
 		"MESSAGE_LIMIT":      "",
 		"RUN_ON_STARTUP":     "",
@@ -39,7 +38,6 @@ func Test_Load_applies_service_defaults(t *testing.T) {
 	require.Equal(t, "/var/lib/alib-fetcher/state.db", loaded.StatePath)
 	require.Equal(t, []string{"https://www.alib.ru/tramka.phtml?tnew=7"}, loaded.AlibURLs)
 	require.Equal(t, 3, loaded.AlibMaxRetries)
-	require.Equal(t, "https://api.telegram.org", loaded.TelegramAPIBase)
 	require.Equal(t, 30*time.Second, loaded.HTTPTimeout)
 	require.Equal(t, 32000, loaded.MessageLimit)
 	require.True(t, loaded.RunOnStartup)
@@ -104,7 +102,6 @@ func Test_LoadStatePath_reads_environment_without_full_configuration(t *testing.
 		"MESSAGE_LIMIT":      "not a number",
 		"RUN_ON_STARTUP":     "not a boolean",
 		"ALIB_MAX_RETRIES":   "",
-		"TELEGRAM_API_BASE":  "",
 		"FRESH_BOOKS":        "",
 	})
 
@@ -241,7 +238,6 @@ func Test_Load_parses_custom_schedule(t *testing.T) {
 		"STATE_PATH":         "/tmp/custom.db",
 		"ALIB_CATEGORIES":    "books",
 		"ALIB_MAX_RETRIES":   "5",
-		"TELEGRAM_API_BASE":  "https://telegram.example.test",
 		"HTTP_TIMEOUT":       "15s",
 		"MESSAGE_LIMIT":      "3500",
 		"RUN_ON_STARTUP":     "false",

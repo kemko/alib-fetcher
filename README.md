@@ -21,7 +21,6 @@ the pending send queue.
 | `ALIB_SERIES` | no | empty | Comma-separated Unicode series names representable in Windows-1251; each creates a `https://alib.ru/findp.php4?seria=<encoded>&lday=7` page |
 | `ALIB_PUBLISHERS` | no | empty | Comma-separated Unicode publisher names representable in Windows-1251; each creates a `https://alib.ru/findp.php4?izdat=<encoded>&lday=7` page |
 | `ALIB_MAX_RETRIES` | no | `3` | Additional attempts after the first failed Alib page request; `0` disables retries |
-| `TELEGRAM_API_BASE` | no | `https://api.telegram.org` | Bot API base URL; custom/local servers require Bot API 10.1+ |
 | `HTTP_TIMEOUT` | no | `30s` | Positive Go duration applied to each external request |
 | `MESSAGE_LIMIT` | no | `32000` | Displayed Rich Message text rune limit, allowed range `64..32768` |
 
@@ -144,8 +143,8 @@ Each Telegram Rich Message is sent through its `SendRichMessage` method with
 rendered HTML. The SDK also supplies request models, inline keyboards, callback
 answers, reply-markup edits, and polling machinery; digest ordering,
 acknowledgement, flood-control retry, chat filtering, and runner locking remain
-service policy. Custom `TELEGRAM_API_BASE` endpoints and test doubles must accept
-the SDK's `multipart/form-data` requests.
+service policy. Test doubles route the SDK's standard Bot API requests through a
+custom transport and must accept the SDK's `multipart/form-data` requests.
 Each listing inside that HTML is structured as:
 
 1. freshness marker, bold title, and bibliography;
