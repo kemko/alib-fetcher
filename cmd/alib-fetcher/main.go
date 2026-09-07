@@ -4,14 +4,15 @@ package main
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/urfave/cli/v3"
 
 	"github.com/kemko/alib-fetcher/internal/alib"
 	"github.com/kemko/alib-fetcher/internal/app"
@@ -71,38 +72,81 @@ type commandOptions struct {
 }
 
 func parseCommandLine() (commandOptions, error) {
-	service := flag.Bool("service", false, "run the scheduled service")
-	once := flag.Bool("once", false, "fetch and send one digest, then exit")
-	configPath := flag.String("config", "./config.toml", "path to TOML configuration")
-	var chatID string
-	flag.Func("chat", "recipient chat ID", func(value string) error {
-		var err error
-		chatID, err = config.NormalizeChatID(value)
-		return err
-	})
-	var forgetLatest forgetLatestOption
-	flag.Var(&forgetLatest, "forget-latest", "delete the latest state records, then exit")
-	if len(os.Args) == 1 {
-		flag.CommandLine.Usage()
-		return commandOptions{help: true}, nil
+	return parseCommandLineArgs(os.Args, os.Stdout, os.Stderr)
+}
+
+func parseCommandLineArgs(args []string, writer, errWriter io.Writer) (commandOptions, error) {
+	var options commandOptions
+	command := &cli.Command{
+		Name:            args[0],
+		Usage:           "fetch and send Alib book listings",
+		HideHelpCommand: true,
+		Writer:          writer,
+		ErrWriter:       errWriter,
+		ExitErrHandler:  func(context.Context, *cli.Command, error) {},
+		Flags: []cli.Flag{
+			&cli.BoolFlag{Name: "service", Usage: "run the scheduled service"},
+			&cli.BoolFlag{Name: "once", Usage: "fetch and send one digest, then exit"},
+			&cli.StringFlag{Name: "config", Value: "./config.toml", Usage: "path to TOML configuration"},
+			&cli.StringFlag{Name: "chat", Usage: "recipient chat ID"},
+			&cli.IntFlag{
+				Name:   "forget-latest",
+				Usage:  "delete the latest state records, then exit",
+				Config: cli.IntegerConfig{Base: 10},
+			},
+		},
 	}
-	if err := flag.CommandLine.Parse(os.Args[1:]); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
+	command.Action = func(_ context.Context, command *cli.Command) error {
+		if len(args) == 1 {
+			options.help = true
+			return cli.ShowRootCommandHelp(command)
+		}
+		if command.NArg() > 0 {
+			return reportCommandError(command, invalidArguments("positional arguments are not supported"))
+		}
+
+		chatID := command.String("chat")
+		if command.IsSet("chat") {
+			var err error
+			chatID, err = config.NormalizeChatID(chatID)
+			if err != nil {
+				return reportCommandError(command, commandError{err: err})
+			}
+		}
+		options = commandOptions{
+			configPath: command.String("config"),
+			chatID:     chatID,
+			service:    command.Bool("service"),
+			once:       command.Bool("once"),
+			forgetLatest: forgetLatestOption{
+				value: command.Int("forget-latest"),
+				set:   command.IsSet("forget-latest"),
+			},
+		}
+		validated, err := validateCommandOptions(options)
+		if err != nil {
+			return reportCommandError(command, err)
+		}
+		options = validated
+
+		return nil
+	}
+
+	if err := command.Run(context.Background(), args); err != nil {
+		if command.IsSet("help") {
 			return commandOptions{help: true}, nil
+		}
+		var commandErr commandError
+		if errors.As(err, &commandErr) {
+			return commandOptions{}, err
 		}
 		return commandOptions{}, commandError{err: err}
 	}
-	if len(flag.CommandLine.Args()) > 0 {
-		return commandOptions{}, invalidArguments("positional arguments are not supported")
+	if command.IsSet("help") {
+		return commandOptions{help: true}, nil
 	}
-	options := commandOptions{
-		configPath:   *configPath,
-		chatID:       chatID,
-		service:      *service,
-		once:         *once,
-		forgetLatest: forgetLatest,
-	}
-	return validateCommandOptions(options)
+
+	return options, nil
 }
 
 func validateCommandOptions(options commandOptions) (commandOptions, error) {
@@ -264,25 +308,16 @@ func (err commandError) Error() string { return err.err.Error() }
 func (err commandError) Unwrap() error { return err.err }
 
 func invalidArguments(message string) error {
-	argumentErr := errors.New(message)
-	if _, err := fmt.Fprintln(flag.CommandLine.Output(), "error:", message); err != nil {
-		argumentErr = errors.Join(argumentErr, err)
-	}
-	flag.CommandLine.Usage()
-	return commandError{err: argumentErr}
+	return commandError{err: errors.New(message)}
 }
 
-func (option *forgetLatestOption) String() string {
-	return strconv.Itoa(option.value)
-}
-
-func (option *forgetLatestOption) Set(value string) error {
-	parsed, err := strconv.Atoi(value)
-	if err != nil {
-		return fmt.Errorf("-forget-latest must be an integer: %w", err)
+func reportCommandError(command *cli.Command, err error) error {
+	if _, writeErr := fmt.Fprintln(command.ErrWriter, "error:", err); writeErr != nil {
+		return commandError{err: errors.Join(err, writeErr)}
 	}
-	option.value = parsed
-	option.set = true
+	if helpErr := cli.ShowRootCommandHelp(command); helpErr != nil {
+		return commandError{err: errors.Join(err, helpErr)}
+	}
 
-	return nil
+	return err
 }

@@ -8,6 +8,7 @@ require (
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/stretchr/testify v1.11.1
+	github.com/urfave/cli/v3 v3.11.0
 	go.etcd.io/bbolt v1.4.3
 	golang.org/x/net v0.55.0
 	golang.org/x/text v0.37.0

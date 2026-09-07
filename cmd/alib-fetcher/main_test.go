@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -310,20 +309,61 @@ func Test_run_rejects_non_positive_forget_latest(t *testing.T) {
 	}
 }
 
-func Test_forgetLatestOption_rejects_malformed_values(t *testing.T) {
+func Test_parseCommandLine_accepts_each_mode(t *testing.T) {
 	t.Parallel()
 
+	testCases := map[string]struct {
+		arguments []string
+		want      commandOptions
+	}{
+		"once": {
+			arguments: []string{"alib-fetcher", "-once"},
+			want:      commandOptions{configPath: "./config.toml", once: true},
+		},
+		"service": {
+			arguments: []string{"alib-fetcher", "--service"},
+			want:      commandOptions{configPath: "./config.toml", service: true},
+		},
+		"forget latest": {
+			arguments: []string{
+				"alib-fetcher", "-forget-latest=7", "--chat", "@Books", "--config", "settings.toml",
+			},
+			want: commandOptions{
+				configPath: "settings.toml",
+				chatID:     "@books",
+				forgetLatest: forgetLatestOption{
+					value: 7,
+					set:   true,
+				},
+			},
+		},
+	}
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			var output, errors bytes.Buffer
+
+			got, err := parseCommandLineArgs(testCase.arguments, &output, &errors)
+
+			require.NoError(t, err)
+			require.Equal(t, testCase.want, got)
+			require.Empty(t, output.String())
+			require.Empty(t, errors.String())
+		})
+	}
+}
+
+func Test_forgetLatestOption_rejects_malformed_values(t *testing.T) {
 	testCases := map[string]struct {
 		wantError string
 		arguments []string
 	}{
 		"non-numeric": {
 			arguments: []string{"-forget-latest", "six"},
-			wantError: "-forget-latest must be an integer",
+			wantError: "invalid value",
 		},
 		"overflowing": {
 			arguments: []string{"-forget-latest", strings.Repeat("9", 100)},
-			wantError: "-forget-latest must be an integer",
+			wantError: "invalid value",
 		},
 		"missing": {
 			arguments: []string{"-forget-latest"},
@@ -332,20 +372,14 @@ func Test_forgetLatestOption_rejects_malformed_values(t *testing.T) {
 	}
 	for name, testCase := range testCases {
 		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-
 			// Given
-			flags := flag.NewFlagSet("alib-fetcher", flag.ContinueOnError)
-			flags.SetOutput(io.Discard)
-			var option forgetLatestOption
-			flags.Var(&option, "forget-latest", "delete the latest state records, then exit")
+			useCommandLine(t, testCase.arguments...)
 
 			// When
-			err := flags.Parse(testCase.arguments)
+			_, err := parseCommandLine()
 
 			// Then
 			require.ErrorContains(t, err, testCase.wantError)
-			require.False(t, option.set)
 		})
 	}
 }
@@ -1375,14 +1409,10 @@ func routeTelegramRequestsTo(t *testing.T, base string) {
 func useCommandLine(t *testing.T, arguments ...string) {
 	t.Helper()
 
-	originalCommandLine := flag.CommandLine
 	originalArgs := os.Args
 	t.Cleanup(func() {
-		flag.CommandLine = originalCommandLine
 		os.Args = originalArgs
 	})
-	flag.CommandLine = flag.NewFlagSet("alib-fetcher", flag.ContinueOnError)
-	flag.CommandLine.SetOutput(io.Discard)
 	os.Args = append([]string{"alib-fetcher"}, arguments...)
 }
 

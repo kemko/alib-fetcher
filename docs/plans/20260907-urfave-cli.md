@@ -39,25 +39,25 @@
 - Modify: `go.mod`
 - Modify: `go.sum`
 
-- [ ] Добавить `github.com/urfave/cli/v3` v3.11.0 без обновления несвязанных зависимостей.
-- [ ] Заменить `flag.CommandLine` на локальный `cli.Command` с `BoolFlag` для `service`/`once`,
+- [x] Добавить `github.com/urfave/cli/v3` v3.11.0 без обновления несвязанных зависимостей.
+- [x] Заменить `flag.CommandLine` на локальный `cli.Command` с `BoolFlag` для `service`/`once`,
   `StringFlag` для `config`/`chat` и `IntFlag` для `forget-latest`; сохранить `./config.toml` по умолчанию.
-- [ ] Использовать `IsSet` для различения отсутствующего `forget-latest` и значения `0`,
+- [x] Использовать `IsSet` для различения отсутствующего `forget-latest` и значения `0`,
   а также отсутствующего и явно пустого `chat`. Нормализацию `chat` оставить в `config.NormalizeChatID`.
   Для `forget-latest` задать десятичное основание через `IntegerConfig.Base`; удалить собственный
   разбор числа и методы `flag.Value`.
   [API целочисленных флагов](https://github.com/urfave/cli/blob/v3.11.0/flag_int.go).
-- [ ] Сохранить `validateCommandOptions`: ровно один активный режим, положительный `forget-latest`,
+- [x] Сохранить `validateCommandOptions`: ровно один активный режим, положительный `forget-latest`,
   обязательный `chat` для обслуживания и запрет `chat` с `service`.
   Значения `service=false` и `once=false` не выбирают режим.
-- [ ] Сохранить одно- и двухдефисные формы флагов, справку без аргументов и по `-h`/`-help`/`--help`.
+- [x] Сохранить одно- и двухдефисные формы флагов, справку без аргументов и по `-h`/`-help`/`--help`.
   Использовать штатную справку библиотеки; отключить встроенную подкоманду `help`
   и отклонять позиционные аргументы.
-- [ ] Объединить ошибки разбора и валидации в путь с выводом ошибки и справки и возвратом `commandError`.
+- [x] Объединить ошибки разбора и валидации в путь с выводом ошибки и справки и возвратом `commandError`.
   Оставить завершение процесса и коды `2`/`1` в `main`; справка возвращает успех без чтения TOML.
   Для этого доступны `Writer`, `ErrWriter` и `ExitErrHandler`.
   [API cli.Command](https://github.com/urfave/cli/blob/v3.11.0/command.go).
-- [ ] Обновить CLI-тесты и `useCommandLine`, убрав подмену `flag.CommandLine`; проверить успешный
+- [x] Обновить CLI-тесты и `useCommandLine`, убрав подмену `flag.CommandLine`; проверить успешный
   разбор каждого режима, справку, ошибки и повторные вызовы без накопления состояния.
   Выполнить `make fmt` и `make test`.
 
