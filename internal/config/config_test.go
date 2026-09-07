@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -115,6 +116,72 @@ func TestLoad_rejects_unknown_fields_and_invalid_values_without_token(t *testing
 			require.NotContains(t, err.Error(), "secret-token")
 			require.Empty(t, loaded)
 		})
+	}
+}
+
+func TestLoad_validates_message_limit(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		limit int
+		valid bool
+	}{
+		{limit: 63},
+		{limit: 64, valid: true},
+		{limit: 32768, valid: true},
+		{limit: 32769},
+	} {
+		t.Run(strconv.Itoa(testCase.limit), func(t *testing.T) {
+			configPath := writeConfig(t, fmt.Sprintf(`message_limit = %d
+[[chats]]
+chat_id = "-100123"
+telegram_token = "token"
+categories = ["tramka"]
+`, testCase.limit))
+
+			loaded, err := config.Load(configPath)
+
+			if !testCase.valid {
+				require.ErrorIs(t, err, config.ErrInvalid)
+				require.ErrorContains(t, err, "message_limit")
+				require.Empty(t, loaded)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, testCase.limit, loaded.MessageLimit)
+		})
+	}
+}
+
+func TestLoad_rejects_invalid_service_values(t *testing.T) {
+	t.Parallel()
+
+	for field, values := range map[string][]string{
+		"http_timeout":     {`"invalid"`, `"0s"`, `"-1s"`},
+		"alib_max_retries": {"-1"},
+		"cron_schedule":    {`"not a cron expression"`},
+		"fresh_books": {
+			`"age:-1"`, `"age:+5"`, `"age:1.5"`, `"age:"`,
+			`"since:999"`, `"since:0000"`, `"since:10000"`, `"since:20a1"`, `"fresh:2021"`,
+		},
+	} {
+		for _, value := range values {
+			t.Run(field+"="+value, func(t *testing.T) {
+				configPath := writeConfig(t, fmt.Sprintf(`%s = %s
+[[chats]]
+chat_id = "-100123"
+telegram_token = "secret-token"
+categories = ["tramka"]
+`, field, value))
+
+				loaded, err := config.Load(configPath)
+
+				require.ErrorIs(t, err, config.ErrInvalid)
+				require.ErrorContains(t, err, field)
+				require.NotContains(t, err.Error(), "secret-token")
+				require.Empty(t, loaded)
+			})
+		}
 	}
 }
 

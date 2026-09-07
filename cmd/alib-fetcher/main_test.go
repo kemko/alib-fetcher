@@ -341,6 +341,33 @@ func Test_parseCommandLine_accepts_each_mode(t *testing.T) {
 				service:    true,
 			},
 		},
+		"once with inactive service and help": {
+			arguments: []string{"alib-fetcher", "-once", "-service=false", "--help=false"},
+			want: commandOptions{
+				configPath: "./config.toml",
+				once:       true,
+			},
+		},
+		"service with inactive once": {
+			arguments: []string{"alib-fetcher", "-service", "-once=false"},
+			want: commandOptions{
+				configPath: "./config.toml",
+				service:    true,
+			},
+		},
+		"decimal forget latest with inactive modes": {
+			arguments: []string{
+				"alib-fetcher", "-forget-latest=010", "-chat", "-100123", "-once=false", "-service=false",
+			},
+			want: commandOptions{
+				configPath: "./config.toml",
+				chatID:     "-100123",
+				forgetLatest: forgetLatestOption{
+					value: 10,
+					set:   true,
+				},
+			},
+		},
 		"forget latest": {
 			arguments: []string{
 				"alib-fetcher", "-forget-latest=7", "--chat", "@Books", "--config", "settings.toml",
@@ -384,8 +411,32 @@ func Test_parseCommandLine_rejects_invalid_arguments(t *testing.T) {
 			arguments: []string{"alib-fetcher", "-once", "-service"},
 			wantError: "exactly one of",
 		},
+		"conflicting modes with inactive help": {
+			arguments: []string{"alib-fetcher", "--help=false", "-once", "-service"},
+			wantError: "exactly one of",
+		},
+		"inactive once": {
+			arguments: []string{"alib-fetcher", "-once=false"},
+			wantError: "exactly one of",
+		},
+		"inactive service": {
+			arguments: []string{"alib-fetcher", "-service=false"},
+			wantError: "exactly one of",
+		},
+		"forget latest without chat": {
+			arguments: []string{"alib-fetcher", "-forget-latest", "1"},
+			wantError: "-chat is required with -forget-latest",
+		},
+		"service with chat": {
+			arguments: []string{"alib-fetcher", "-service", "-chat=-100123"},
+			wantError: "-chat is incompatible with -service",
+		},
 		"unknown flag": {
 			arguments: []string{"alib-fetcher", "-once", "-unknown"},
+			wantError: "flag provided but not defined",
+		},
+		"unknown flag with inactive help": {
+			arguments: []string{"alib-fetcher", "--help=false", "-unknown"},
 			wantError: "flag provided but not defined",
 		},
 		"positional argument": {
@@ -565,8 +616,20 @@ func Test_main_subprocess_exit_codes(t *testing.T) {
 			arguments: []string{"-unknown"},
 			wantCode:  2,
 		},
+		"argument error with inactive help": {
+			arguments: []string{"--help=false", "-unknown"},
+			wantCode:  2,
+		},
+		"conflicting modes with inactive help": {
+			arguments: []string{"--help=false", "-once", "-service"},
+			wantCode:  2,
+		},
 		"configuration error": {
 			arguments: []string{"-once", "-config", missingConfig},
+			wantCode:  1,
+		},
+		"configuration error with inactive help": {
+			arguments: []string{"-once", "--help=false", "-config", missingConfig},
 			wantCode:  1,
 		},
 	}

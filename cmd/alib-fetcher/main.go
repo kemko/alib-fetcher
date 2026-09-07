@@ -133,7 +133,7 @@ func parseCommandLineArgs(args []string, writer, errWriter io.Writer) (commandOp
 	}
 
 	if err := command.Run(context.Background(), args); err != nil {
-		if command.IsSet("help") {
+		if command.Bool("help") {
 			return commandOptions{help: true}, nil
 		}
 		var commandErr commandError
@@ -142,7 +142,7 @@ func parseCommandLineArgs(args []string, writer, errWriter io.Writer) (commandOp
 		}
 		return commandOptions{}, commandError{err: err}
 	}
-	if command.IsSet("help") {
+	if command.Bool("help") {
 		return commandOptions{help: true}, nil
 	}
 
