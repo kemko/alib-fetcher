@@ -229,6 +229,7 @@ func (factory *runtimeFactory) snapshot(
 		fetcher, err := alib.NewClient(
 			chat.AlibURLs,
 			settings.HTTPTimeout,
+			settings.AlibDownloadDelay,
 			settings.AlibMaxRetries,
 			factory.logger.With(slog.String(logKeyChatID, chat.ChatID)),
 		)

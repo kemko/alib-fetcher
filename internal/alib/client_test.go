@@ -30,7 +30,7 @@ func Test_Client_fetches_and_parses_page(t *testing.T) {
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	client, err := alib.NewClient([]string{server.URL}, time.Second, 0, slog.New(slog.DiscardHandler))
+	client, err := alib.NewClient([]string{server.URL}, time.Second, 0, 0, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
 	// When
@@ -53,7 +53,7 @@ func Test_Client_rejects_non_success_status(t *testing.T) {
 		writer.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	t.Cleanup(server.Close)
-	client, err := alib.NewClient([]string{server.URL}, time.Second, 0, slog.New(slog.DiscardHandler))
+	client, err := alib.NewClient([]string{server.URL}, time.Second, 0, 0, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
 	// When
@@ -76,7 +76,7 @@ func Test_Client_returns_parse_error_for_structurally_changed_page(t *testing.T)
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	client, err := alib.NewClient([]string{server.URL}, time.Second, 1, slog.New(slog.DiscardHandler))
+	client, err := alib.NewClient([]string{server.URL}, time.Second, 0, 1, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
 	// When
@@ -95,6 +95,7 @@ func Test_Client_returns_context_error_when_request_is_canceled(t *testing.T) {
 	client, err := alib.NewClient(
 		[]string{"https://www.alib.ru/tramka.phtml?tnew=7"},
 		time.Second,
+		0,
 		0,
 		slog.New(slog.DiscardHandler),
 	)
@@ -126,7 +127,7 @@ func Test_Client_returns_context_error_when_canceled_after_download(t *testing.T
 		message: "alib.page_downloaded",
 		cancel:  cancel,
 	})
-	client, err := alib.NewClient([]string{server.URL}, time.Second, 0, logger)
+	client, err := alib.NewClient([]string{server.URL}, time.Second, 0, 0, logger)
 	require.NoError(t, err)
 
 	// When
@@ -169,7 +170,7 @@ func Test_NewClient_validates_configuration(t *testing.T) {
 			t.Parallel()
 
 			// When
-			client, err := alib.NewClient(tt.urls, time.Second, 0, slog.New(slog.DiscardHandler))
+			client, err := alib.NewClient(tt.urls, time.Second, 0, 0, slog.New(slog.DiscardHandler))
 
 			// Then
 			require.Error(t, err)
@@ -182,7 +183,7 @@ func Test_NewClient_rejects_empty_endpoint_list(t *testing.T) {
 	t.Parallel()
 
 	// When
-	client, err := alib.NewClient(nil, time.Second, 0, slog.New(slog.DiscardHandler))
+	client, err := alib.NewClient(nil, time.Second, 0, 0, slog.New(slog.DiscardHandler))
 
 	// Then
 	require.Error(t, err)
@@ -202,7 +203,7 @@ func Test_NewClient_copies_endpoint_configuration(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	urls := []string{server.URL + "/original"}
-	client, err := alib.NewClient(urls, time.Second, 0, slog.New(slog.DiscardHandler))
+	client, err := alib.NewClient(urls, time.Second, 0, 0, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	urls[0] = server.URL + "/replaced"
 
@@ -222,6 +223,7 @@ func Test_NewClient_rejects_non_positive_timeout(t *testing.T) {
 		[]string{"https://www.alib.ru/tramka.phtml?tnew=7"},
 		0,
 		0,
+		0,
 		slog.New(slog.DiscardHandler),
 	)
 
@@ -237,6 +239,7 @@ func Test_NewClient_rejects_negative_max_retries(t *testing.T) {
 	client, err := alib.NewClient(
 		[]string{"https://www.alib.ru/tramka.phtml?tnew=7"},
 		time.Second,
+		0,
 		-1,
 		slog.New(slog.DiscardHandler),
 	)
@@ -246,11 +249,26 @@ func Test_NewClient_rejects_negative_max_retries(t *testing.T) {
 	require.Nil(t, client)
 }
 
+func Test_NewClient_rejects_negative_download_delay(t *testing.T) {
+	t.Parallel()
+
+	client, err := alib.NewClient(
+		[]string{"https://www.alib.ru/tramka.phtml?tnew=7"},
+		time.Second,
+		-time.Second,
+		0,
+		slog.New(slog.DiscardHandler),
+	)
+
+	require.Error(t, err)
+	require.Nil(t, client)
+}
+
 func Test_NewClient_rejects_nil_logger(t *testing.T) {
 	t.Parallel()
 
 	// When
-	client, err := alib.NewClient([]string{"https://www.alib.ru/tramka.phtml?tnew=7"}, time.Second, 0, nil)
+	client, err := alib.NewClient([]string{"https://www.alib.ru/tramka.phtml?tnew=7"}, time.Second, 0, 0, nil)
 
 	// Then
 	require.Error(t, err)
@@ -265,7 +283,7 @@ func Test_NewClient_does_not_expose_credentials_in_validation_errors(t *testing.
 		"https://example.com/%zz?access_token=top-secret",
 	} {
 		// When
-		client, err := alib.NewClient([]string{rawURL}, time.Second, 0, slog.New(slog.DiscardHandler))
+		client, err := alib.NewClient([]string{rawURL}, time.Second, 0, 0, slog.New(slog.DiscardHandler))
 
 		// Then
 		require.Error(t, err)
@@ -308,7 +326,7 @@ func Test_Client_fetches_urls_in_order_and_deduplicates_by_buy_url(t *testing.T)
 		server.URL + "/two/second?query=a%2Cb ",
 		server.URL + "/three/third?last=true",
 	}
-	client, err := alib.NewClient(urls, time.Second, 0, slog.New(slog.DiscardHandler))
+	client, err := alib.NewClient(urls, time.Second, 0, 0, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
 	// When
@@ -345,7 +363,7 @@ func Test_ClientWithResult_deduplicates_failure_after_success_on_later_page(t *t
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	client, err := alib.NewClient([]string{server.URL + "/first", server.URL + "/second"}, time.Second, 0, slog.New(slog.DiscardHandler))
+	client, err := alib.NewClient([]string{server.URL + "/first", server.URL + "/second"}, time.Second, 0, 0, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
 	// When
@@ -375,7 +393,7 @@ func Test_ClientWithResult_returns_deduplicated_failed_buy_urls(t *testing.T) {
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	client, err := alib.NewClient([]string{server.URL + "/first", server.URL + "/second"}, time.Second, 0, slog.New(slog.DiscardHandler))
+	client, err := alib.NewClient([]string{server.URL + "/first", server.URL + "/second"}, time.Second, 0, 0, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
 	// When
@@ -428,6 +446,7 @@ func Test_ClientWithResult_deduplicates_successes_and_failures_across_pages(t *t
 		[]string{server.URL + "/first", server.URL + "/second", server.URL + "/third"},
 		time.Second,
 		0,
+		0,
 		slog.New(slog.DiscardHandler),
 	)
 	require.NoError(t, err)
@@ -458,7 +477,7 @@ func Test_ClientWithResult_returns_unidentified_failures_from_mixed_page(t *test
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	client, err := alib.NewClient([]string{server.URL}, time.Second, 0, slog.New(slog.DiscardHandler))
+	client, err := alib.NewClient([]string{server.URL}, time.Second, 0, 0, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
 	// When
@@ -485,7 +504,7 @@ func Test_ClientWithResult_keeps_unidentified_failure_from_failed_page(t *testin
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	client, err := alib.NewClient([]string{server.URL + "/failed", server.URL + "/valid"}, time.Second, 0, slog.New(slog.DiscardHandler))
+	client, err := alib.NewClient([]string{server.URL + "/failed", server.URL + "/valid"}, time.Second, 0, 0, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
 	// When
@@ -509,6 +528,7 @@ func Test_Client_logs_full_URL_for_download_failure(t *testing.T) {
 	client, err := alib.NewClient(
 		[]string{server.URL + "/failed?scope=download"},
 		time.Second,
+		0,
 		0,
 		slog.New(slog.NewTextHandler(&logs, nil)),
 	)
@@ -539,6 +559,7 @@ func Test_Client_logs_full_URL_for_parse_failure(t *testing.T) {
 		[]string{server.URL + "/changed?scope=parse#results"},
 		time.Second,
 		0,
+		0,
 		slog.New(slog.NewTextHandler(&logs, nil)),
 	)
 	require.NoError(t, err)
@@ -568,6 +589,7 @@ func Test_Client_does_not_expose_query_credentials_from_malformed_redirect(t *te
 	client, err := alib.NewClient(
 		[]string{server.URL + "/redirect"},
 		time.Second,
+		0,
 		0,
 		slog.New(slog.NewTextHandler(&logs, nil)),
 	)
@@ -621,6 +643,7 @@ func Test_Client_downloads_all_pages_before_parsing_and_logs_outcomes(t *testing
 		},
 		time.Second,
 		0,
+		0,
 		logger,
 	)
 	require.NoError(t, err)
@@ -669,7 +692,7 @@ func Test_Client_rejects_oversized_response_without_content_length(t *testing.T)
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	client, err := alib.NewClient([]string{server.URL}, 5*time.Second, 0, slog.New(slog.DiscardHandler))
+	client, err := alib.NewClient([]string{server.URL}, 5*time.Second, 0, 0, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
 	// When
@@ -700,6 +723,7 @@ func Test_Client_continues_after_response_body_read_failure(t *testing.T) {
 	client, err := alib.NewClient(
 		[]string{server.URL + "/truncated", server.URL + "/success"},
 		time.Second,
+		0,
 		0,
 		slog.New(slog.NewTextHandler(&logs, nil)),
 	)
@@ -733,6 +757,7 @@ func Test_Client_accepts_all_correct_empty_pages(t *testing.T) {
 		[]string{server.URL + "/first", server.URL + "/second"},
 		time.Second,
 		0,
+		0,
 		slog.New(slog.DiscardHandler),
 	)
 	require.NoError(t, err)
@@ -764,6 +789,7 @@ func Test_Client_returns_combined_error_when_all_pages_fail(t *testing.T) {
 	client, err := alib.NewClient(
 		[]string{server.URL + "/status?status=bad", server.URL + "/broken?scope=broken"},
 		time.Second,
+		0,
 		1,
 		slog.New(slog.DiscardHandler),
 	)
@@ -794,7 +820,7 @@ func Test_Client_does_not_pause_between_pages(t *testing.T) {
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	client, err := alib.NewClient([]string{server.URL + "/first", server.URL + "/second"}, time.Second, 0,
+	client, err := alib.NewClient([]string{server.URL + "/first", server.URL + "/second"}, time.Second, 0, 0,
 		slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
@@ -806,6 +832,95 @@ func Test_Client_does_not_pause_between_pages(t *testing.T) {
 	firstRequest := <-requestTimes
 	secondRequest := <-requestTimes
 	require.Less(t, secondRequest.Sub(firstRequest), 500*time.Millisecond)
+}
+
+func Test_Client_pauses_between_completed_page_downloads(t *testing.T) {
+	t.Parallel()
+
+	for name, firstStatus := range map[string]int{
+		"after success": http.StatusOK,
+		"after failure": http.StatusBadGateway,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			requestTimes := make(chan time.Time, 2)
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				requestTimes <- time.Now()
+				if request.URL.Path == "/first" && firstStatus != http.StatusOK {
+					writer.WriteHeader(firstStatus)
+					return
+				}
+				writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+				_, err := writer.Write([]byte(testutil.ListingPage("Book", "/book.html", "100 руб.")))
+				assert.NoError(t, err)
+			}))
+			t.Cleanup(server.Close)
+			client, err := alib.NewClient(
+				[]string{server.URL + "/first", server.URL + "/second"},
+				time.Second,
+				100*time.Millisecond,
+				0,
+				slog.New(slog.DiscardHandler),
+			)
+			require.NoError(t, err)
+
+			_, err = client.FetchWithResult(t.Context())
+
+			require.NoError(t, err)
+			firstRequest := <-requestTimes
+			secondRequest := <-requestTimes
+			require.GreaterOrEqual(t, secondRequest.Sub(firstRequest), 75*time.Millisecond)
+		})
+	}
+}
+
+func Test_Client_stops_download_delay_on_context_cancellation(t *testing.T) {
+	t.Parallel()
+
+	firstRequest := make(chan struct{})
+	requests := make(chan string, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests <- request.URL.Path
+		if request.URL.Path == "/first" {
+			close(firstRequest)
+		}
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, err := writer.Write([]byte(testutil.ListingPage("Book", "/book.html", "100 руб.")))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+	client, err := alib.NewClient(
+		[]string{server.URL + "/first", server.URL + "/second"},
+		time.Second,
+		5*time.Second,
+		0,
+		slog.New(slog.DiscardHandler),
+	)
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		_, fetchErr := client.FetchWithResult(ctx)
+		result <- fetchErr
+	}()
+	<-firstRequest
+	cancel()
+
+	select {
+	case err = <-result:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("fetch did not stop promptly after delay cancellation")
+	}
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, "/first", <-requests)
+	select {
+	case path := <-requests:
+		t.Fatalf("unexpected request after cancellation: %s", path)
+	default:
+	}
 }
 
 func Test_Client_retries_each_page_until_success(t *testing.T) {
@@ -825,7 +940,7 @@ func Test_Client_retries_each_page_until_success(t *testing.T) {
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	client, err := alib.NewClient([]string{server.URL + "/first", server.URL + "/second"}, time.Second, 1,
+	client, err := alib.NewClient([]string{server.URL + "/first", server.URL + "/second"}, time.Second, 0, 1,
 		slog.New(slog.NewTextHandler(&logs, nil)))
 	require.NoError(t, err)
 
@@ -859,7 +974,7 @@ func Test_Client_uses_four_attempts_by_default(t *testing.T) {
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	client, err := alib.NewClient([]string{server.URL}, time.Second, 3, slog.New(slog.DiscardHandler))
+	client, err := alib.NewClient([]string{server.URL}, time.Second, 0, 3, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
 	// When
@@ -894,7 +1009,7 @@ func Test_Client_retries_request_timeout_with_live_parent_context(t *testing.T) 
 			}))
 			t.Cleanup(server.Close)
 			// Allow the healthy retry to complete while race-enabled tests compete for CPU.
-			client, err := alib.NewClient([]string{server.URL}, 5*time.Second, 1, slog.New(slog.DiscardHandler))
+			client, err := alib.NewClient([]string{server.URL}, 5*time.Second, 0, 1, slog.New(slog.DiscardHandler))
 			require.NoError(t, err)
 			ctx := t.Context()
 
@@ -928,7 +1043,7 @@ func Test_Client_continues_after_exhausting_page_retries(t *testing.T) {
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	client, err := alib.NewClient([]string{server.URL + "/failed", server.URL + "/valid"}, time.Second, 1,
+	client, err := alib.NewClient([]string{server.URL + "/failed", server.URL + "/valid"}, time.Second, 0, 1,
 		slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
@@ -961,7 +1076,7 @@ func Test_Client_stops_retry_wait_on_context_cancellation(t *testing.T) {
 		message: "alib.page_download_failed",
 		cancel:  func() { firstFailure <- struct{}{} },
 	})
-	client, err := alib.NewClient([]string{server.URL}, time.Second, 1, logger)
+	client, err := alib.NewClient([]string{server.URL}, time.Second, 0, 1, logger)
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1010,6 +1125,7 @@ func Test_Client_returns_context_error_when_canceled_during_body_download(t *tes
 	client, err := alib.NewClient(
 		[]string{server.URL + "/first", server.URL + "/second"},
 		5*time.Second,
+		0,
 		0,
 		slog.New(slog.DiscardHandler),
 	)

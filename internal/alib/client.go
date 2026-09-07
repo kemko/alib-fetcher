@@ -38,10 +38,11 @@ type FetchResult struct {
 
 // Client fetches book listings from configured Alib.ru pages.
 type Client struct {
-	httpClient *http.Client
-	logger     *slog.Logger
-	endpoints  []*url.URL
-	maxRetries int
+	httpClient    *http.Client
+	logger        *slog.Logger
+	endpoints     []*url.URL
+	downloadDelay time.Duration
+	maxRetries    int
 }
 
 type downloadedPage struct {
@@ -52,12 +53,21 @@ type downloadedPage struct {
 }
 
 // NewClient builds an Alib.ru client with a bounded request timeout.
-func NewClient(rawURLs []string, timeout time.Duration, maxRetries int, logger *slog.Logger) (*Client, error) {
+func NewClient(
+	rawURLs []string,
+	timeout time.Duration,
+	downloadDelay time.Duration,
+	maxRetries int,
+	logger *slog.Logger,
+) (*Client, error) {
 	if timeout <= 0 {
 		return nil, errors.New("create alib client: timeout must be positive")
 	}
 	if maxRetries < 0 {
 		return nil, errors.New("create alib client: max retries must be non-negative")
+	}
+	if downloadDelay < 0 {
+		return nil, errors.New("create alib client: download delay must be non-negative")
 	}
 	if logger == nil {
 		return nil, errors.New("create alib client: logger is required")
@@ -91,10 +101,11 @@ func NewClient(rawURLs []string, timeout time.Duration, maxRetries int, logger *
 	}
 
 	return &Client{
-		httpClient: &http.Client{Timeout: timeout},
-		endpoints:  endpoints,
-		maxRetries: maxRetries,
-		logger:     logger,
+		httpClient:    &http.Client{Timeout: timeout},
+		endpoints:     endpoints,
+		downloadDelay: downloadDelay,
+		maxRetries:    maxRetries,
+		logger:        logger,
 	}, nil
 }
 
@@ -160,6 +171,11 @@ func (c *Client) downloadPages(ctx context.Context) ([]downloadedPage, []error, 
 	downloaded := make([]downloadedPage, 0, len(c.endpoints))
 	pageErrors := make([]error, 0, len(c.endpoints))
 	for index, endpoint := range c.endpoints {
+		if index > 0 {
+			if err := c.waitForDownloadDelay(ctx); err != nil {
+				return nil, nil, err
+			}
+		}
 		page, err := c.downloadPage(ctx, index, endpoint)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -173,6 +189,20 @@ func (c *Client) downloadPages(ctx context.Context) ([]downloadedPage, []error, 
 	}
 
 	return downloaded, pageErrors, nil
+}
+
+func (c *Client) waitForDownloadDelay(ctx context.Context) error {
+	if c.downloadDelay == 0 {
+		return nil
+	}
+	timer := time.NewTimer(c.downloadDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (c *Client) downloadPage(ctx context.Context, index int, endpoint *url.URL) (downloadedPage, error) {

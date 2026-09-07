@@ -46,6 +46,11 @@ type alibRequest struct {
 	RawQuery string
 }
 
+type reloadAlibRequest struct {
+	At   time.Time
+	Path string
+}
+
 func Test_run_wires_once_mode_from_environment(t *testing.T) {
 	currentYear := time.Now().In(time.UTC).Year()
 	// Keep fixtures valid if UTC year changes before run captures the cycle time.
@@ -994,6 +999,7 @@ cron_schedule = "@every 1s"
 timezone = "UTC"
 run_on_startup = true
 http_timeout = "10s"
+alib_download_delay = "0s"
 alib_max_retries = 0
 
 [[chats]]
@@ -1007,13 +1013,14 @@ cron_schedule = "@every 1s"
 timezone = "UTC"
 run_on_startup = true
 http_timeout = "10s"
+alib_download_delay = "100ms"
 alib_max_retries = 0
 
 [[chats]]
 chat_id = "-1001"
 telegram_token = "new-token"
 state_file = "new.db"
-categories = ["detektivy"]
+categories = ["detektivy", "poisk"]
 `, root)
 	require.NoError(t, os.WriteFile(configPath, []byte(initialConfig), 0o600))
 
@@ -1021,10 +1028,10 @@ categories = ["detektivy"]
 	releaseOldSend := make(chan struct{})
 	newSendStarted := make(chan struct{})
 	var alibPathsMu sync.Mutex
-	var alibPaths []string
+	var alibRequests []reloadAlibRequest
 	alibServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		alibPathsMu.Lock()
-		alibPaths = append(alibPaths, request.URL.Path)
+		alibRequests = append(alibRequests, reloadAlibRequest{At: time.Now(), Path: request.URL.Path})
 		alibPathsMu.Unlock()
 		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, err := fmt.Fprint(writer, testutil.ListingPage("Книга", "/book.html", "100 руб."))
@@ -1112,12 +1119,30 @@ categories = ["detektivy"]
 	// Then
 	require.NoError(t, <-done)
 	alibPathsMu.Lock()
-	gotAlibPaths := append([]string(nil), alibPaths...)
+	gotAlibRequests := append([]reloadAlibRequest(nil), alibRequests...)
 	alibPathsMu.Unlock()
-	require.Contains(t, gotAlibPaths, "/tramka.phtml")
-	require.Contains(t, gotAlibPaths, "/detektivy.phtml")
+	assertReloadedDownloadDelay(t, gotAlibRequests)
 	require.FileExists(t, filepath.Join(root, "old.db"))
 	require.FileExists(t, filepath.Join(root, "new.db"))
+}
+
+func assertReloadedDownloadDelay(t *testing.T, requests []reloadAlibRequest) {
+	t.Helper()
+	paths := make([]string, 0, len(requests))
+	var detektivy, poisk time.Time
+	for _, request := range requests {
+		paths = append(paths, request.Path)
+		switch request.Path {
+		case "/detektivy.phtml":
+			detektivy = request.At
+		case "/poisk.phtml":
+			poisk = request.At
+		}
+	}
+	require.Contains(t, paths, "/tramka.phtml")
+	require.False(t, detektivy.IsZero())
+	require.False(t, poisk.IsZero())
+	require.GreaterOrEqual(t, poisk.Sub(detektivy), 75*time.Millisecond)
 }
 
 type reloadLogSignal struct {
