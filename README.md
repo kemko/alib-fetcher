@@ -57,6 +57,9 @@ network requests or database opens. Legacy environment variables are not read.
 
 ## Run
 
+The command-line interface uses `github.com/urfave/cli/v3` v3.11.0. TOML
+configuration continues to use `github.com/pelletier/go-toml/v2`.
+
 Run one digest for every configured chat:
 
 ```bash
@@ -86,6 +89,8 @@ Exactly one of `-service`, `-once`, and `-forget-latest N` is required.
 `-chat` is optional for `-once`, required for `-forget-latest`, and forbidden
 for `-service`. An explicitly empty `-chat` is an argument error; only omitting
 it selects every recipient in `-once`. No arguments and `-h`/`-help` print help.
+`--help` is also accepted. Single- and double-dash forms are supported for all
+flags.
 Argument errors print help and exit with status 2; configuration and runtime
 errors exit with status 1. `-once` does not start scheduling, callback polling,
 or config watching;

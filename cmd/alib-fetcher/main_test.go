@@ -317,13 +317,29 @@ func Test_parseCommandLine_accepts_each_mode(t *testing.T) {
 		arguments []string
 		want      commandOptions
 	}{
-		"once": {
-			arguments: []string{"alib-fetcher", "-once"},
-			want:      commandOptions{configPath: "./config.toml", once: true},
+		"once for every chat": {
+			arguments: []string{"alib-fetcher", "-once", "-config", "./config.toml"},
+			want: commandOptions{
+				configPath: "./config.toml",
+				once:       true,
+			},
+		},
+		"once for selected chat": {
+			arguments: []string{
+				"alib-fetcher", "-once", "-chat=-1001234567890", "-config", "./config.toml",
+			},
+			want: commandOptions{
+				configPath: "./config.toml",
+				chatID:     "-1001234567890",
+				once:       true,
+			},
 		},
 		"service": {
-			arguments: []string{"alib-fetcher", "--service"},
-			want:      commandOptions{configPath: "./config.toml", service: true},
+			arguments: []string{"alib-fetcher", "-service", "-config", "./config.toml"},
+			want: commandOptions{
+				configPath: "./config.toml",
+				service:    true,
+			},
 		},
 		"forget latest": {
 			arguments: []string{

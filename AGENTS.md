@@ -132,8 +132,9 @@ Preserve these semantics:
 
 ## Repository map
 
-- `cmd/alib-fetcher/main.go`: bootstrap wiring for JSON logging, CLI modes,
-  TOML loading, per-chat adapters, shared-token clients, and signal context.
+- `cmd/alib-fetcher/main.go`: bootstrap wiring for the `urfave/cli` v3.11.0
+  command-line interface, JSON logging, CLI modes, TOML loading, per-chat
+  adapters, shared-token clients, and signal context.
   Uses `process.RunRecipients` for once mode, `process.RunReloadable` for
   service mode, and `process.ForgetLatestForChat` for maintenance.
 - `internal/process`: service process lifecycle orchestration, state DB open
