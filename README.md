@@ -156,6 +156,8 @@ and builds the binary. Use `make govulncheck` to scan all packages separately;
 it requires access to the Go vulnerability database. `make tools` installs pinned
 golangci-lint and govulncheck versions under `bin/tools`; verification installs
 missing tools automatically for local checks.
+The golangci-lint version is pinned in `.golangci-lint-version`; update it to a
+compatible release whenever upgrading Go.
 
 Use `make coverage` for the 80% total statement-coverage gate. CI installs
 golangci-lint through its official action, using `.golangci-lint-version` just
