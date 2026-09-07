@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	telegrambot "github.com/go-telegram/bot"
@@ -43,15 +42,14 @@ type ClientConfig struct {
 }
 
 // Client owns one Telegram SDK client and its callback polling state.
-type Client struct { //nolint:govet // bot replacement state stays grouped for serialized timeout updates.
-	bot          *telegrambot.Bot
-	httpClient   *http.Client
-	token        string
-	timeout      time.Duration
-	botMutex     sync.RWMutex
-	lastUpdateID atomic.Int64
-	sdkErrors    chan error
-	secrets      []string
+type Client struct {
+	bot        *telegrambot.Bot
+	httpClient *http.Client
+	sdkErrors  chan error
+	token      string
+	secrets    []string
+	timeout    time.Duration
+	botMutex   sync.RWMutex
 }
 
 // NewClient validates the API settings without exposing the bot token.
@@ -82,7 +80,7 @@ func newClient(config ClientConfig, client *http.Client) (*Client, error) {
 		secrets:    []string{config.Token, standardAPIBase},
 		sdkErrors:  make(chan error, 1),
 	}
-	sdkBot, err := telegramClient.newSDKBot(config.Timeout, 0)
+	sdkBot, err := telegramClient.newSDKBot(config.Timeout)
 	if err != nil {
 		return nil, &safeCauseError{message: "create Telegram SDK client", cause: err}
 	}
@@ -91,7 +89,8 @@ func newClient(config ClientConfig, client *http.Client) (*Client, error) {
 	return telegramClient, nil
 }
 
-// SetTimeout updates the SDK polling timeout while preserving its update offset.
+// SetTimeout updates the SDK polling timeout while preserving its offset and queued updates.
+// Callers must first stop polling and wait for all client requests to finish.
 func (c *Client) SetTimeout(timeout time.Duration) error {
 	if timeout <= 0 {
 		return errors.New("update Telegram client: timeout must be positive")
@@ -102,27 +101,22 @@ func (c *Client) SetTimeout(timeout time.Duration) error {
 	if c.timeout == timeout {
 		return nil
 	}
-	sdkBot, err := c.newSDKBot(timeout, c.lastUpdateID.Load())
-	if err != nil {
-		return &safeCauseError{message: "update Telegram client", cause: err}
-	}
+	telegrambot.WithHTTPClient(sdkPollTimeout(timeout), &sdkHTTPClient{client: c.httpClient})(c.bot)
 	c.httpClient.Timeout = timeout
-	c.bot = sdkBot
 	c.timeout = timeout
 
 	return nil
 }
 
-func (c *Client) newSDKBot(timeout time.Duration, initialOffset int64) (*telegrambot.Bot, error) {
+func (c *Client) newSDKBot(timeout time.Duration) (*telegrambot.Bot, error) {
 	return telegrambot.New(
 		c.token,
 		telegrambot.WithHTTPClient(sdkPollTimeout(timeout), &sdkHTTPClient{client: c.httpClient}),
 		telegrambot.WithSkipGetMe(),
 		telegrambot.WithAllowedUpdates(telegrambot.AllowedUpdates{models.AllowedUpdateCallbackQuery}),
 		telegrambot.WithErrorsHandler(c.handleSDKError),
-		telegrambot.WithDefaultHandler(c.observeSDKUpdate),
+		telegrambot.WithDefaultHandler(ignoreSDKUpdate),
 		telegrambot.WithNotAsyncHandlers(),
-		telegrambot.WithInitialOffset(initialOffset),
 	)
 }
 

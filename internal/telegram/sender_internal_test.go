@@ -6,12 +6,82 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	telegrambot "github.com/go-telegram/bot"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func Test_Client_timeout_change_preserves_acknowledged_queued_callbacks(t *testing.T) {
+	t.Parallel()
+
+	// Given: pause the SDK worker so polling acknowledges an unhandled callback.
+	var polls atomic.Int32
+	acknowledged := make(chan struct{})
+	restarted := make(chan struct{})
+	sender := newTestSenderWithTransport(t, roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		assert.NoError(t, request.ParseMultipartForm(maxAPIResponseBytes))
+		switch polls.Add(1) {
+		case 1:
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body: io.NopCloser(bytes.NewBufferString(
+					`{"ok":true,"result":[{"update_id":100,"callback_query":{"id":"queued","data":"refresh"}}]}`,
+				)),
+				Request: request,
+			}, nil
+		case 2:
+			assert.Equal(t, "101", request.FormValue("offset"))
+			close(acknowledged)
+		case 3:
+			assert.Equal(t, "101", request.FormValue("offset"))
+			assert.Equal(t, "6", request.FormValue("timeout"))
+			close(restarted)
+		default:
+			t.Error("unexpected polling request")
+		}
+		<-request.Context().Done()
+		return nil, request.Context().Err()
+	}))
+	client := sender.client
+	telegrambot.WithWorkers(0)(client.bot)
+	firstCtx, firstCancel := context.WithCancel(context.Background())
+	defer firstCancel()
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		client.ListenCallbacks(firstCtx, nil, nil)
+	}()
+	require.Eventually(t, func() bool { return polls.Load() == 2 }, time.Second, time.Millisecond)
+	<-acknowledged
+	firstCancel()
+	<-firstDone
+
+	// When
+	require.NoError(t, client.SetTimeout(7*time.Second))
+	telegrambot.WithWorkers(1)(client.bot)
+	secondCtx, secondCancel := context.WithCancel(context.Background())
+	defer secondCancel()
+	secondDone := make(chan struct{})
+	callbacks := make(chan Callback, 1)
+	go func() {
+		defer close(secondDone)
+		client.ListenCallbacks(secondCtx, func(_ context.Context, callback Callback) {
+			callbacks <- callback
+		}, nil)
+	}()
+
+	// Then
+	require.Eventually(t, func() bool { return len(callbacks) == 1 }, time.Second, time.Millisecond)
+	require.Equal(t, "queued", (<-callbacks).ID)
+	<-restarted
+	secondCancel()
+	<-secondDone
+}
 
 func Test_Sender_classifies_response_body_read_failure(t *testing.T) {
 	t.Parallel()

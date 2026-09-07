@@ -32,7 +32,6 @@ func (c *Client) ListenCallbacks(ctx context.Context, handle CallbackHandler, re
 		RefreshCallbackData,
 		telegrambot.MatchTypeExact,
 		func(_ context.Context, _ *telegrambot.Bot, update *models.Update) {
-			c.observeUpdate(update)
 			if handle == nil || update.CallbackQuery == nil {
 				return
 			}
@@ -98,15 +97,7 @@ func (c *Client) reportCallbackErrors(ctx context.Context, reportError CallbackE
 	}
 }
 
-func (c *Client) observeSDKUpdate(_ context.Context, _ *telegrambot.Bot, update *models.Update) {
-	c.observeUpdate(update)
-}
-
-func (c *Client) observeUpdate(update *models.Update) {
-	if update != nil {
-		c.lastUpdateID.Store(update.ID)
-	}
-}
+func ignoreSDKUpdate(context.Context, *telegrambot.Bot, *models.Update) {}
 
 func callbackFromSDK(query *models.CallbackQuery) Callback {
 	callback := Callback{ID: query.ID, Data: query.Data}

@@ -321,6 +321,7 @@ func Test_Client_timeout_change_preserves_update_offset(t *testing.T) {
 	secondPoll := make(chan struct{})
 	thirdPoll := make(chan struct{})
 	releaseSecond := make(chan struct{})
+	releaseThird := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		count := requests.Add(1)
 		assert.Equal(t, "/bottest-token/getUpdates", request.URL.Path)
@@ -337,12 +338,13 @@ func Test_Client_timeout_change_preserves_update_offset(t *testing.T) {
 			assert.Equal(t, "101", payload["offset"])
 			assert.Equal(t, "6", payload["timeout"])
 			close(thirdPoll)
-			<-request.Context().Done()
+			<-releaseThird
 		default:
-			<-request.Context().Done()
+			<-releaseThird
 		}
 	}))
 	t.Cleanup(server.Close)
+	t.Cleanup(func() { close(releaseThird) })
 	client, err := newTestClientWithTimeout(server.URL, 4*time.Second)
 	require.NoError(t, err)
 	firstCtx, firstCancel := context.WithCancel(context.Background())

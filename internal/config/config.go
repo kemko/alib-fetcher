@@ -310,9 +310,15 @@ func validateStateMappings(rawChats []rawChat, stateDir string) ([]Chat, error) 
 }
 
 func validateStateAlias(path string, seen map[string]os.FileInfo) error {
-	info, err := os.Stat(path)
+	info, err := os.Lstat(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("inspect state file: %w", err)
+	}
+	if info != nil && info.Mode()&os.ModeSymlink != 0 {
+		info, err = os.Stat(path)
+		if err != nil {
+			return fmt.Errorf("resolve state symlink: %w", err)
+		}
 	}
 	for previousPath, previousInfo := range seen {
 		if path == previousPath || (info != nil && previousInfo != nil && os.SameFile(info, previousInfo)) {

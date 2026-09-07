@@ -33,7 +33,7 @@ optional file name inside `state_path`; otherwise it is `<normalized chat_id>.db
 Numeric IDs are stored in canonical decimal form and usernames are lowercased.
 Absolute paths, path separators, NUL, `.`, and `..` are rejected. Duplicate
 normalized IDs and state files, including existing symlink and hard-link
-aliases, are rejected.
+aliases, are rejected. State-file symlinks must point to existing files.
 
 Search sources are `categories`, `filters`, and `queries`. Categories retain
 the existing ASCII-letter validation. Each filter value makes one independent
@@ -100,8 +100,9 @@ The file is checked every second and rechecked after active digests finish.
 Polling keeps answering and skipping refresh presses during that wait.
 Unchanged settings, including comment-only edits, do not restart work.
 Existing chats do not repeat startup digests; newly added chats follow
-`run_on_startup`. Retained tokens keep their polling offsets. Changing a state
-path switches databases without moving history; removed chats keep their files.
+`run_on_startup`. Retained tokens keep their polling offsets and queued callbacks,
+including when `http_timeout` changes. Changing a state path switches databases
+without moving history; removed chats keep their files.
 
 To migrate the former single database, change an old `STATE_PATH=/path/state.db`
 to `state_path = "/path"` and set `state_file = "state.db"` for the matching

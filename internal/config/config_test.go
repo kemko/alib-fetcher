@@ -204,6 +204,39 @@ categories = ["tramka"]
 	}
 }
 
+func TestLoad_rejects_dangling_state_symlinks_in_all_modes(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	stateDir := t.TempDir()
+	shared := filepath.Join(stateDir, "shared.db")
+	require.NoError(t, os.Symlink(shared, filepath.Join(stateDir, "first.db")))
+	require.NoError(t, os.Symlink(shared, filepath.Join(stateDir, "second.db")))
+	path := writeConfig(t, fmt.Sprintf(`state_path = %q
+[[chats]]
+chat_id = "-1"
+telegram_token = "first"
+state_file = "first.db"
+categories = ["tramka"]
+[[chats]]
+chat_id = "-2"
+telegram_token = "second"
+state_file = "second.db"
+categories = ["tramka"]
+`, stateDir))
+
+	// When
+	_, loadErr := config.Load(path)
+	_, maintenanceErr := config.LoadForMaintenance(path, "-1")
+
+	// Then
+	require.ErrorIs(t, loadErr, config.ErrInvalid)
+	require.ErrorContains(t, loadErr, "state_file")
+	require.ErrorIs(t, maintenanceErr, config.ErrInvalid)
+	require.ErrorContains(t, maintenanceErr, "state_file")
+	require.NoFileExists(t, shared)
+}
+
 func TestLoad_reports_the_same_error_for_unchanged_invalid_config(t *testing.T) {
 	t.Parallel()
 
