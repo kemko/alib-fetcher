@@ -64,6 +64,52 @@ func TestRunReloadable_waits_for_inflight_digest_before_restarting_polling(t *te
 	require.Contains(t, logs.String(), `"msg":"config.reloaded"`)
 }
 
+func TestRunReloadable_reuses_one_shared_poller_and_applies_new_schedule(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var logs synchronizedBuffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	var initialFetches atomic.Int32
+	var candidateFetches atomic.Int32
+	client := &recordingCallbackClient{}
+	initial := reloadTestSnapshot(t, "first", countingFetcher{calls: &initialFetches}, false)
+	initial.Settings.CronSpec = "@every 1h"
+	initial.Recipients[0].Callbacks = client
+	secondInitial := initial.Recipients[0]
+	secondInitial.ChatID = "second"
+	secondInitial.StatePath = filepath.Join(t.TempDir(), "second.db")
+	initial.Recipients = append(initial.Recipients, secondInitial)
+	initial.Key = "initial"
+
+	candidate := reloadTestSnapshot(t, "first", countingFetcher{calls: &candidateFetches}, false)
+	candidate.Settings.CronSpec = "@every 1s"
+	candidate.Recipients[0].Callbacks = client
+	secondCandidate := candidate.Recipients[0]
+	secondCandidate.ChatID = "second"
+	secondCandidate.StatePath = filepath.Join(t.TempDir(), "second-candidate.db")
+	candidate.Recipients = append(candidate.Recipients, secondCandidate)
+	candidate.Key = "candidate"
+	reloader := &reloadSequence{calls: new(atomic.Int32), candidate: candidate}
+	done := make(chan error, 1)
+
+	// When
+	go func() {
+		done <- RunReloadable(ctx, initial, reloader.Load, logger)
+	}()
+	waitForLog(t, &logs, "config.reloaded")
+	waitForAtomicAtLeast(t, &candidateFetches, 2)
+	cancel()
+
+	// Then
+	require.NoError(t, waitForRun(t, done))
+	require.Zero(t, initialFetches.Load())
+	require.GreaterOrEqual(t, candidateFetches.Load(), int32(2))
+	require.Equal(t, int32(2), client.listens.Load())
+}
+
 func TestRunReloadable_restores_previous_generation_when_recheck_fails(t *testing.T) {
 	t.Parallel()
 
@@ -205,6 +251,18 @@ func waitForReloadCallSignal(calls *atomic.Int32, expected int32) <-chan struct{
 	}()
 
 	return done
+}
+
+func waitForAtomicAtLeast(t *testing.T, value *atomic.Int32, expected int32) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if value.Load() >= expected {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("value did not reach %d", expected)
 }
 
 func waitForLog(t *testing.T, logs *synchronizedBuffer, message string) {

@@ -137,6 +137,55 @@ func Test_Sender_listens_for_registered_refresh_callbacks(t *testing.T) {
 	assert.Equal(t, int32(3), callbackCount.Load())
 }
 
+func Test_Client_shared_token_uses_one_poller_for_multiple_senders(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	pollStarted := make(chan struct{})
+	sentChats := make(chan string, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/bottest-token/getUpdates":
+			select {
+			case <-pollStarted:
+			default:
+				close(pollStarted)
+			}
+			writeTelegramResponse(t, writer, `{"ok":true,"result":[]}`)
+		case "/bottest-token/sendRichMessage":
+			payload := readMultipartPayload(t, request)
+			sentChats <- payload["chat_id"]
+			writeTelegramResponse(t, writer, `{"ok":true,"result":{}}`)
+		default:
+			t.Errorf("unexpected Telegram request path %q", request.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client, err := newTestClientWithTimeout(server.URL, 2*time.Second)
+	require.NoError(t, err)
+	first, err := client.NewSender("-1001")
+	require.NoError(t, err)
+	second, err := client.NewSender("-1002")
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	listenerDone := make(chan struct{})
+	go func() {
+		defer close(listenerDone)
+		client.ListenCallbacks(ctx, nil, nil)
+	}()
+	waitForSignal(t, pollStarted, "shared-token poller did not start")
+
+	// When
+	require.NoError(t, first.Send(context.Background(), "first", false, false))
+	require.NoError(t, second.Send(context.Background(), "second", false, false))
+	cancel()
+	waitForListener(t, listenerDone)
+
+	// Then
+	require.Equal(t, []string{"-1001", "-1002"}, []string{<-sentChats, <-sentChats})
+}
+
 func Test_Sender_completes_API_calls_while_polling_is_held(t *testing.T) {
 	t.Parallel()
 

@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/kemko/alib-fetcher/internal/alib"
 	"github.com/kemko/alib-fetcher/internal/config"
+	"github.com/kemko/alib-fetcher/internal/process"
 	"github.com/kemko/alib-fetcher/internal/store"
 	"github.com/kemko/alib-fetcher/internal/telegram"
 	"github.com/kemko/alib-fetcher/internal/testutil"
@@ -390,6 +392,356 @@ categories = ["tramka"]
 	err := run(slog.New(slog.DiscardHandler))
 
 	require.ErrorContains(t, err, `unknown chat "-101"`)
+}
+
+func Test_run_once_isolates_recipients_and_retries_only_failed_delivery(t *testing.T) {
+	// Given
+	root := t.TempDir()
+	configPath := filepath.Join(root, "config.toml")
+	config := fmt.Sprintf(`state_path = %q
+http_timeout = "2s"
+alib_max_retries = 0
+
+[[chats]]
+chat_id = "-1001"
+telegram_token = "old-token"
+state_file = "first.db"
+categories = ["tramka"]
+
+[chats.filters]
+seria = ["Первый фильтр"]
+
+[[chats]]
+chat_id = "-1002"
+telegram_token = "new-token"
+state_file = "second.db"
+categories = ["detektivy"]
+
+[chats.filters]
+title = ["Второй фильтр"]
+`, root)
+	require.NoError(t, os.WriteFile(configPath, []byte(config), 0o600))
+
+	var alibPaths atomic.Int32
+	alibServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		alibPaths.Add(1)
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, err := fmt.Fprint(writer, testutil.ListingPage("Общая книга", "/shared.html", "100 руб."))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(alibServer.Close)
+	routeAlibRequestsTo(t, alibServer.URL)
+
+	var oldSends atomic.Int32
+	var newSends atomic.Int32
+	telegramServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/botold-token/sendRichMessage":
+			if oldSends.Add(1) == 1 {
+				writer.WriteHeader(http.StatusBadGateway)
+				_, err := io.WriteString(writer, `{"ok":false,"error_code":502,"description":"temporary failure"}`)
+				assert.NoError(t, err)
+
+				return
+			}
+		case "/botnew-token/sendRichMessage":
+			newSends.Add(1)
+		default:
+			t.Fatalf("unexpected Telegram request path %q", request.URL.Path)
+		}
+		writeTelegramResponse(t, writer, `{"ok":true,"result":{}}`)
+	}))
+	t.Cleanup(telegramServer.Close)
+	routeTelegramRequestsTo(t, telegramServer.URL)
+	logger := slog.New(slog.DiscardHandler)
+
+	// When
+	useCommandLine(t, "-once", "-config", configPath)
+	firstErr := run(logger)
+	useCommandLine(t, "-once", "-config", configPath)
+	secondErr := run(logger)
+
+	// Then
+	require.Error(t, firstErr)
+	require.NoError(t, secondErr)
+	require.Equal(t, int32(8), alibPaths.Load())
+	require.Equal(t, int32(2), oldSends.Load())
+	require.Equal(t, int32(2), newSends.Load())
+
+	firstState, err := store.Open(filepath.Join(root, "first.db"), time.Now())
+	require.NoError(t, err)
+	firstPending, err := firstState.Pending(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, firstState.Close())
+	require.Empty(t, firstPending)
+	secondState, err := store.Open(filepath.Join(root, "second.db"), time.Now())
+	require.NoError(t, err)
+	secondPending, err := secondState.Pending(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, secondState.Close())
+	require.Empty(t, secondPending)
+}
+
+func Test_run_once_all_and_selected_chat_keep_other_state_untouched(t *testing.T) {
+	for _, selected := range []bool{false, true} {
+		name := "all"
+		if selected {
+			name = "selected"
+		}
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			configPath := filepath.Join(root, "config.toml")
+			content := fmt.Sprintf(`state_path = %q
+http_timeout = "2s"
+alib_max_retries = 0
+
+[[chats]]
+chat_id = "-1001"
+telegram_token = "first-token"
+categories = ["tramka"]
+
+[[chats]]
+chat_id = "-1002"
+telegram_token = "second-token"
+state_file = "archive.db"
+categories = ["detektivy"]
+`, root)
+			require.NoError(t, os.WriteFile(configPath, []byte(content), 0o600))
+
+			var alibPaths []string
+			var pathsMu sync.Mutex
+			alibServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				pathsMu.Lock()
+				alibPaths = append(alibPaths, request.URL.Path)
+				pathsMu.Unlock()
+				writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+				_, err := fmt.Fprint(writer, testutil.ListingPage("Книга", "/book.html", "100 руб."))
+				assert.NoError(t, err)
+			}))
+			t.Cleanup(alibServer.Close)
+			routeAlibRequestsTo(t, alibServer.URL)
+			telegramChats := make(chan string, 4)
+			telegramServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if strings.HasSuffix(request.URL.Path, "/sendRichMessage") {
+					telegramChats <- request.FormValue("chat_id")
+				}
+				writeTelegramResponse(t, writer, `{"ok":true,"result":{}}`)
+			}))
+			t.Cleanup(telegramServer.Close)
+			routeTelegramRequestsTo(t, telegramServer.URL)
+
+			archivePath := filepath.Join(root, "archive.db")
+			archive, err := store.Open(archivePath, time.Now())
+			require.NoError(t, err)
+			untouched := alib.Book{BuyURL: "https://example.com/untouched"}
+			_, err = archive.RecordDiscovered(context.Background(), []alib.Book{untouched}, time.Now())
+			require.NoError(t, err)
+			require.NoError(t, archive.Close())
+			before, err := os.ReadFile(archivePath)
+			require.NoError(t, err)
+
+			args := []string{"-once", "-config", configPath}
+			if selected {
+				args = append(args, "-chat", "-1001")
+			}
+			useCommandLine(t, args...)
+
+			// When
+			require.NoError(t, run(slog.New(slog.DiscardHandler)))
+
+			// Then
+			pathsMu.Lock()
+			gotPaths := append([]string(nil), alibPaths...)
+			pathsMu.Unlock()
+			if selected {
+				require.Equal(t, []string{"/tramka.phtml"}, gotPaths)
+				require.Equal(t, "-1001", <-telegramChats)
+			} else {
+				require.ElementsMatch(t, []string{"/tramka.phtml", "/detektivy.phtml"}, gotPaths)
+				require.ElementsMatch(t, []string{"-1001", "-1002"}, []string{<-telegramChats, <-telegramChats})
+			}
+			require.FileExists(t, filepath.Join(root, "-1001.db"))
+			require.FileExists(t, archivePath)
+			if selected {
+				require.NoFileExists(t, filepath.Join(root, "-1002.db"))
+			}
+			after, err := os.ReadFile(archivePath)
+			require.NoError(t, err)
+			if selected {
+				require.Equal(t, before, after)
+			}
+		})
+	}
+}
+
+func Test_run_forget_latest_uses_legacy_state_file_without_http_or_service_settings(t *testing.T) {
+	// Given
+	root := t.TempDir()
+	configPath := filepath.Join(root, "config.toml")
+	statePath := filepath.Join(root, "old-state.db")
+	content := fmt.Sprintf("state_path = %q\n\n[[chats]]\nchat_id = \"@Books\"\nstate_file = \"old-state.db\"\n", root)
+	require.NoError(t, os.WriteFile(configPath, []byte(content), 0o600))
+	state, err := store.Open(statePath, time.Now())
+	require.NoError(t, err)
+	_, err = state.RecordDiscovered(context.Background(), []alib.Book{{BuyURL: "https://example.com/old"}}, time.Now())
+	require.NoError(t, err)
+	require.NoError(t, state.Close())
+	before, err := os.ReadFile(statePath)
+	require.NoError(t, err)
+	useCommandLine(t, "-forget-latest", "1", "-chat", "@books", "-config", configPath)
+
+	// When
+	err = run(slog.New(slog.DiscardHandler))
+
+	// Then
+	require.NoError(t, err)
+	after, err := os.ReadFile(statePath)
+	require.NoError(t, err)
+	require.NotEqual(t, before, after)
+}
+
+func Test_run_rejects_cli_syntax_before_reading_config_or_opening_state(t *testing.T) {
+	for _, arguments := range [][]string{
+		{"-once", "-config"},
+		{"-unknown"},
+		{"-once", "unexpected"},
+	} {
+		t.Run(strings.Join(arguments, "_"), func(t *testing.T) {
+			missingConfig := filepath.Join(t.TempDir(), "missing.toml")
+			useCommandLine(t, append(arguments, "-config", missingConfig)...)
+			err := run(slog.New(slog.DiscardHandler))
+			require.Error(t, err)
+			require.NotErrorIs(t, err, config.ErrInvalid)
+			require.NoFileExists(t, missingConfig)
+		})
+	}
+}
+
+func Test_service_reload_applies_new_search_token_and_state_after_inflight_send(t *testing.T) {
+	// Given
+	root := t.TempDir()
+	configPath := filepath.Join(root, "config.toml")
+	initialConfig := fmt.Sprintf(`state_path = %q
+cron_schedule = "@every 1s"
+timezone = "UTC"
+run_on_startup = true
+http_timeout = "2s"
+alib_max_retries = 0
+
+[[chats]]
+chat_id = "-1001"
+telegram_token = "old-token"
+state_file = "old.db"
+categories = ["tramka"]
+`, root)
+	updatedConfig := fmt.Sprintf(`state_path = %q
+cron_schedule = "@every 1s"
+timezone = "UTC"
+run_on_startup = true
+http_timeout = "2s"
+alib_max_retries = 0
+
+[[chats]]
+chat_id = "-1001"
+telegram_token = "new-token"
+state_file = "new.db"
+categories = ["detektivy"]
+`, root)
+	require.NoError(t, os.WriteFile(configPath, []byte(initialConfig), 0o600))
+
+	oldSendStarted := make(chan struct{})
+	releaseOldSend := make(chan struct{})
+	newSendStarted := make(chan struct{})
+	var alibPathsMu sync.Mutex
+	var alibPaths []string
+	alibServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		alibPathsMu.Lock()
+		alibPaths = append(alibPaths, request.URL.Path)
+		alibPathsMu.Unlock()
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, err := fmt.Fprint(writer, testutil.ListingPage("Книга", "/book.html", "100 руб."))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(alibServer.Close)
+	routeAlibRequestsTo(t, alibServer.URL)
+	telegramServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/botold-token/sendRichMessage":
+			select {
+			case <-oldSendStarted:
+			default:
+				close(oldSendStarted)
+			}
+			select {
+			case <-releaseOldSend:
+			case <-request.Context().Done():
+				return
+			}
+		case "/botnew-token/sendRichMessage":
+			select {
+			case <-newSendStarted:
+			default:
+				close(newSendStarted)
+			}
+		case "/botold-token/getUpdates", "/botnew-token/getUpdates":
+			writeTelegramResponse(t, writer, `{"ok":true,"result":[]}`)
+
+			return
+		default:
+			t.Fatalf("unexpected Telegram request path %q", request.URL.Path)
+		}
+		writeTelegramResponse(t, writer, `{"ok":true,"result":{}}`)
+	}))
+	t.Cleanup(telegramServer.Close)
+	routeTelegramRequestsTo(t, telegramServer.URL)
+
+	logger := slog.New(slog.DiscardHandler)
+	settings, err := config.Load(configPath)
+	require.NoError(t, err)
+	factory := newRuntimeFactory(logger)
+	initial, err := factory.snapshot(settings, "")
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- process.RunReloadable(ctx, initial, func(loadCtx context.Context) (process.ReloadSnapshot, error) {
+			latest, loadErr := config.Load(configPath)
+			if loadErr != nil {
+				return process.ReloadSnapshot{}, loadErr
+			}
+
+			return factory.snapshot(latest, "")
+		}, logger)
+	}()
+	select {
+	case <-oldSendStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("initial digest did not reach Telegram")
+	}
+
+	// When
+	temporaryConfig := configPath + ".tmp"
+	require.NoError(t, os.WriteFile(temporaryConfig, []byte(updatedConfig), 0o600))
+	require.NoError(t, os.Rename(temporaryConfig, configPath))
+	close(releaseOldSend)
+	select {
+	case <-newSendStarted:
+	case <-time.After(8 * time.Second):
+		cancel()
+		<-done
+		t.Fatal("reloaded digest did not reach Telegram")
+	}
+	cancel()
+
+	// Then
+	require.NoError(t, <-done)
+	alibPathsMu.Lock()
+	gotAlibPaths := append([]string(nil), alibPaths...)
+	alibPathsMu.Unlock()
+	require.Contains(t, gotAlibPaths, "/tramka.phtml")
+	require.Contains(t, gotAlibPaths, "/detektivy.phtml")
+	require.FileExists(t, filepath.Join(root, "old.db"))
+	require.FileExists(t, filepath.Join(root, "new.db"))
 }
 
 func Test_run_forget_latest_only_requires_state_path(t *testing.T) {
@@ -1047,6 +1399,13 @@ func decodeTelegramMessage(t *testing.T, request *http.Request) telegrambot.Send
 	}
 
 	return payload
+}
+
+func writeTelegramResponse(t *testing.T, writer http.ResponseWriter, body string) {
+	t.Helper()
+	writer.Header().Set("Content-Type", "application/json")
+	_, err := io.WriteString(writer, body)
+	require.NoError(t, err)
 }
 
 func setRunEnvironment(t *testing.T, telegramAPIBase, statePath string) {
