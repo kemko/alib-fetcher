@@ -1,21 +1,21 @@
-// Package config parses and validates process environment configuration.
+// Package config parses and validates the TOML process configuration.
 package config
 
 import (
-	"encoding/csv"
 	"errors"
 	"fmt"
-	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 	"unicode"
 
+	"github.com/pelletier/go-toml/v2"
 	"github.com/robfig/cron/v3"
 )
 
-// ErrInvalid indicates that one or more environment values are unusable.
+// ErrInvalid indicates that one or more configuration values are unusable.
 var ErrInvalid = errors.New("invalid configuration")
 
 var errInvalidFreshBooks = errors.New("must use age:N with a non-negative integer or since:YYYY")
@@ -26,7 +26,7 @@ const (
 	defaultHTTPTimeout       = 30 * time.Second
 	defaultMessageLimit      = 32000
 	defaultRunOnStartup      = true
-	defaultStatePath         = "/var/lib/alib-fetcher/state.db"
+	defaultStatePath         = "/var/lib/alib-fetcher"
 	defaultTimezone          = "Europe/Moscow"
 	telegramHardMessageLimit = 32768
 )
@@ -53,210 +53,414 @@ func (policy FreshBooksPolicy) LowerYear(currentYear int) int {
 	return policy.value
 }
 
-// Config contains validated process configuration.
+// Config contains validated process-level settings and recipients.
 type Config struct {
 	Location       *time.Location
 	FreshBooks     *FreshBooksPolicy
-	TelegramToken  string
-	TelegramChatID string
 	StatePath      string
-	cronSpec       string
-	AlibURLs       []string
+	CronSchedule   string
+	Path           string
+	Chats          []Chat
 	AlibMaxRetries int
 	HTTPTimeout    time.Duration
 	MessageLimit   int
 	RunOnStartup   bool
 }
 
-// Load reads and validates process environment variables.
-func Load() (Config, error) {
-	token := os.Getenv("TELEGRAM_BOT_TOKEN")
-	chatID := os.Getenv("TELEGRAM_CHAT_ID")
-	if token == "" || chatID == "" {
-		return Config{}, fmt.Errorf("%w: TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required", ErrInvalid)
-	}
-	if !validTelegramChatID(chatID) {
-		return Config{}, fmt.Errorf(
-			"%w: TELEGRAM_CHAT_ID must be a signed decimal int64 or @channel username",
-			ErrInvalid,
-		)
+// Chat contains settings and generated sources for one recipient.
+type Chat struct {
+	ChatID        string
+	TelegramToken string
+	StateFile     string
+	StatePath     string
+	Search        SearchConfig
+	AlibURLs      []string
+}
+
+type rawConfig struct {
+	StatePath      *string   `toml:"state_path"`
+	CronSchedule   *string   `toml:"cron_schedule"`
+	Timezone       *string   `toml:"timezone"`
+	RunOnStartup   *bool     `toml:"run_on_startup"`
+	HTTPTimeout    *string   `toml:"http_timeout"`
+	AlibMaxRetries *int      `toml:"alib_max_retries"`
+	MessageLimit   *int      `toml:"message_limit"`
+	FreshBooks     *string   `toml:"fresh_books"`
+	Chats          []rawChat `toml:"chats"`
+}
+
+type rawChat struct {
+	ChatID        string              `toml:"chat_id"`
+	TelegramToken string              `toml:"telegram_token"`
+	StateFile     *string             `toml:"state_file"`
+	Categories    []string            `toml:"categories"`
+	Filters       map[string][]string `toml:"filters"`
+	Queries       []map[string]string `toml:"queries"`
+}
+
+// Load reads a TOML configuration. With no argument it reads ./config.toml.
+func Load(paths ...string) (Config, error) {
+	raw, absolutePath, err := readRaw(paths...)
+	if err != nil {
+		return Config{}, err
 	}
 
+	return validate(raw, absolutePath)
+}
+
+// LoadForMaintenance reads only the state path and recipient state mapping.
+// It intentionally does not require tokens, sources, or service settings.
+func LoadForMaintenance(path, chatID string) (string, error) {
+	raw, configPath, err := readRaw(path)
+	if err != nil {
+		return "", err
+	}
+	stateDir, err := resolveStateDir(raw.StatePath, configPath)
+	if err != nil {
+		return "", err
+	}
+	statePaths, err := validateStateMappings(raw.Chats, stateDir)
+	if err != nil {
+		return "", err
+	}
+	normalized, err := normalizeChatID(chatID)
+	if err != nil {
+		return "", fmt.Errorf("%w: chat_id %w", ErrInvalid, err)
+	}
+	statePath, ok := statePaths[normalized]
+	if !ok {
+		return "", fmt.Errorf("%w: unknown chat %q", ErrInvalid, normalized)
+	}
+	return statePath, nil
+}
+
+// NormalizeChatID returns the canonical representation used in configuration.
+func NormalizeChatID(value string) (string, error) { return normalizeChatID(value) }
+
+func validate(raw rawConfig, configPath string) (Config, error) {
 	settings := Config{
-		TelegramToken:  token,
-		TelegramChatID: chatID,
-		StatePath:      LoadStatePath(),
+		StatePath:      stringValue(raw.StatePath, defaultStatePath),
+		CronSchedule:   stringValue(raw.CronSchedule, defaultCronSchedule),
+		AlibMaxRetries: intValue(raw.AlibMaxRetries, defaultAlibMaxRetries),
+		MessageLimit:   intValue(raw.MessageLimit, defaultMessageLimit),
+		RunOnStartup:   boolValue(raw.RunOnStartup, defaultRunOnStartup),
+		Path:           configPath,
+	}
+	if _, err := cron.ParseStandard(settings.CronSchedule); err != nil {
+		return Config{}, fmt.Errorf("%w: cron_schedule must be a valid cron expression: %w", ErrInvalid, err)
+	}
+	if settings.AlibMaxRetries < 0 {
+		return Config{}, fmt.Errorf("%w: alib_max_retries must be a non-negative integer", ErrInvalid)
+	}
+	if settings.MessageLimit < 64 || settings.MessageLimit > telegramHardMessageLimit {
+		return Config{}, fmt.Errorf("%w: message_limit must be between 64 and %d", ErrInvalid, telegramHardMessageLimit)
 	}
 	var err error
-	settings.AlibURLs, err = buildAlibURLs()
+	settings.Location, err = time.LoadLocation(stringValue(raw.Timezone, defaultTimezone))
 	if err != nil {
-		return Config{}, err
+		return Config{}, fmt.Errorf("%w: load timezone: %w", ErrInvalid, err)
 	}
-	return loadValidatedConfig(settings)
-}
-
-func buildAlibURLs() ([]string, error) {
-	categories, err := parseCSVList("ALIB_CATEGORIES")
+	settings.HTTPTimeout, err = parseDuration(raw.HTTPTimeout)
 	if err != nil {
-		return nil, err
+		return Config{}, fmt.Errorf("%w: http_timeout must be a positive Go duration", ErrInvalid)
 	}
-	series, err := parseCSVList("ALIB_SERIES")
-	if err != nil {
-		return nil, err
-	}
-	publishers, err := parseCSVList("ALIB_PUBLISHERS")
-	if err != nil {
-		return nil, err
-	}
-	filters := make(map[string][]string, 2)
-	if len(series) > 0 {
-		filters[searchFieldSeria] = series
-	}
-	if len(publishers) > 0 {
-		filters[searchFieldPublisher] = publishers
-	}
-	if len(categories) == 0 && len(filters) == 0 {
-		return nil, fmt.Errorf(
-			"%w: ALIB_CATEGORIES, ALIB_SERIES, and ALIB_PUBLISHERS must not all be empty",
-			ErrInvalid,
-		)
-	}
-
-	return buildSearchURLs(
-		categories,
-		filters,
-		nil,
-		searchErrorContext{
-			fields: map[string]string{
-				"categories":         "ALIB_CATEGORIES",
-				searchFieldSeria:     "ALIB_SERIES",
-				searchFieldPublisher: "ALIB_PUBLISHERS",
-			},
-		},
-	)
-}
-
-func parseCSVList(name string) ([]string, error) {
-	value := os.Getenv(name)
-	if value == "" {
-		return nil, nil
-	}
-
-	reader := csv.NewReader(strings.NewReader(value))
-	reader.FieldsPerRecord = -1
-	reader.TrimLeadingSpace = true
-	items, err := reader.Read()
-	if err != nil {
-		return nil, fmt.Errorf("%w: %s must be a valid CSV list: %w", ErrInvalid, name, err)
-	}
-	if _, err = reader.Read(); err != io.EOF {
-		if err == nil {
-			return nil, fmt.Errorf("%w: %s must contain one CSV record", ErrInvalid, name)
-		}
-		return nil, fmt.Errorf("%w: %s must be a valid CSV list: %w", ErrInvalid, name, err)
-	}
-
-	for index := range items {
-		items[index] = strings.TrimSpace(items[index])
-		if items[index] == "" {
-			return nil, fmt.Errorf("%w: %s item %d must not be empty", ErrInvalid, name, index)
-		}
-	}
-
-	return items, nil
-}
-
-func isASCIIWord(value string) bool {
-	if value == "" {
-		return false
-	}
-	for _, character := range value {
-		if (character < 'a' || character > 'z') && (character < 'A' || character > 'Z') {
-			return false
-		}
-	}
-
-	return true
-}
-
-func loadValidatedConfig(settings Config) (Config, error) {
-	settings.cronSpec = valueOrDefault("CRON_SCHEDULE", defaultCronSchedule)
-	if _, err := cron.ParseStandard(settings.cronSpec); err != nil {
-		return Config{}, fmt.Errorf("%w: CRON_SCHEDULE must be a valid cron expression: %w", ErrInvalid, err)
-	}
-
-	location, err := time.LoadLocation(valueOrDefault("TIMEZONE", defaultTimezone))
-	if err != nil {
-		return Config{}, fmt.Errorf("%w: load TIMEZONE: %w", ErrInvalid, err)
-	}
-	settings.Location = location
-	settings.HTTPTimeout, err = parsePositiveDuration("HTTP_TIMEOUT", defaultHTTPTimeout)
-	if err != nil {
-		return Config{}, err
-	}
-	settings.AlibMaxRetries, err = parseNonNegativeInt("ALIB_MAX_RETRIES", defaultAlibMaxRetries)
-	if err != nil {
-		return Config{}, err
-	}
-	settings.MessageLimit, err = parseMessageLimit()
-	if err != nil {
-		return Config{}, err
-	}
-	settings.RunOnStartup, err = parseRunOnStartup()
-	if err != nil {
-		return Config{}, err
-	}
-	if value := os.Getenv("FRESH_BOOKS"); value != "" {
-		policy, parseErr := parseFreshBooks(value)
+	if raw.FreshBooks != nil && *raw.FreshBooks != "" {
+		policy, parseErr := parseFreshBooks(*raw.FreshBooks)
 		if parseErr != nil {
-			return Config{}, fmt.Errorf("%w: FRESH_BOOKS %w", ErrInvalid, parseErr)
+			return Config{}, fmt.Errorf("%w: fresh_books %w", ErrInvalid, parseErr)
 		}
 		settings.FreshBooks = &policy
 	}
 
+	stateDir, err := resolveStateDir(raw.StatePath, configPath)
+	if err != nil {
+		return Config{}, err
+	}
+	settings.StatePath = stateDir
+	settings.Chats, err = validateChats(raw.Chats, settings.StatePath)
+	if err != nil {
+		return Config{}, err
+	}
 	return settings, nil
 }
 
-func parsePositiveDuration(name string, defaultValue time.Duration) (time.Duration, error) {
-	value, err := time.ParseDuration(valueOrDefault(name, defaultValue.String()))
-	if err != nil || value <= 0 {
-		return 0, fmt.Errorf("%w: %s must be a positive Go duration", ErrInvalid, name)
+func readRaw(paths ...string) (rawConfig, string, error) {
+	path := "./config.toml"
+	if len(paths) > 1 {
+		return rawConfig{}, "", fmt.Errorf("%w: config path specified more than once", ErrInvalid)
 	}
-
-	return value, nil
-}
-
-func parseNonNegativeInt(name string, defaultValue int) (int, error) {
-	value, err := strconv.Atoi(valueOrDefault(name, strconv.Itoa(defaultValue)))
-	if err != nil || value < 0 {
-		return 0, fmt.Errorf("%w: %s must be a non-negative integer", ErrInvalid, name)
+	if len(paths) == 1 && paths[0] != "" {
+		path = paths[0]
 	}
-
-	return value, nil
-}
-
-func parseMessageLimit() (int, error) {
-	value, err := strconv.Atoi(valueOrDefault("MESSAGE_LIMIT", strconv.Itoa(defaultMessageLimit)))
-	if err != nil || value < 64 || value > telegramHardMessageLimit {
-		return 0, fmt.Errorf("%w: MESSAGE_LIMIT must be between 64 and %d", ErrInvalid, telegramHardMessageLimit)
-	}
-
-	return value, nil
-}
-
-func parseRunOnStartup() (bool, error) {
-	value, err := strconv.ParseBool(valueOrDefault("RUN_ON_STARTUP", strconv.FormatBool(defaultRunOnStartup)))
+	absolutePath, err := filepath.Abs(path)
 	if err != nil {
-		return false, fmt.Errorf("%w: RUN_ON_STARTUP must be a boolean", ErrInvalid)
+		return rawConfig{}, "", fmt.Errorf("%w: resolve config path: %w", ErrInvalid, err)
 	}
-
-	return value, nil
+	contents, err := os.ReadFile(absolutePath) //nolint:gosec // path is explicitly supplied by the operator
+	if err != nil {
+		return rawConfig{}, "", fmt.Errorf("%w: read config: %w", ErrInvalid, err)
+	}
+	var raw rawConfig
+	if decodeErr := toml.Unmarshal(contents, &raw); decodeErr != nil {
+		return rawConfig{}, "", fmt.Errorf("%w: %w", ErrInvalid, formatDecodeError(decodeErr))
+	}
+	var document map[string]any
+	if decodeErr := toml.Unmarshal(contents, &document); decodeErr != nil {
+		return rawConfig{}, "", fmt.Errorf("%w: %w", ErrInvalid, formatDecodeError(decodeErr))
+	}
+	if validationErr := validateDocumentKeys(document); validationErr != nil {
+		return rawConfig{}, "", fmt.Errorf("%w: %w", ErrInvalid, validationErr)
+	}
+	return raw, absolutePath, nil
 }
 
-// LoadStatePath reads the state database path without validating the rest of the
-// service configuration.
-func LoadStatePath() string {
-	return valueOrDefault("STATE_PATH", defaultStatePath)
+func formatDecodeError(err error) error {
+	var decodeErr *toml.DecodeError
+	if errors.As(err, &decodeErr) && len(decodeErr.Key()) > 0 {
+		return fmt.Errorf("decode config field %s: %w", strings.Join(decodeErr.Key(), "."), err)
+	}
+	return fmt.Errorf("decode config: %w", err)
+}
+
+func validateDocumentKeys(document map[string]any) error {
+	for key := range document {
+		if !oneOf(key, "state_path", "cron_schedule", "timezone", "run_on_startup", "http_timeout",
+			"alib_max_retries", "message_limit", "fresh_books", "chats") {
+			return fmt.Errorf("unknown field %q", key)
+		}
+	}
+	chats, ok := document["chats"]
+	if !ok {
+		return nil
+	}
+	for index, item := range asAnySlice(chats) {
+		chat, chatOK := item.(map[string]any)
+		if !chatOK {
+			continue
+		}
+		for key, value := range chat {
+			if !oneOf(key, "chat_id", "telegram_token", "state_file", "categories", "filters", "queries") {
+				return fmt.Errorf("unknown field %q in chats[%d]", key, index)
+			}
+			if key == "filters" {
+				if _, filterOK := value.(map[string]any); !filterOK {
+					return fmt.Errorf("filters in chats[%d] must be a table", index)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func asAnySlice(value any) []any {
+	slice, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	return slice
+}
+
+func resolveStateDir(value *string, configPath string) (string, error) {
+	stateDir := stringValue(value, defaultStatePath)
+	if !filepath.IsAbs(stateDir) {
+		stateDir = filepath.Join(filepath.Dir(configPath), stateDir)
+	}
+	abs, err := filepath.Abs(stateDir)
+	if err != nil {
+		return "", fmt.Errorf("%w: resolve state_path: %w", ErrInvalid, err)
+	}
+	return filepath.Clean(abs), nil
+}
+
+func validateStateMappings(rawChats []rawChat, stateDir string) (map[string]string, error) {
+	if len(rawChats) == 0 {
+		return nil, fmt.Errorf("%w: chats must contain at least one recipient", ErrInvalid)
+	}
+	paths := make(map[string]string, len(rawChats))
+	seenIDs := make(map[string]struct{}, len(rawChats))
+	seenPaths := make(map[string]string, len(rawChats))
+	for index, raw := range rawChats {
+		prefix := fmt.Sprintf("chats[%d]", index)
+		chatID, err := normalizeChatID(raw.ChatID)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %s.chat_id %w", ErrInvalid, prefix, err)
+		}
+		if _, exists := seenIDs[chatID]; exists {
+			return nil, fmt.Errorf("%w: %s.chat_id duplicates a normalized recipient", ErrInvalid, prefix)
+		}
+		seenIDs[chatID] = struct{}{}
+		stateFile := chatID + ".db"
+		if raw.StateFile != nil {
+			stateFile = *raw.StateFile
+		}
+		if stateFileErr := validateStateFile(stateFile); stateFileErr != nil {
+			return nil, fmt.Errorf("%w: %s.state_file %w", ErrInvalid, prefix, stateFileErr)
+		}
+		statePath := filepath.Join(stateDir, stateFile)
+		canonicalPath := statePath
+		if resolved, resolveErr := filepath.EvalSymlinks(statePath); resolveErr == nil {
+			canonicalPath = resolved
+		}
+		if previous, exists := seenPaths[canonicalPath]; exists {
+			return nil, fmt.Errorf("%w: %s.state_file collides with %s", ErrInvalid, prefix, previous)
+		}
+		seenPaths[canonicalPath] = prefix
+		paths[chatID] = statePath
+	}
+	return paths, nil
+}
+
+func validateChats(rawChats []rawChat, stateDir string) ([]Chat, error) {
+	if len(rawChats) == 0 {
+		return nil, fmt.Errorf("%w: chats must contain at least one recipient", ErrInvalid)
+	}
+	chats := make([]Chat, 0, len(rawChats))
+	seenIDs := make(map[string]struct{}, len(rawChats))
+	seenPaths := make(map[string]string, len(rawChats))
+	for index, raw := range rawChats {
+		prefix := fmt.Sprintf("chats[%d]", index)
+		chatID, err := normalizeChatID(raw.ChatID)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %s.chat_id %w", ErrInvalid, prefix, err)
+		}
+		if _, exists := seenIDs[chatID]; exists {
+			return nil, fmt.Errorf("%w: %s.chat_id duplicates a normalized recipient", ErrInvalid, prefix)
+		}
+		seenIDs[chatID] = struct{}{}
+		if raw.TelegramToken == "" {
+			return nil, fmt.Errorf("%w: %s.telegram_token is required", ErrInvalid, prefix)
+		}
+
+		search := SearchConfig{
+			Categories: append([]string(nil), raw.Categories...),
+			Filters:    cloneFilters(raw.Filters),
+			Queries:    cloneQueries(raw.Queries),
+		}
+		urls, err := buildSearchURLs(search.Categories, search.Filters, search.Queries, searchErrorContext{
+			fields: map[string]string{"categories": prefix + ".categories"},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("%w: %s.search: %w", ErrInvalid, prefix, err)
+		}
+		stateFile := chatID + ".db"
+		if raw.StateFile != nil {
+			stateFile = *raw.StateFile
+		}
+		if stateFileErr := validateStateFile(stateFile); stateFileErr != nil {
+			return nil, fmt.Errorf("%w: %s.state_file %w", ErrInvalid, prefix, stateFileErr)
+		}
+		statePath := filepath.Join(stateDir, stateFile)
+		canonicalPath := statePath
+		if resolved, resolveErr := filepath.EvalSymlinks(statePath); resolveErr == nil {
+			canonicalPath = resolved
+		}
+		if previous, exists := seenPaths[canonicalPath]; exists {
+			return nil, fmt.Errorf("%w: %s.state_file collides with %s", ErrInvalid, prefix, previous)
+		}
+		seenPaths[canonicalPath] = prefix
+		chats = append(chats, Chat{
+			ChatID:        chatID,
+			TelegramToken: raw.TelegramToken,
+			StateFile:     stateFile,
+			StatePath:     statePath,
+			Search:        search,
+			AlibURLs:      urls,
+		})
+	}
+	return chats, nil
+}
+
+func normalizeChatID(value string) (string, error) {
+	if strings.HasPrefix(value, "@") {
+		if len(value) == 1 || strings.ContainsFunc(value, unicode.IsSpace) {
+			return "", errors.New("must be a signed decimal int64 or @channel username")
+		}
+		return strings.ToLower(value), nil
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return "", errors.New("must be a signed decimal int64 or @channel username")
+	}
+	return strconv.FormatInt(parsed, 10), nil
+}
+
+func validateStateFile(value string) error {
+	if value == "" || value == "." || value == ".." || strings.ContainsRune(value, '\x00') ||
+		strings.ContainsAny(value, `/\\`) || filepath.IsAbs(value) {
+		return errors.New("must be a safe file name")
+	}
+	return nil
+}
+
+// StatePathFor resolves a normalized chat ID to its configured state file.
+func (settings Config) StatePathFor(chatID string) (string, error) {
+	normalized, err := normalizeChatID(chatID)
+	if err != nil {
+		return "", fmt.Errorf("%w: chat_id %w", ErrInvalid, err)
+	}
+	for _, chat := range settings.Chats {
+		if chat.ChatID == normalized {
+			return chat.StatePath, nil
+		}
+	}
+	return "", fmt.Errorf("%w: unknown chat %q", ErrInvalid, normalized)
+}
+
+func parseDuration(value *string) (time.Duration, error) {
+	if value == nil {
+		return defaultHTTPTimeout, nil
+	}
+	parsed, err := time.ParseDuration(*value)
+	if err != nil || parsed <= 0 {
+		return 0, errors.New("invalid duration")
+	}
+	return parsed, nil
+}
+
+func stringValue(value *string, fallback string) string {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}
+
+func intValue(value *int, fallback int) int {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}
+
+func boolValue(value *bool, fallback bool) bool {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}
+
+func cloneFilters(filters map[string][]string) map[string][]string {
+	if filters == nil {
+		return nil
+	}
+	cloned := make(map[string][]string, len(filters))
+	for key, values := range filters {
+		cloned[key] = append([]string(nil), values...)
+	}
+	return cloned
+}
+
+func cloneQueries(queries []map[string]string) []map[string]string {
+	if queries == nil {
+		return nil
+	}
+	cloned := make([]map[string]string, len(queries))
+	for index, query := range queries {
+		cloned[index] = make(map[string]string, len(query))
+		for key, value := range query {
+			cloned[index][key] = value
+		}
+	}
+	return cloned
 }
 
 func parseFreshBooks(value string) (FreshBooksPolicy, error) {
@@ -264,12 +468,10 @@ func parseFreshBooks(value string) (FreshBooksPolicy, error) {
 	if !found || !containsOnlyDigits(argument) {
 		return FreshBooksPolicy{}, errInvalidFreshBooks
 	}
-
 	parsed, err := strconv.Atoi(argument)
 	if err != nil {
 		return FreshBooksPolicy{}, errInvalidFreshBooks
 	}
-
 	switch mode {
 	case "age":
 		return FreshBooksPolicy{mode: freshBooksAge, value: parsed}, nil
@@ -277,7 +479,6 @@ func parseFreshBooks(value string) (FreshBooksPolicy, error) {
 		if len(argument) != 4 || parsed < 1000 {
 			return FreshBooksPolicy{}, errInvalidFreshBooks
 		}
-
 		return FreshBooksPolicy{mode: freshBooksSince, value: parsed}, nil
 	default:
 		return FreshBooksPolicy{}, errInvalidFreshBooks
@@ -293,29 +494,20 @@ func containsOnlyDigits(value string) bool {
 			return false
 		}
 	}
+	return true
+}
 
+func isASCIIWord(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, character := range value {
+		if (character < 'a' || character > 'z') && (character < 'A' || character > 'Z') {
+			return false
+		}
+	}
 	return true
 }
 
 // CronSpec returns the validated cron schedule.
-func (c Config) CronSpec() string {
-	return c.cronSpec
-}
-
-func valueOrDefault(key, fallback string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-
-	return fallback
-}
-
-func validTelegramChatID(chatID string) bool {
-	if strings.HasPrefix(chatID, "@") {
-		return len(chatID) > 1 && !strings.ContainsFunc(chatID, unicode.IsSpace)
-	}
-
-	_, err := strconv.ParseInt(chatID, 10, 64)
-
-	return err == nil
-}
+func (c Config) CronSpec() string { return c.CronSchedule }

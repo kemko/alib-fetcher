@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -355,15 +356,48 @@ func Test_run_rejects_forget_latest_with_once(t *testing.T) {
 	err := run(slog.New(slog.DiscardHandler))
 
 	// Then
-	require.ErrorContains(t, err, "-forget-latest is incompatible with -once")
+	require.ErrorContains(t, err, "exactly one of")
+}
+
+func Test_run_without_arguments_only_prints_help(t *testing.T) {
+	useCommandLine(t)
+
+	require.NoError(t, run(slog.New(slog.DiscardHandler)))
+}
+
+func Test_run_help_does_not_read_configuration(t *testing.T) {
+	useCommandLine(t, "-help", "-config", filepath.Join(t.TempDir(), "missing.toml"))
+
+	require.NoError(t, run(slog.New(slog.DiscardHandler)))
+}
+
+func Test_run_rejects_positional_arguments_before_configuration(t *testing.T) {
+	useCommandLine(t, "-once", "unexpected")
+
+	err := run(slog.New(slog.DiscardHandler))
+
+	require.ErrorContains(t, err, "positional arguments")
+}
+
+func Test_run_rejects_unknown_chat_before_creating_adapters(t *testing.T) {
+	configPath := writeMainConfig(t, `[[chats]]
+chat_id = "-100"
+telegram_token = "secret"
+categories = ["tramka"]
+`)
+	useCommandLine(t, "-once", "-chat", "-101", "-config", configPath)
+
+	err := run(slog.New(slog.DiscardHandler))
+
+	require.ErrorContains(t, err, `unknown chat "-101"`)
 }
 
 func Test_run_forget_latest_only_requires_state_path(t *testing.T) {
 	// Given
-	useCommandLine(t, "-forget-latest", "1")
 	statePath := filepath.Join(t.TempDir(), "state.db")
 	setEnvironmentAbsentDigestConfiguration(t)
-	t.Setenv("STATE_PATH", statePath)
+	setMaintenanceConfig(t, statePath, "-100123")
+	useCommandLine(t, "-forget-latest", "1", "-chat", "-100123", "-config", os.Getenv("ALIB_TEST_CONFIG"))
 	state, err := store.Open(statePath, time.Now())
 	require.NoError(t, err)
 	book := alib.Book{BuyURL: "https://example.com/book"}
@@ -388,7 +422,7 @@ func Test_run_forget_latest_documented_cli_scenario_deletes_latest_records_witho
 	// Given
 	statePath := filepath.Join(t.TempDir(), "state.db")
 	setEnvironmentAbsentDigestConfiguration(t)
-	t.Setenv("STATE_PATH", statePath)
+	setMaintenanceConfig(t, statePath, "-100123")
 	books := make([]alib.Book, 8)
 	for index := range books {
 		books[index] = alib.Book{BuyURL: fmt.Sprintf("https://example.com/book-%d", index)}
@@ -398,7 +432,7 @@ func Test_run_forget_latest_documented_cli_scenario_deletes_latest_records_witho
 	_, err = state.RecordDiscovered(context.Background(), books, time.Now())
 	require.NoError(t, err)
 	require.NoError(t, state.Close())
-	useCommandLine(t, "-forget-latest", "6")
+	useCommandLine(t, "-forget-latest", "6", "-chat", "-100123", "-config", os.Getenv("ALIB_TEST_CONFIG"))
 
 	// When
 	err = run(slog.New(slog.DiscardHandler))
@@ -415,19 +449,32 @@ func Test_run_forget_latest_documented_cli_scenario_deletes_latest_records_witho
 
 func Test_run_rejects_missing_Alib_tracking_configuration_before_http(t *testing.T) {
 	// Given
-	useOnceMode(t)
-	setEnvironmentAbsentDigestConfiguration(t)
-	t.Setenv("TELEGRAM_BOT_TOKEN", "test-token")
-	t.Setenv("TELEGRAM_CHAT_ID", "-100123")
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(configPath, []byte("[[chats]]\nchat_id = \"-100123\"\ntelegram_token = \"test-token\"\n"), 0o600))
+	useCommandLine(t, "-once", "-config", configPath)
 
 	// When
 	err := run(slog.New(slog.DiscardHandler))
 
 	// Then
 	require.ErrorIs(t, err, config.ErrInvalid)
-	require.ErrorContains(t, err, "ALIB_CATEGORIES")
-	require.ErrorContains(t, err, "ALIB_SERIES")
-	require.ErrorContains(t, err, "ALIB_PUBLISHERS")
+	require.ErrorContains(t, err, "categories, filters, and queries")
+}
+
+func setMaintenanceConfig(t *testing.T, statePath, chatID string) {
+	t.Helper()
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	content := fmt.Sprintf("state_path = %q\n\n[[chats]]\nchat_id = %q\nstate_file = %q\n",
+		filepath.Dir(statePath), chatID, filepath.Base(statePath))
+	require.NoError(t, os.WriteFile(configPath, []byte(content), 0o600))
+	t.Setenv("ALIB_TEST_CONFIG", configPath)
+}
+
+func writeMainConfig(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	return path
 }
 
 func Test_run_sends_only_last_wired_message_with_sound(t *testing.T) {
@@ -587,15 +634,16 @@ func Test_run_once_fetches_categories_and_series_in_order_and_sends_partial_dedu
 	t.Setenv("ALIB_CATEGORIES", "first,broken")
 	t.Setenv("ALIB_SERIES", `"Серия, тома",changed`)
 	t.Setenv("MESSAGE_LIMIT", strconv.Itoa(messageLimit))
-	settings, err := config.Load()
+	writeEnvironmentConfig(t, os.Getenv("ALIB_TEST_CONFIG"))
+	settings, err := config.Load(os.Getenv("ALIB_TEST_CONFIG"))
 	require.NoError(t, err)
 	require.Equal(t, []string{
 		"https://www.alib.ru/first.phtml?tnew=7",
 		"https://www.alib.ru/broken.phtml?tnew=7",
 		"https://alib.ru/findp.php4?seria=%D1%E5%F0%E8%FF%2C+%F2%EE%EC%E0&lday=7",
 		"https://alib.ru/findp.php4?seria=changed&lday=7",
-	}, settings.AlibURLs)
-	settings.AlibURLs = localAlibURLs(t, alibServer.URL, settings.AlibURLs)
+	}, settings.Chats[0].AlibURLs)
+	settings.Chats[0].AlibURLs = localAlibURLs(t, alibServer.URL, settings.Chats[0].AlibURLs)
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
@@ -853,9 +901,15 @@ func useOnceMode(t *testing.T) {
 
 func runWithAlibURLs(t *testing.T, logger *slog.Logger, endpoints ...string) error {
 	t.Helper()
-	settings, err := config.Load()
+	configPath := os.Getenv("ALIB_TEST_CONFIG")
+	if configPath == "" {
+		configPath = filepath.Join(t.TempDir(), "config.toml")
+		t.Setenv("ALIB_TEST_CONFIG", configPath)
+	}
+	writeEnvironmentConfig(t, configPath)
+	settings, err := config.Load(configPath)
 	require.NoError(t, err)
-	settings.AlibURLs = append([]string(nil), endpoints...)
+	settings.Chats[0].AlibURLs = append([]string(nil), endpoints...)
 
 	return runWithConfig(logger, settings, true)
 }
@@ -1011,6 +1065,85 @@ func setRunEnvironment(t *testing.T, telegramAPIBase, statePath string) {
 	t.Setenv("HTTP_TIMEOUT", "2s")
 	t.Setenv("ALIB_MAX_RETRIES", "0")
 	t.Setenv("MESSAGE_LIMIT", "4000")
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	t.Setenv("ALIB_TEST_CONFIG", configPath)
+	writeEnvironmentConfig(t, configPath)
+	os.Args = append(os.Args, "-config", configPath)
+}
+
+func writeEnvironmentConfig(t *testing.T, configPath string) {
+	t.Helper()
+	statePath := os.Getenv("STATE_PATH")
+	stateDir, stateFile := filepath.Dir(statePath), filepath.Base(statePath)
+	if statePath == "" {
+		stateDir, stateFile = ".", "state.db"
+	}
+	categories := csvArray(t, os.Getenv("ALIB_CATEGORIES"))
+	series := csvArray(t, os.Getenv("ALIB_SERIES"))
+	publishers := csvArray(t, os.Getenv("ALIB_PUBLISHERS"))
+	var builder strings.Builder
+	_, err := fmt.Fprintf(&builder, "state_path = %s\ncron_schedule = %s\ntimezone = %s\nrun_on_startup = %s\n",
+		strconv.Quote(stateDir), strconv.Quote(valueOr(os.Getenv("CRON_SCHEDULE"), "0 0 * * *")),
+		strconv.Quote(valueOr(os.Getenv("TIMEZONE"), "UTC")), valueOr(os.Getenv("RUN_ON_STARTUP"), "true"))
+	require.NoError(t, err)
+	if value := os.Getenv("HTTP_TIMEOUT"); value != "" {
+		_, err = fmt.Fprintf(&builder, "http_timeout = %s\n", strconv.Quote(value))
+		require.NoError(t, err)
+	}
+	if value := os.Getenv("ALIB_MAX_RETRIES"); value != "" {
+		_, err = fmt.Fprintf(&builder, "alib_max_retries = %s\n", value)
+		require.NoError(t, err)
+	}
+	if value := os.Getenv("MESSAGE_LIMIT"); value != "" {
+		_, err = fmt.Fprintf(&builder, "message_limit = %s\n", value)
+		require.NoError(t, err)
+	}
+	if freshBooks := os.Getenv("FRESH_BOOKS"); freshBooks != "" {
+		_, err = fmt.Fprintf(&builder, "fresh_books = %s\n", strconv.Quote(freshBooks))
+		require.NoError(t, err)
+	}
+	_, err = fmt.Fprintf(&builder, "\n[[chats]]\nchat_id = %s\ntelegram_token = %s\nstate_file = %s\ncategories = %s\n",
+		strconv.Quote(os.Getenv("TELEGRAM_CHAT_ID")), strconv.Quote(os.Getenv("TELEGRAM_BOT_TOKEN")),
+		strconv.Quote(stateFile), tomlArray(categories))
+	require.NoError(t, err)
+	if len(series) > 0 || len(publishers) > 0 {
+		_, err = builder.WriteString("\n[chats.filters]\n")
+		require.NoError(t, err)
+		if len(series) > 0 {
+			_, err = fmt.Fprintf(&builder, "seria = %s\n", tomlArray(series))
+			require.NoError(t, err)
+		}
+		if len(publishers) > 0 {
+			_, err = fmt.Fprintf(&builder, "izdat = %s\n", tomlArray(publishers))
+			require.NoError(t, err)
+		}
+	}
+	require.NoError(t, os.WriteFile(configPath, []byte(builder.String()), 0o600))
+}
+
+func csvArray(t *testing.T, value string) []string {
+	t.Helper()
+	if value == "" {
+		return nil
+	}
+	items, err := csv.NewReader(strings.NewReader(value)).Read()
+	require.NoError(t, err)
+	return items
+}
+
+func tomlArray(values []string) string {
+	quoted := make([]string, len(values))
+	for index, value := range values {
+		quoted[index] = strconv.Quote(strings.TrimSpace(value))
+	}
+	return "[" + strings.Join(quoted, ", ") + "]"
+}
+
+func valueOr(value, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 func unsetEnvironment(t *testing.T, key string) {

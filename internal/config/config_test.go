@@ -1,666 +1,241 @@
 package config_test
 
 import (
-	"math"
+	"context"
 	"os"
-	"strconv"
-	"strings"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/kemko/alib-fetcher/internal/alib"
 	"github.com/kemko/alib-fetcher/internal/config"
+	"github.com/kemko/alib-fetcher/internal/store"
 
 	"github.com/stretchr/testify/require"
 )
 
-func Test_Load_applies_service_defaults(t *testing.T) {
-	// Given
-	setEnvironment(t, map[string]string{
-		"TELEGRAM_BOT_TOKEN": "token",
-		"TELEGRAM_CHAT_ID":   "-100123",
-		"CRON_SCHEDULE":      "",
-		"TIMEZONE":           "",
-		"STATE_PATH":         "",
-		"ALIB_MAX_RETRIES":   "",
-		"HTTP_TIMEOUT":       "",
-		"MESSAGE_LIMIT":      "",
-		"RUN_ON_STARTUP":     "",
-		"FRESH_BOOKS":        "",
-	})
+func TestLoad_applies_defaults_and_preserves_explicit_zero_and_false(t *testing.T) {
+	configPath := writeConfig(t, `alib_max_retries = 0
+run_on_startup = false
 
-	// When
-	loaded, err := config.Load()
+[[chats]]
+chat_id = "-100123"
+telegram_token = "secret"
+categories = ["tramka"]
+`)
 
-	// Then
+	loaded, err := config.Load(configPath)
+
 	require.NoError(t, err)
-	require.Equal(t, "0 0 * * *", loaded.CronSpec())
+	require.Equal(t, "/var/lib/alib-fetcher", loaded.StatePath)
+	require.Equal(t, "0 0 * * *", loaded.CronSchedule)
 	require.Equal(t, "Europe/Moscow", loaded.Location.String())
-	require.Equal(t, "/var/lib/alib-fetcher/state.db", loaded.StatePath)
-	require.Equal(t, []string{"https://www.alib.ru/tramka.phtml?tnew=7"}, loaded.AlibURLs)
-	require.Equal(t, 3, loaded.AlibMaxRetries)
 	require.Equal(t, 30*time.Second, loaded.HTTPTimeout)
 	require.Equal(t, 32000, loaded.MessageLimit)
-	require.True(t, loaded.RunOnStartup)
-	require.Nil(t, loaded.FreshBooks)
-}
-
-func Test_Load_validates_message_limit(t *testing.T) {
-	testCases := map[string]struct {
-		value     string
-		wantError bool
-		expected  int
-	}{
-		"hard limit": {
-			value:    "32768",
-			expected: 32768,
-		},
-		"above hard limit": {
-			value:     "32769",
-			wantError: true,
-		},
-		"below minimum": {
-			value:     "63",
-			wantError: true,
-		},
-	}
-
-	for name, testCase := range testCases {
-		t.Run(name, func(t *testing.T) {
-			// Given
-			setEnvironment(t, map[string]string{
-				"TELEGRAM_BOT_TOKEN": "token",
-				"TELEGRAM_CHAT_ID":   "-100123",
-				"MESSAGE_LIMIT":      testCase.value,
-			})
-
-			// When
-			loaded, err := config.Load()
-
-			// Then
-			if testCase.wantError {
-				require.ErrorIs(t, err, config.ErrInvalid)
-				require.ErrorContains(t, err, "MESSAGE_LIMIT")
-				require.Empty(t, loaded)
-				return
-			}
-			require.NoError(t, err)
-			require.Equal(t, testCase.expected, loaded.MessageLimit)
-		})
-	}
-}
-
-func Test_LoadStatePath_reads_environment_without_full_configuration(t *testing.T) {
-	// Given
-	const statePath = "/tmp/alib-fetcher-maintenance.db"
-	setEnvironment(t, map[string]string{
-		"STATE_PATH":         statePath,
-		"TELEGRAM_BOT_TOKEN": "",
-		"TELEGRAM_CHAT_ID":   "",
-		"CRON_SCHEDULE":      "not a cron expression",
-		"TIMEZONE":           "not a timezone",
-		"HTTP_TIMEOUT":       "not a duration",
-		"MESSAGE_LIMIT":      "not a number",
-		"RUN_ON_STARTUP":     "not a boolean",
-		"ALIB_MAX_RETRIES":   "",
-		"FRESH_BOOKS":        "",
-	})
-
-	// When
-	loaded := config.LoadStatePath()
-
-	// Then
-	require.Equal(t, statePath, loaded)
-}
-
-func Test_LoadStatePath_uses_default(t *testing.T) {
-	// Given
-	unsetEnvironment(t, "STATE_PATH")
-
-	// When
-	loaded := config.LoadStatePath()
-
-	// Then
-	require.Equal(t, "/var/lib/alib-fetcher/state.db", loaded)
-}
-
-func Test_Load_disables_fresh_books_threshold_when_unset_or_empty(t *testing.T) {
-	testCases := map[string]bool{
-		"unset": false,
-		"empty": true,
-	}
-
-	for name, setValue := range testCases {
-		t.Run(name, func(t *testing.T) {
-			// Given
-			setEnvironment(t, map[string]string{
-				"TELEGRAM_BOT_TOKEN": "token",
-				"TELEGRAM_CHAT_ID":   "-100123",
-			})
-			if setValue {
-				t.Setenv("FRESH_BOOKS", "")
-			} else {
-				unsetEnvironment(t, "FRESH_BOOKS")
-			}
-
-			// When
-			loaded, err := config.Load()
-
-			// Then
-			require.NoError(t, err)
-			require.Nil(t, loaded.FreshBooks)
-		})
-	}
-}
-
-func Test_Load_parses_fresh_books_policy(t *testing.T) {
-	testCases := map[string]struct {
-		value       string
-		currentYear int
-		lowerYear   int
-	}{
-		"age": {
-			value:       "age:5",
-			currentYear: 2026,
-			lowerYear:   2021,
-		},
-		"age zero": {
-			value:       "age:0",
-			currentYear: 2026,
-			lowerYear:   2026,
-		},
-		"since": {
-			value:       "since:2021",
-			currentYear: 2026,
-			lowerYear:   2021,
-		},
-	}
-
-	for name, testCase := range testCases {
-		t.Run(name, func(t *testing.T) {
-			// Given
-			setEnvironment(t, map[string]string{
-				"TELEGRAM_BOT_TOKEN": "token",
-				"TELEGRAM_CHAT_ID":   "-100123",
-				"FRESH_BOOKS":        testCase.value,
-			})
-
-			// When
-			loaded, err := config.Load()
-
-			// Then
-			require.NoError(t, err)
-			require.NotNil(t, loaded.FreshBooks)
-			require.Equal(t, testCase.lowerYear, loaded.FreshBooks.LowerYear(testCase.currentYear))
-		})
-	}
-}
-
-func Test_Load_rejects_invalid_fresh_books_policy(t *testing.T) {
-	testCases := []string{
-		"age:-1",
-		"age:+5",
-		"age:1.5",
-		"age:",
-		"since:999",
-		"since:0000",
-		"since:10000",
-		"since:20a1",
-		"fresh:2021",
-	}
-
-	for _, value := range testCases {
-		t.Run(value, func(t *testing.T) {
-			// Given
-			setEnvironment(t, map[string]string{
-				"TELEGRAM_BOT_TOKEN": "token",
-				"TELEGRAM_CHAT_ID":   "-100123",
-				"FRESH_BOOKS":        value,
-			})
-
-			// When
-			loaded, err := config.Load()
-
-			// Then
-			require.ErrorIs(t, err, config.ErrInvalid)
-			require.ErrorContains(t, err, "FRESH_BOOKS")
-			require.Empty(t, loaded)
-		})
-	}
-}
-
-func Test_Load_parses_custom_schedule(t *testing.T) {
-	// Given
-	setEnvironment(t, map[string]string{
-		"TELEGRAM_BOT_TOKEN": "token",
-		"TELEGRAM_CHAT_ID":   "@books",
-		"CRON_SCHEDULE":      "*/15 8-18 * * 1-5",
-		"TIMEZONE":           "Asia/Tbilisi",
-		"STATE_PATH":         "/tmp/custom.db",
-		"ALIB_CATEGORIES":    "books",
-		"ALIB_MAX_RETRIES":   "5",
-		"HTTP_TIMEOUT":       "15s",
-		"MESSAGE_LIMIT":      "3500",
-		"RUN_ON_STARTUP":     "false",
-	})
-
-	// When
-	loaded, err := config.Load()
-
-	// Then
-	require.NoError(t, err)
-	require.Equal(t, "*/15 8-18 * * 1-5", loaded.CronSpec())
-	require.Equal(t, "Asia/Tbilisi", loaded.Location.String())
-	require.Equal(t, 15*time.Second, loaded.HTTPTimeout)
-	require.Equal(t, 5, loaded.AlibMaxRetries)
-	require.Equal(t, 3500, loaded.MessageLimit)
+	require.Zero(t, loaded.AlibMaxRetries)
 	require.False(t, loaded.RunOnStartup)
+	require.Nil(t, loaded.FreshBooks)
+	require.Equal(t, "-100123", loaded.Chats[0].ChatID)
+	require.Equal(t, filepath.Join("/var/lib/alib-fetcher", "-100123.db"), loaded.Chats[0].StatePath)
 }
 
-func Test_Load_accepts_positive_HTTP_timeout(t *testing.T) {
-	// Given
-	setEnvironment(t, map[string]string{
-		"TELEGRAM_BOT_TOKEN": "token",
-		"TELEGRAM_CHAT_ID":   "-100123",
-		"HTTP_TIMEOUT":       "1ms",
-	})
+func TestLoad_decodes_search_model_and_normalizes_recipients(t *testing.T) {
+	configPath := writeConfig(t, `state_path = "data"
+cron_schedule = "@every 6h"
+timezone = "UTC"
+http_timeout = "1s"
+message_limit = 1000
+fresh_books = "since:2021"
 
-	// When
-	loaded, err := config.Load()
+[[chats]]
+chat_id = "+00123"
+telegram_token = "token-one"
+state_file = "old.db"
+categories = ["tramka"]
 
-	// Then
+[chats.filters]
+seria = ["Литературные памятники", "ЖЗЛ"]
+izdat = ["Наука"]
+
+[[chats.queries]]
+author = "Стругацкие"
+cena2 = "3000"
+fotoonly = "da"
+`)
+
+	loaded, err := config.Load(configPath)
+
 	require.NoError(t, err)
-	require.Equal(t, time.Millisecond, loaded.HTTPTimeout)
+	require.Equal(t, filepath.Join(filepath.Dir(configPath), "data"), loaded.StatePath)
+	require.Equal(t, "123", loaded.Chats[0].ChatID)
+	require.Equal(t, filepath.Join(loaded.StatePath, "old.db"), loaded.Chats[0].StatePath)
+	require.Equal(t, []string{
+		"https://www.alib.ru/tramka.phtml?tnew=7",
+		"https://alib.ru/findp.php4?seria=%CB%E8%F2%E5%F0%E0%F2%F3%F0%ED%FB%E5+%EF%E0%EC%FF%F2%ED%E8%EA%E8&lday=7",
+		"https://alib.ru/findp.php4?seria=%C6%C7%CB&lday=7",
+		"https://alib.ru/findp.php4?izdat=%CD%E0%F3%EA%E0&lday=7",
+		"https://alib.ru/findp.php4?author=%D1%F2%F0%F3%E3%E0%F6%EA%E8%E5&cena2=3000&fotoonly=da&lday=7",
+	}, loaded.Chats[0].AlibURLs)
+	require.Equal(t, 2021, loaded.FreshBooks.LowerYear(2026))
 }
 
-func Test_Load_ignores_removed_Slink_configuration(t *testing.T) {
-	// Given
-	setEnvironment(t, map[string]string{
-		"TELEGRAM_BOT_TOKEN": "token",
-		"TELEGRAM_CHAT_ID":   "-100123",
-		"SLINK_URL":          "not a URL",
-		"SLINK_API_KEY":      "not an API key",
-		"SLINK_TAG_ID":       "not a UUID",
-	})
-
-	// When
-	loaded, err := config.Load()
-
-	// Then
-	require.NoError(t, err)
-	require.Equal(t, "token", loaded.TelegramToken)
-}
-
-func Test_Load_builds_AlibURLs_from_categories_series_and_publishers(t *testing.T) {
+func TestLoad_rejects_unknown_fields_and_invalid_values_without_token(t *testing.T) {
 	testCases := map[string]struct {
-		categories string
-		series     string
-		publishers string
-		want       []string
+		body string
+		want string
 	}{
-		"categories only": {
-			categories: "tramka,deti,tramka",
-			want: []string{
-				"https://www.alib.ru/tramka.phtml?tnew=7",
-				"https://www.alib.ru/deti.phtml?tnew=7",
-			},
+		"unknown top-level": {
+			body: "unknown = true\n",
+			want: "unknown",
 		},
-		"series only": {
-			series: `"Фантастика, новинки"`,
-			want: []string{
-				"https://alib.ru/findp.php4?seria=%D4%E0%ED%F2%E0%F1%F2%E8%EA%E0%2C+%ED%EE%E2%E8%ED%EA%E8&lday=7",
-			},
+		"unknown chat field": {
+			body: "[[chats]]\nchat_id = \"-1\"\ntelegram_token = \"secret-token\"\nwat = \"x\"\n",
+			want: "wat",
 		},
-		"series deduplicate repeats": {
-			series: "серия,другая,серия",
-			want: []string{
-				"https://alib.ru/findp.php4?seria=%F1%E5%F0%E8%FF&lday=7",
-				"https://alib.ru/findp.php4?seria=%E4%F0%F3%E3%E0%FF&lday=7",
-			},
+		"invalid chat": {
+			body: "[[chats]]\nchat_id = \"not-a-chat\"\ntelegram_token = \"secret-token\"\ncategories = [\"tramka\"]\n",
+			want: "chat_id",
 		},
-		"publishers only": {
-			publishers: `"Международный центр фантастики",Эксмо`,
-			want: []string{
-				"https://alib.ru/findp.php4?izdat=%CC%E5%E6%E4%F3%ED%E0%F0%EE%E4%ED%FB%E9+%F6%E5%ED%F2%F0+%F4%E0%ED%F2%E0%F1%F2%E8%EA%E8&lday=7",
-				"https://alib.ru/findp.php4?izdat=%DD%EA%F1%EC%EE&lday=7",
-			},
+		"invalid search": {
+			body: "[[chats]]\nchat_id = \"-1\"\ntelegram_token = \"secret-token\"\n\n[chats.filters]\nunknown = [\"x\"]\n",
+			want: "unknown",
 		},
-		"all preserve order": {
-			categories: " tramka, deti ",
-			series:     `серия,"другая, том"`,
-			publishers: "издатель,издатель",
-			want: []string{
-				"https://www.alib.ru/tramka.phtml?tnew=7",
-				"https://www.alib.ru/deti.phtml?tnew=7",
-				"https://alib.ru/findp.php4?seria=%F1%E5%F0%E8%FF&lday=7",
-				"https://alib.ru/findp.php4?seria=%E4%F0%F3%E3%E0%FF%2C+%F2%EE%EC&lday=7",
-				"https://alib.ru/findp.php4?izdat=%E8%E7%E4%E0%F2%E5%EB%FC&lday=7",
-			},
-		},
-		"Alib example": {
-			series: "отцы основатели",
-			want: []string{
-				"https://alib.ru/findp.php4?seria=%EE%F2%F6%FB+%EE%F1%ED%EE%E2%E0%F2%E5%EB%E8&lday=7",
-			},
-		},
-		"quoted comma and special characters": {
-			series: `"Серия, тома", A&B / C`,
-			want: []string{
-				"https://alib.ru/findp.php4?seria=%D1%E5%F0%E8%FF%2C+%F2%EE%EC%E0&lday=7",
-				"https://alib.ru/findp.php4?seria=A%26B+%2F+C&lday=7",
-			},
+		"wrong type": {
+			body: "message_limit = \"large\"\n",
+			want: "message_limit",
 		},
 	}
-
 	for name, testCase := range testCases {
 		t.Run(name, func(t *testing.T) {
-			setEnvironment(t, map[string]string{
-				"TELEGRAM_BOT_TOKEN": "token",
-				"TELEGRAM_CHAT_ID":   "-100123",
-				"ALIB_CATEGORIES":    testCase.categories,
-				"ALIB_SERIES":        testCase.series,
-				"ALIB_PUBLISHERS":    testCase.publishers,
-			})
+			loaded, err := config.Load(writeConfig(t, testCase.body))
 
-			loaded, err := config.Load()
-
-			require.NoError(t, err)
-			require.Equal(t, testCase.want, loaded.AlibURLs)
+			require.ErrorIs(t, err, config.ErrInvalid)
+			require.ErrorContains(t, err, testCase.want)
+			require.NotContains(t, err.Error(), "secret-token")
+			require.Empty(t, loaded)
 		})
 	}
 }
 
-func Test_Load_rejects_search_value_not_representable_in_Windows1251(t *testing.T) {
-	for name, variable := range map[string]string{
-		"series":    "ALIB_SERIES",
-		"publisher": "ALIB_PUBLISHERS",
-	} {
+func TestLoad_rejects_unsafe_and_colliding_state_files(t *testing.T) {
+	testCases := map[string]string{
+		"absolute": `[[chats]]
+chat_id = "-1"
+telegram_token = "a"
+state_file = "/tmp/state.db"
+categories = ["tramka"]
+`,
+		"nested": `[[chats]]
+chat_id = "-1"
+telegram_token = "a"
+state_file = "nested/state.db"
+categories = ["tramka"]
+`,
+		"same id": `[[chats]]
+chat_id = "+1"
+telegram_token = "a"
+categories = ["tramka"]
+
+[[chats]]
+chat_id = "1"
+telegram_token = "b"
+categories = ["deti"]
+`,
+		"same file": `[[chats]]
+chat_id = "-1"
+telegram_token = "a"
+state_file = "shared.db"
+categories = ["tramka"]
+
+[[chats]]
+chat_id = "-2"
+telegram_token = "b"
+state_file = "shared.db"
+categories = ["deti"]
+`,
+	}
+	for name, body := range testCases {
 		t.Run(name, func(t *testing.T) {
-			// Given
-			setEnvironment(t, map[string]string{
-				"TELEGRAM_BOT_TOKEN": "token",
-				"TELEGRAM_CHAT_ID":   "-100123",
-				variable:             "значение 😀",
-			})
-
-			// When
-			loaded, err := config.Load()
-
-			// Then
+			loaded, err := config.Load(writeConfig(t, body))
 			require.ErrorIs(t, err, config.ErrInvalid)
-			require.ErrorContains(t, err, variable)
-			require.ErrorContains(t, err, "значение 😀")
 			require.Empty(t, loaded)
 		})
 	}
 }
 
-func Test_Load_rejects_invalid_Alib_tracking_configuration(t *testing.T) {
-	testCases := map[string]struct {
-		categories string
-		series     string
-		publishers string
-		variable   string
-	}{
-		"all absent": {
-			variable: "ALIB_CATEGORIES, ALIB_SERIES, and ALIB_PUBLISHERS",
-		},
-		"old URL only": {
-			variable: "ALIB_CATEGORIES, ALIB_SERIES, and ALIB_PUBLISHERS",
-		},
-		"empty category item": {
-			categories: "tramka,,deti",
-			variable:   "ALIB_CATEGORIES",
-		},
-		"empty series item": {
-			series:   "series, ,other",
-			variable: "ALIB_SERIES",
-		},
-		"malformed CSV": {
-			series:   `"unterminated`,
-			variable: "ALIB_SERIES",
-		},
-		"empty publisher item": {
-			publishers: "publisher, ,other",
-			variable:   "ALIB_PUBLISHERS",
-		},
-		"multiple CSV records": {
-			categories: "tramka\ndeti",
-			variable:   "ALIB_CATEGORIES",
-		},
-		"invalid category": {
-			categories: "tram-ka",
-			variable:   "ALIB_CATEGORIES",
-		},
-		"unicode category": {
-			categories: "книги",
-			variable:   "ALIB_CATEGORIES",
-		},
-	}
+func TestLoad_ignores_legacy_environment(t *testing.T) {
+	t.Setenv("TELEGRAM_BOT_TOKEN", "legacy-token")
+	t.Setenv("TELEGRAM_CHAT_ID", "not-valid")
+	t.Setenv("ALIB_CATEGORIES", "")
 
-	for name, testCase := range testCases {
-		t.Run(name, func(t *testing.T) {
-			setEnvironment(t, map[string]string{
-				"TELEGRAM_BOT_TOKEN": "token",
-				"TELEGRAM_CHAT_ID":   "-100123",
-				"ALIB_CATEGORIES":    testCase.categories,
-				"ALIB_SERIES":        testCase.series,
-				"ALIB_PUBLISHERS":    testCase.publishers,
-				"ALIB_URL":           "https://example.com/old",
-			})
-			if testCase.categories == "" {
-				unsetEnvironment(t, "ALIB_CATEGORIES")
-			}
-			if testCase.series == "" {
-				unsetEnvironment(t, "ALIB_SERIES")
-			}
-			if testCase.publishers == "" {
-				unsetEnvironment(t, "ALIB_PUBLISHERS")
-			}
-			if name == "old URL only" {
-				unsetEnvironment(t, "ALIB_CATEGORIES")
-				unsetEnvironment(t, "ALIB_SERIES")
-				unsetEnvironment(t, "ALIB_PUBLISHERS")
-			}
+	loaded, err := config.Load(writeConfig(t, `[[chats]]
+chat_id = "@Books"
+telegram_token = "toml-token"
+categories = ["tramka"]
+`))
 
-			loaded, err := config.Load()
-
-			require.ErrorIs(t, err, config.ErrInvalid)
-			require.ErrorContains(t, err, testCase.variable)
-			require.Empty(t, loaded)
-		})
-	}
-}
-
-func Test_Load_rejects_invalid_HTTP_timeout(t *testing.T) {
-	testCases := []string{"invalid", "0s", "-1s"}
-
-	for _, timeout := range testCases {
-		t.Run(timeout, func(t *testing.T) {
-			// Given
-			setEnvironment(t, map[string]string{
-				"TELEGRAM_BOT_TOKEN": "token",
-				"TELEGRAM_CHAT_ID":   "-100123",
-				"HTTP_TIMEOUT":       timeout,
-			})
-
-			// When
-			loaded, err := config.Load()
-
-			// Then
-			require.ErrorIs(t, err, config.ErrInvalid)
-			require.ErrorContains(t, err, "HTTP_TIMEOUT")
-			require.Empty(t, loaded)
-		})
-	}
-}
-
-func Test_Load_accepts_non_negative_Alib_max_retries(t *testing.T) {
-	testCases := map[string]int{
-		"zero":     0,
-		"positive": 250,
-	}
-
-	for name, expected := range testCases {
-		t.Run(name, func(t *testing.T) {
-			// Given
-			setEnvironment(t, map[string]string{
-				"TELEGRAM_BOT_TOKEN": "token",
-				"TELEGRAM_CHAT_ID":   "-100123",
-				"ALIB_MAX_RETRIES":   strconv.Itoa(expected),
-			})
-
-			// When
-			loaded, err := config.Load()
-
-			// Then
-			require.NoError(t, err)
-			require.Equal(t, expected, loaded.AlibMaxRetries)
-		})
-	}
-}
-
-func Test_Load_rejects_invalid_Alib_max_retries(t *testing.T) {
-	for _, value := range []string{"invalid", "-1", strings.Repeat("9", 100)} {
-		t.Run(value, func(t *testing.T) {
-			// Given
-			setEnvironment(t, map[string]string{
-				"TELEGRAM_BOT_TOKEN": "token",
-				"TELEGRAM_CHAT_ID":   "-100123",
-				"ALIB_MAX_RETRIES":   value,
-			})
-
-			// When
-			loaded, err := config.Load()
-
-			// Then
-			require.ErrorIs(t, err, config.ErrInvalid)
-			require.ErrorContains(t, err, "ALIB_MAX_RETRIES")
-			require.Empty(t, loaded)
-		})
-	}
-}
-
-func Test_Load_accepts_valid_telegram_chat_id(t *testing.T) {
-	testCases := []string{
-		strconv.FormatInt(math.MinInt64, 10),
-		"-100123",
-		"0",
-		"+123",
-		strconv.FormatInt(math.MaxInt64, 10),
-		"@channel",
-	}
-
-	for _, chatID := range testCases {
-		t.Run(chatID, func(t *testing.T) {
-			// Given
-			setEnvironment(t, map[string]string{
-				"TELEGRAM_BOT_TOKEN": "token",
-				"TELEGRAM_CHAT_ID":   chatID,
-			})
-
-			// When
-			loaded, err := config.Load()
-
-			// Then
-			require.NoError(t, err)
-			require.Equal(t, chatID, loaded.TelegramChatID)
-		})
-	}
-}
-
-func Test_Load_rejects_invalid_telegram_chat_id(t *testing.T) {
-	testCases := []string{
-		"chat",
-		"@",
-		"@channel name",
-		" @channel",
-		"@channel\n",
-		"123 456",
-		"9223372036854775808",
-		"-9223372036854775809",
-	}
-
-	for _, chatID := range testCases {
-		t.Run(strings.ReplaceAll(chatID, "\n", `\n`), func(t *testing.T) {
-			// Given
-			const token = "secret-token-value"
-			setEnvironment(t, map[string]string{
-				"TELEGRAM_BOT_TOKEN": token,
-				"TELEGRAM_CHAT_ID":   chatID,
-			})
-
-			// When
-			loaded, err := config.Load()
-
-			// Then
-			require.ErrorIs(t, err, config.ErrInvalid)
-			require.ErrorContains(t, err, "TELEGRAM_CHAT_ID")
-			require.NotContains(t, err.Error(), token)
-			require.Empty(t, loaded)
-		})
-	}
-}
-
-func Test_Load_rejects_invalid_run_on_startup(t *testing.T) {
-	// Given
-	setEnvironment(t, map[string]string{
-		"TELEGRAM_BOT_TOKEN": "token",
-		"TELEGRAM_CHAT_ID":   "-100123",
-		"RUN_ON_STARTUP":     "sometimes",
-	})
-
-	// When
-	loaded, err := config.Load()
-
-	// Then
-	require.ErrorIs(t, err, config.ErrInvalid)
-	require.Empty(t, loaded)
-}
-
-func Test_Load_rejects_invalid_schedule(t *testing.T) {
-	// Given
-	setEnvironment(t, map[string]string{
-		"TELEGRAM_BOT_TOKEN": "token",
-		"TELEGRAM_CHAT_ID":   "-100123",
-		"CRON_SCHEDULE":      "not a cron expression",
-	})
-
-	// When
-	loaded, err := config.Load()
-
-	// Then
-	require.ErrorIs(t, err, config.ErrInvalid)
-	require.Empty(t, loaded)
-}
-
-func Test_Load_accepts_cron_descriptor(t *testing.T) {
-	// Given
-	setEnvironment(t, map[string]string{
-		"TELEGRAM_BOT_TOKEN": "token",
-		"TELEGRAM_CHAT_ID":   "-100123",
-		"CRON_SCHEDULE":      "@every 6h",
-	})
-
-	// When
-	loaded, err := config.Load()
-
-	// Then
 	require.NoError(t, err)
-	require.Equal(t, "@every 6h", loaded.CronSpec())
+	require.Equal(t, "@books", loaded.Chats[0].ChatID)
+	require.Equal(t, "toml-token", loaded.Chats[0].TelegramToken)
 }
 
-func setEnvironment(t *testing.T, values map[string]string) {
-	t.Helper()
-	t.Setenv("ALIB_CATEGORIES", "tramka")
-	t.Setenv("ALIB_SERIES", "")
-	t.Setenv("ALIB_PUBLISHERS", "")
-	for key, value := range values {
-		t.Setenv(key, value)
-	}
+func TestLoadForMaintenance_does_not_require_service_settings(t *testing.T) {
+	configPath := writeConfig(t, `state_path = "state"
+[[chats]]
+chat_id = "-100"
+state_file = "legacy.db"
+`)
+
+	statePath, err := config.LoadForMaintenance(configPath, "-100")
+
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(filepath.Dir(configPath), "state", "legacy.db"), statePath)
 }
 
-func unsetEnvironment(t *testing.T, key string) {
+func TestLoadForMaintenance_rejects_unknown_chat(t *testing.T) {
+	configPath := writeConfig(t, `[[chats]]
+chat_id = "-100"
+`)
+
+	_, err := config.LoadForMaintenance(configPath, "-101")
+
+	require.ErrorIs(t, err, config.ErrInvalid)
+}
+
+func TestLoadForMaintenance_connects_existing_state_file_without_rewriting_history(t *testing.T) {
+	stateDir := t.TempDir()
+	statePath := filepath.Join(stateDir, "state.db")
+	book := alib.Book{BuyURL: "https://example.com/old"}
+	state, err := store.Open(statePath, time.Now())
+	require.NoError(t, err)
+	_, err = state.RecordDiscovered(context.Background(), []alib.Book{book}, time.Now())
+	require.NoError(t, err)
+	require.NoError(t, state.Close())
+	configPath := writeConfig(t, "state_path = \""+stateDir+"\"\n\n[[chats]]\n"+
+		"chat_id = \"-100\"\nstate_file = \"state.db\"\n")
+
+	loadedPath, err := config.LoadForMaintenance(configPath, "-100")
+
+	require.NoError(t, err)
+	require.Equal(t, statePath, loadedPath)
+	reopened, err := store.Open(loadedPath, time.Now())
+	require.NoError(t, err)
+	pending, err := reopened.Pending(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, reopened.Close())
+	require.Equal(t, []alib.Book{book}, pending)
+}
+
+func TestLoad_reads_repository_example(t *testing.T) {
+	loaded, err := config.Load(filepath.Join("..", "..", "config.example.toml"))
+
+	require.NoError(t, err)
+	require.Len(t, loaded.Chats, 2)
+}
+
+func writeConfig(t *testing.T, body string) string {
 	t.Helper()
-	t.Setenv(key, os.Getenv(key))
-	require.NoError(t, os.Unsetenv(key))
+	path := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+	return path
 }
