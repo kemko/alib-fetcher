@@ -12,19 +12,37 @@ type digestRunner struct {
 	dependencies app.Dependencies
 	logger       *slog.Logger
 	statePath    string
+	chatID       string
 	lock         sync.Mutex
+	runs         sync.WaitGroup
 	refreshRuns  sync.WaitGroup
 }
 
 func newDigestRunner(dependencies app.Dependencies, statePath string, logger *slog.Logger) *digestRunner {
+	return newDigestRunnerWithChat(dependencies, statePath, "", logger)
+}
+
+func newDigestRunnerForRecipient(recipient Recipient, logger *slog.Logger) *digestRunner {
+	return newDigestRunnerWithChat(recipient.Dependencies, recipient.StatePath, recipient.ChatID, logger)
+}
+
+func newDigestRunnerWithChat(
+	dependencies app.Dependencies,
+	statePath string,
+	chatID string,
+	logger *slog.Logger,
+) *digestRunner {
 	return &digestRunner{
 		dependencies: dependencies,
 		logger:       logger,
 		statePath:    statePath,
+		chatID:       chatID,
 	}
 }
 
 func (r *digestRunner) runStartup(ctx context.Context) {
+	r.runs.Add(1)
+	defer r.runs.Done()
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
@@ -33,6 +51,8 @@ func (r *digestRunner) runStartup(ctx context.Context) {
 }
 
 func (r *digestRunner) runScheduled(ctx context.Context) {
+	r.runs.Add(1)
+	defer r.runs.Done()
 	if !r.lock.TryLock() {
 		return
 	}
@@ -64,6 +84,7 @@ func (r *digestRunner) tryStartRefresh(
 
 func (r *digestRunner) wait() {
 	r.refreshRuns.Wait()
+	r.runs.Wait()
 }
 
 func (r *digestRunner) runLocked(
@@ -73,11 +94,15 @@ func (r *digestRunner) runLocked(
 	dependencies := r.dependencies
 	dependencies.BeforeDelivery = beforeDelivery
 
-	return executeJob(ctx, dependencies, r.statePath, r.logger)
+	return executeJobForChat(ctx, dependencies, r.statePath, r.chatID, r.logger)
 }
 
 func (r *digestRunner) logFailure(ctx context.Context, trigger string, err error) {
 	if err != nil {
-		r.logger.ErrorContext(ctx, "digest.failed", slog.Any(logKeyError, err), slog.String(logKeyTrigger, trigger))
+		attributes := []any{slog.Any(logKeyError, err), slog.String(logKeyTrigger, trigger)}
+		if r.chatID != "" {
+			attributes = append(attributes, slog.String(logKeyChatID, r.chatID))
+		}
+		r.logger.ErrorContext(ctx, "digest.failed", attributes...)
 	}
 }

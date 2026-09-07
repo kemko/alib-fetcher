@@ -7,18 +7,43 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-func newScheduler(ctx context.Context, settings Settings, runner *digestRunner) (*cron.Cron, error) {
+func newSchedulerForRunners(
+	ctx context.Context,
+	settings Settings,
+	runners []*digestRunner,
+) (*cron.Cron, error) {
 	scheduler := cron.New(
 		cron.WithLocation(settings.Location),
 	)
-	job := func() {
-		runner.runScheduled(ctx)
-	}
-	if _, scheduleErr := scheduler.AddFunc(settings.CronSpec, job); scheduleErr != nil {
-		return nil, fmt.Errorf("schedule digest: %w", scheduleErr)
+	for _, runner := range runners {
+		job := func() {
+			runner.runScheduled(ctx)
+		}
+		if _, scheduleErr := scheduler.AddFunc(settings.CronSpec, job); scheduleErr != nil {
+			return nil, fmt.Errorf("schedule digest: %w", scheduleErr)
+		}
 	}
 
 	return scheduler, nil
+}
+
+func runSchedulerForRunners(
+	ctx context.Context,
+	scheduler *cron.Cron,
+	runners []*digestRunner,
+	runOnStartup bool,
+) {
+	if runOnStartup {
+		for _, runner := range runners {
+			go runner.runStartup(ctx)
+		}
+	}
+	scheduler.Start()
+	<-ctx.Done()
+	<-scheduler.Stop().Done()
+	for _, runner := range runners {
+		runner.wait()
+	}
 }
 
 func runScheduler(ctx context.Context, scheduler *cron.Cron, initialJob func(), runOnStartup bool) {

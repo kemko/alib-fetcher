@@ -46,7 +46,13 @@ func run(logger *slog.Logger) error {
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		return process.ForgetLatest(ctx, config.LoadStatePath(), forgetLatest.value, logger)
+		return process.ForgetLatestForChat(
+			ctx,
+			config.LoadStatePath(),
+			forgetLatest.value,
+			os.Getenv("TELEGRAM_CHAT_ID"),
+			logger,
+		)
 	}
 
 	settings, err := config.Load()
@@ -93,13 +99,16 @@ func runWithConfig(logger *slog.Logger, settings config.Config, once bool) error
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	return process.Run(ctx, process.Settings{
-		CronSpec:       settings.CronSpec(),
-		Location:       settings.Location,
-		RunOnStartup:   settings.RunOnStartup,
-		StatePath:      settings.StatePath,
-		TelegramChatID: settings.TelegramChatID,
-	}, dependencies, telegramClient, once, logger)
+	return process.RunRecipients(ctx, process.Settings{
+		CronSpec:     settings.CronSpec(),
+		Location:     settings.Location,
+		RunOnStartup: settings.RunOnStartup,
+	}, []process.Recipient{{
+		ChatID:       settings.TelegramChatID,
+		StatePath:    settings.StatePath,
+		Dependencies: dependencies,
+		Callbacks:    telegramClient,
+	}}, once, logger)
 }
 
 type forgetLatestOption struct {
