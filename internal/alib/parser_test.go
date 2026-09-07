@@ -88,6 +88,48 @@ func Test_Parse_extracts_last_bibliographic_year_and_ignores_content_year(t *tes
 	require.Equal(t, "События происходят в 2030 г.", books[0].Content)
 }
 
+func Test_Parse_recognizes_publication_year_suffix_variants(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		bibliography string
+		year         int
+	}{
+		{name: "period before suffix", bibliography: "М., 2019.г", year: 2019},
+		{name: "double suffix", bibliography: "М., 2006гг.", year: 2006},
+		{name: "last year in range", bibliography: "М., 1954-2000 гг.", year: 2000},
+		{name: "ordinary suffix", bibliography: "М., 1984 г", year: 1984},
+		{name: "ordinary suffix with period", bibliography: "М., 1985 г.", year: 1985},
+		{name: "spaces and nonbreaking spaces", bibliography: "М., 1986\u00a0.\u00a0г\u00a0.", year: 1986},
+		{name: "number without suffix", bibliography: "М., 2019.", year: 0},
+		{name: "ISBN", bibliography: "ISBN 978-5-2019-0000-1.", year: 0},
+		{name: "five digit number", bibliography: "М., 20190 г.", year: 0},
+		{name: "letter continuation", bibliography: "М., 2019грамм.", year: 0},
+	}
+	baseURL, err := url.Parse("https://www.alib.ru/tramka.phtml?tnew=7")
+	require.NoError(t, err)
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Given
+			page := `<p><b>Книга.</b> ` + test.bibliography + `<br>
+Цена: 100 руб. <a href="/book.html"><b>Купить</b></a><br>
+Издание 2030 г.</p>`
+
+			// When
+			books, parseErr := alib.Parse(bytes.NewBufferString(page), baseURL, "text/html")
+
+			// Then
+			require.NoError(t, parseErr)
+			require.Len(t, books, 1)
+			require.Equal(t, test.year, books[0].PublicationYear)
+		})
+	}
+}
+
 func Test_Parse_preserves_photo_captions_order_and_repeats(t *testing.T) {
 	t.Parallel()
 

@@ -221,6 +221,48 @@ func Test_Render_highlights_publication_year(t *testing.T) {
 	}
 }
 
+func Test_RenderBook_marks_parsed_publication_years(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		bibliography string
+		emoji        string
+	}{
+		{name: "period before suffix", bibliography: "М., 2019.г"},
+		{name: "double suffix", bibliography: "М., 2006гг."},
+		{name: "range with double suffix", bibliography: "М., 1954-2000 гг."},
+		{name: "unknown year", bibliography: "ISBN 978-5-2026-0000-1.", emoji: "🛸 "},
+		{name: "future year", bibliography: "М., 2030 гг.", emoji: "🛸 "},
+	}
+	baseURL, err := url.Parse("https://www.alib.ru/tramka.phtml?tnew=7")
+	require.NoError(t, err)
+	options := digest.Options{
+		Limit:     4096,
+		LocalTime: time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Given
+			page := `<p><b>Книга.</b> ` + test.bibliography + `<br>
+Цена: 100 руб. <a href="/book.html"><b>Купить</b></a></p>`
+			books, parseErr := alib.Parse(bytes.NewBufferString(page), baseURL, "text/html")
+			require.NoError(t, parseErr)
+			require.Len(t, books, 1)
+
+			// When
+			item, renderErr := digest.RenderBook(books[0], options)
+
+			// Then
+			require.NoError(t, renderErr)
+			require.Contains(t, item, test.emoji+`<b>Книга.</b>`)
+		})
+	}
+}
+
 func optionalYear(enabled bool, year int) *int {
 	if !enabled {
 		return nil
