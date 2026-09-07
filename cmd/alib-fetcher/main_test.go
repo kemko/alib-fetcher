@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -350,6 +351,242 @@ func Test_parseCommandLine_accepts_each_mode(t *testing.T) {
 			require.Empty(t, errors.String())
 		})
 	}
+}
+
+func Test_parseCommandLine_rejects_invalid_arguments(t *testing.T) {
+	t.Parallel()
+
+	testCases := map[string]struct {
+		wantError string
+		arguments []string
+	}{
+		"missing mode": {
+			arguments: []string{"alib-fetcher", "-config", "settings.toml"},
+			wantError: "exactly one of",
+		},
+		"conflicting modes": {
+			arguments: []string{"alib-fetcher", "-once", "-service"},
+			wantError: "exactly one of",
+		},
+		"unknown flag": {
+			arguments: []string{"alib-fetcher", "-once", "-unknown"},
+			wantError: "flag provided but not defined",
+		},
+		"positional argument": {
+			arguments: []string{"alib-fetcher", "-once", "unexpected"},
+			wantError: "positional arguments",
+		},
+		"missing config value": {
+			arguments: []string{"alib-fetcher", "-once", "-config"},
+			wantError: "flag needs an argument",
+		},
+		"missing chat value": {
+			arguments: []string{"alib-fetcher", "-once", "-chat"},
+			wantError: "flag needs an argument",
+		},
+		"missing forget latest value": {
+			arguments: []string{"alib-fetcher", "-forget-latest"},
+			wantError: "flag needs an argument",
+		},
+		"invalid bool": {
+			arguments: []string{"alib-fetcher", "-once=maybe"},
+			wantError: "invalid value",
+		},
+		"zero forget latest": {
+			arguments: []string{"alib-fetcher", "-forget-latest=0", "-chat", "-100123"},
+			wantError: "-forget-latest must be positive",
+		},
+		"negative forget latest": {
+			arguments: []string{"alib-fetcher", "-forget-latest", "-1", "-chat", "-100123"},
+			wantError: "-forget-latest must be positive",
+		},
+		"overflowing forget latest": {
+			arguments: []string{"alib-fetcher", "-forget-latest", strings.Repeat("9", 100)},
+			wantError: "invalid value",
+		},
+		"non-numeric forget latest": {
+			arguments: []string{"alib-fetcher", "-forget-latest", "six"},
+			wantError: "invalid value",
+		},
+	}
+
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			var output, errors bytes.Buffer
+
+			_, err := parseCommandLineArgs(testCase.arguments, &output, &errors)
+
+			var commandErr commandError
+			require.ErrorAs(t, err, &commandErr)
+			require.ErrorContains(t, err, testCase.wantError)
+			require.Contains(t, output.String()+errors.String(), "USAGE:")
+		})
+	}
+}
+
+func Test_parseCommandLine_normalizes_chat_and_tracks_explicit_values(t *testing.T) {
+	t.Parallel()
+
+	testCases := map[string]struct {
+		arguments []string
+		want      commandOptions
+	}{
+		"negative chat with separate value": {
+			arguments: []string{"alib-fetcher", "-once", "-chat", "-100123"},
+			want: commandOptions{
+				configPath: "./config.toml",
+				once:       true,
+				chatID:     "-100123",
+			},
+		},
+		"negative chat with equals": {
+			arguments: []string{"alib-fetcher", "--once", "--chat=-100123"},
+			want: commandOptions{
+				configPath: "./config.toml",
+				once:       true,
+				chatID:     "-100123",
+			},
+		},
+		"channel is normalized": {
+			arguments: []string{"alib-fetcher", "-once", "-chat", "@Books"},
+			want: commandOptions{
+				configPath: "./config.toml",
+				once:       true,
+				chatID:     "@books",
+			},
+		},
+		"forget latest is explicitly set": {
+			arguments: []string{"alib-fetcher", "-forget-latest", "7", "-chat", "@BOOKS"},
+			want: commandOptions{
+				configPath: "./config.toml",
+				chatID:     "@books",
+				forgetLatest: forgetLatestOption{
+					value: 7,
+					set:   true,
+				},
+			},
+		},
+		"omitted values stay unset": {
+			arguments: []string{"alib-fetcher", "-once"},
+			want: commandOptions{
+				configPath: "./config.toml",
+				once:       true,
+			},
+		},
+	}
+
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			var output, errors bytes.Buffer
+
+			got, err := parseCommandLineArgs(testCase.arguments, &output, &errors)
+
+			require.NoError(t, err)
+			require.Equal(t, testCase.want, got)
+			require.Empty(t, output.String())
+			require.Empty(t, errors.String())
+		})
+	}
+}
+
+func Test_parseCommandLine_rejects_empty_or_invalid_chat(t *testing.T) {
+	t.Parallel()
+
+	for name, arguments := range map[string][]string{
+		"empty with equals":         {"alib-fetcher", "-once", "-chat="},
+		"empty with separate value": {"alib-fetcher", "-once", "-chat", ""},
+		"invalid value":             {"alib-fetcher", "-once", "-chat", "books"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var output, errors bytes.Buffer
+
+			_, err := parseCommandLineArgs(arguments, &output, &errors)
+
+			var commandErr commandError
+			require.ErrorAs(t, err, &commandErr)
+			require.Contains(t, output.String()+errors.String(), "USAGE:")
+		})
+	}
+}
+
+func Test_parseCommandLine_help_is_available_without_configuration(t *testing.T) {
+	t.Parallel()
+
+	for _, arguments := range [][]string{
+		{"alib-fetcher"},
+		{"alib-fetcher", "-h"},
+		{"alib-fetcher", "-help"},
+		{"alib-fetcher", "--help"},
+	} {
+		t.Run(strings.Join(arguments[1:], "_"), func(t *testing.T) {
+			var output, errors bytes.Buffer
+
+			options, err := parseCommandLineArgs(arguments, &output, &errors)
+
+			require.NoError(t, err)
+			require.True(t, options.help)
+			require.Contains(t, output.String(), "USAGE:")
+			require.Contains(t, output.String(), "-once")
+			require.Contains(t, output.String(), "-forget-latest")
+			require.Empty(t, errors.String())
+		})
+	}
+}
+
+func Test_main_subprocess_exit_codes(t *testing.T) {
+	t.Parallel()
+
+	missingConfig := filepath.Join(t.TempDir(), "missing.toml")
+	testCases := map[string]struct {
+		arguments []string
+		wantCode  int
+	}{
+		"help": {
+			arguments: []string{"-h"},
+			wantCode:  0,
+		},
+		"argument error": {
+			arguments: []string{"-unknown"},
+			wantCode:  2,
+		},
+		"configuration error": {
+			arguments: []string{"-once", "-config", missingConfig},
+			wantCode:  1,
+		},
+	}
+
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			encodedArguments, err := json.Marshal(testCase.arguments)
+			require.NoError(t, err)
+			command := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestMainSubprocess$", "-test.v=false")
+			command.Env = append(os.Environ(),
+				"ALIB_FETCHER_MAIN_SUBPROCESS=1",
+				"ALIB_FETCHER_MAIN_ARGS="+string(encodedArguments),
+			)
+
+			output, err := command.CombinedOutput()
+
+			var exitErr *exec.ExitError
+			if testCase.wantCode == 0 {
+				require.NoError(t, err, string(output))
+			} else {
+				require.ErrorAs(t, err, &exitErr)
+				require.Equal(t, testCase.wantCode, exitErr.ExitCode(), string(output))
+			}
+		})
+	}
+}
+
+func TestMainSubprocess(t *testing.T) {
+	if os.Getenv("ALIB_FETCHER_MAIN_SUBPROCESS") != "1" {
+		return
+	}
+
+	var arguments []string
+	require.NoError(t, json.Unmarshal([]byte(os.Getenv("ALIB_FETCHER_MAIN_ARGS")), &arguments))
+	os.Args = append([]string{"alib-fetcher"}, arguments...)
+	main()
 }
 
 func Test_forgetLatestOption_rejects_malformed_values(t *testing.T) {
