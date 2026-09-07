@@ -1460,10 +1460,7 @@ func Test_run_once_fetches_categories_and_series_in_order_and_sends_partial_dedu
 	require.Contains(t, logOutput, `"msg":"alib.page_parsed","chat_id":"-100123","index":0,"url":"`+alibServer.URL+`/first.phtml?tnew=7","books":2`)
 	require.Contains(t, logOutput, `"msg":"alib.page_parsed","chat_id":"-100123","index":2,"url":"`+alibServer.URL+`/findp.php4?seria=%D1%E5%F0%E8%FF%2C+%F2%EE%EC%E0&lday=7","books":1`)
 	require.Contains(t, logOutput, `"msg":"alib.page_parse_failed","chat_id":"-100123","index":3,"url":"`+alibServer.URL+`/findp.php4?seria=changed&lday=7"`)
-	require.Contains(t, logOutput, `"attempt":1,"status_code":200`)
-	require.Contains(t, logOutput, `"attempt":1,"status_code":502`)
-	require.Contains(t, logOutput, `"books":2,"status_code":200`)
-	require.Contains(t, logOutput, `"status_code":200`)
+	requireAlibPageStatuses(t, logOutput, []int{200, 502, 200, 200})
 	require.Less(t,
 		strings.LastIndex(logOutput, `"msg":"alib.page_downloaded"`),
 		strings.Index(logOutput, `"msg":"alib.page_parsed"`),
@@ -1657,13 +1654,31 @@ func Test_run_once_fails_after_requesting_and_logging_all_failed_pages(t *testin
 		alibServer.URL+`/broken?scope=broken"`)
 	require.Contains(t, logOutput, `"msg":"alib.page_parse_failed","chat_id":"-100123","index":1,"url":"`+
 		alibServer.URL+`/broken?scope=broken"`)
-	require.Contains(t, logOutput, `"attempt":1,"status_code":502`)
-	require.Contains(t, logOutput, `"attempt":1,"status_code":200`)
-	require.Contains(t, logOutput, `"status_code":200`)
+	requireAlibPageStatuses(t, logOutput, []int{502, 200, 502})
 	require.Contains(t, logOutput, `"msg":"alib.page_download_failed","chat_id":"-100123","index":2,"url":"`+
 		alibServer.URL+`/status-two?status=two"`)
 	require.NotContains(t, logOutput, `"msg":"alib.page_failed"`)
 	require.Contains(t, logOutput, `"msg":"digest.failed"`)
+}
+
+func requireAlibPageStatuses(t *testing.T, output string, statuses []int) {
+	t.Helper()
+	matched := 0
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		var event struct {
+			Message    string `json:"msg"`
+			Index      int    `json:"index"`
+			StatusCode int    `json:"status_code"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(line), &event))
+		if strings.HasPrefix(event.Message, "alib.page_") {
+			require.GreaterOrEqual(t, event.Index, 0)
+			require.Less(t, event.Index, len(statuses))
+			require.Equal(t, statuses[event.Index], event.StatusCode, line)
+			matched++
+		}
+	}
+	require.Positive(t, matched)
 }
 
 func useOnceMode(t *testing.T) {

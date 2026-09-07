@@ -152,9 +152,9 @@ Preserve these semantics:
   publication year, content, seller, location, price, condition, purchase URL,
   and ordered photo URLs and normalized captions without regex-based HTML
   parsing. Relative photo URLs are resolved while source order and repeats are
-  preserved. Publication year is
-  the last four-digit year in the bibliography followed by `г` or `г.`; content
-  years are ignored.
+  preserved. Publication year is the last matching four-digit bibliography year
+  followed by `г`, `г.`, `гг`, or `гг.`, allowing spaces and a dot before the
+  suffix; content years are ignored.
 - `internal/app`: use-case orchestration through small `Fetcher`, `State`, and
   `Sender` interfaces. Keep policy here and transport/storage details in their
   adapter packages.

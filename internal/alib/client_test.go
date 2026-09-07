@@ -815,8 +815,8 @@ func Test_Client_continues_after_response_body_read_failure(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []alib.Book{{Title: "Book", Price: "100 руб.", BuyURL: server.URL + "/book.html"}}, books)
 	require.Contains(t, logs.String(), "msg=alib.page_download_failed index=0")
-	require.Contains(t, logs.String(), "error=\"read alib response: unexpected EOF\"")
-	require.Contains(t, logs.String(), "status_code=200")
+	require.Contains(t, logs.String(), "msg=alib.page_download_failed index=0 url="+server.URL+
+		"/truncated error=\"read alib response: unexpected EOF\" attempt=1 status_code=200")
 	require.NotContains(t, logs.String(), "msg=alib.page_parsed index=0")
 	require.Contains(t, logs.String(), "msg=alib.page_parsed index=1")
 }
@@ -982,13 +982,11 @@ func Test_Client_pauses_between_completed_page_downloads(t *testing.T) {
 func Test_Client_stops_download_delay_on_context_cancellation(t *testing.T) {
 	t.Parallel()
 
-	firstRequest := make(chan struct{})
+	var logs bytes.Buffer
+	firstDownload := make(chan struct{}, 1)
 	requests := make(chan string, 2)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		requests <- request.URL.Path
-		if request.URL.Path == "/first" {
-			close(firstRequest)
-		}
 		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, err := writer.Write([]byte(testutil.ListingPage("Book", "/book.html", "100 руб.")))
 		assert.NoError(t, err)
@@ -999,7 +997,11 @@ func Test_Client_stops_download_delay_on_context_cancellation(t *testing.T) {
 		time.Second,
 		5*time.Second,
 		0,
-		slog.New(slog.DiscardHandler),
+		slog.New(&cancelOnMessageHandler{
+			Handler: slog.NewTextHandler(&logs, nil),
+			message: "alib.page_downloaded",
+			cancel:  func() { firstDownload <- struct{}{} },
+		}),
 	)
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -1009,8 +1011,13 @@ func Test_Client_stops_download_delay_on_context_cancellation(t *testing.T) {
 		_, fetchErr := client.FetchWithResult(ctx)
 		result <- fetchErr
 	}()
-	<-firstRequest
-	cancel()
+	select {
+	case <-firstDownload:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first download did not complete")
+	}
+	timer := time.AfterFunc(20*time.Millisecond, cancel)
+	defer timer.Stop()
 
 	select {
 	case err = <-result:

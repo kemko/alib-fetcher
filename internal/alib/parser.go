@@ -575,7 +575,6 @@ func hasYearSuffix(characters []rune, index int) bool {
 	if index < len(characters) && characters[index] == 'г' {
 		index++
 	}
-	index = skipSpaces(characters, index)
 	if index < len(characters) && characters[index] == '.' {
 		return true
 	}

@@ -232,6 +232,7 @@ func Test_RenderBook_marks_parsed_publication_years(t *testing.T) {
 		{name: "period before suffix", bibliography: "М., 2019.г"},
 		{name: "double suffix", bibliography: "М., 2006гг."},
 		{name: "range with double suffix", bibliography: "М., 1954-2000 гг."},
+		{name: "suffix before page count", bibliography: "М., 2019 г 320 с."},
 		{name: "unknown year", bibliography: "ISBN 978-5-2026-0000-1.", emoji: "🛸 "},
 		{name: "future year", bibliography: "М., 2030 гг.", emoji: "🛸 "},
 	}
@@ -258,7 +259,7 @@ func Test_RenderBook_marks_parsed_publication_years(t *testing.T) {
 
 			// Then
 			require.NoError(t, renderErr)
-			require.Contains(t, item, test.emoji+`<b>Книга.</b>`)
+			require.True(t, strings.HasPrefix(item, test.emoji+`<b>Книга.</b>`), item)
 		})
 	}
 }
