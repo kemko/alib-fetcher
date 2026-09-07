@@ -22,6 +22,7 @@ const (
 	logKeyURL            = "url"
 	logKeyBooks          = "books"
 	logKeyAttempt        = "attempt"
+	logKeyStatusCode     = "status_code"
 )
 
 // ErrUnexpectedStatus indicates that Alib.ru did not return an HTTP 200 response.
@@ -50,6 +51,7 @@ type downloadedPage struct {
 	contentType string
 	body        []byte
 	index       int
+	statusCode  int
 }
 
 // NewClient builds an Alib.ru client with a bounded request timeout.
@@ -141,13 +143,14 @@ func (c *Client) FetchWithResult(ctx context.Context) (FetchResult, error) {
 			pageURL := page.endpoint.String()
 			pageErrors = append(pageErrors, fmt.Errorf("parse alib URL %q: %w", pageURL, parseErr))
 			c.logger.ErrorContext(ctx, "alib.page_parse_failed",
-				slog.Int(logKeyIndex, page.index), slog.String(logKeyURL, pageURL), slog.Any(logKeyError, parseErr))
+				slog.Int(logKeyIndex, page.index), slog.String(logKeyURL, pageURL), slog.Any(logKeyError, parseErr),
+				slog.Int(logKeyStatusCode, page.statusCode))
 			continue
 		}
 		parsedPages++
 		c.logger.InfoContext(ctx, "alib.page_parsed",
 			slog.Int(logKeyIndex, page.index), slog.String(logKeyURL, page.endpoint.String()),
-			slog.Int(logKeyBooks, len(pageResult.Books)))
+			slog.Int(logKeyBooks, len(pageResult.Books)), slog.Int(logKeyStatusCode, page.statusCode))
 		unidentifiedFailures += pageResult.UnidentifiedFailures
 		for _, buyURL := range pageResult.FailedBuyURLs {
 			state.addFailure(buyURL)
@@ -209,15 +212,16 @@ func (c *Client) downloadPage(ctx context.Context, index int, endpoint *url.URL)
 	attempt := 0
 	return backoff.Retry(ctx, func() (downloadedPage, error) {
 		attempt++
-		page, err := c.downloadPageAttempt(ctx, index, endpoint)
+		page, statusCode, err := c.downloadPageAttempt(ctx, index, endpoint)
 		if err != nil {
 			c.logger.ErrorContext(ctx, "alib.page_download_failed",
 				slog.Int(logKeyIndex, index), slog.String(logKeyURL, endpoint.String()),
-				slog.Any(logKeyError, err), slog.Int(logKeyAttempt, attempt))
+				slog.Any(logKeyError, err), slog.Int(logKeyAttempt, attempt), slog.Int(logKeyStatusCode, statusCode))
 			return downloadedPage{}, err
 		}
 		c.logger.InfoContext(ctx, "alib.page_downloaded",
-			slog.Int(logKeyIndex, index), slog.String(logKeyURL, endpoint.String()), slog.Int(logKeyAttempt, attempt))
+			slog.Int(logKeyIndex, index), slog.String(logKeyURL, endpoint.String()), slog.Int(logKeyAttempt, attempt),
+			slog.Int(logKeyStatusCode, statusCode))
 
 		return page, nil
 	}, backoff.WithBackOff(newPageBackOff()), backoff.WithMaxTries(uint(c.maxRetries)+1),
@@ -233,16 +237,20 @@ func newPageBackOff() *backoff.ExponentialBackOff {
 	}
 }
 
-func (c *Client) downloadPageAttempt(ctx context.Context, index int, endpoint *url.URL) (downloadedPage, error) {
+func (c *Client) downloadPageAttempt(ctx context.Context, index int, endpoint *url.URL) (downloadedPage, int, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
-		return downloadedPage{}, fmt.Errorf("create alib request %d: %w", index, err)
+		return downloadedPage{}, 0, fmt.Errorf("create alib request %d: %w", index, err)
 	}
 	request.Header.Set("User-Agent", "alib-fetcher/1.0")
 
 	response, err := c.httpClient.Do(request)
+	statusCode := 0
+	if response != nil {
+		statusCode = response.StatusCode
+	}
 	if err != nil {
-		return downloadedPage{}, fmt.Errorf("fetch alib page: %w", urlErrorCause(err))
+		return downloadedPage{}, statusCode, fmt.Errorf("fetch alib page: %w", urlErrorCause(err))
 	}
 
 	if response.StatusCode != http.StatusOK {
@@ -250,14 +258,14 @@ func (c *Client) downloadPageAttempt(ctx context.Context, index int, endpoint *u
 		if closeErr := response.Body.Close(); closeErr != nil {
 			fetchErr = errors.Join(fetchErr, fmt.Errorf("close alib response: %w", closeErr))
 		}
-		return downloadedPage{}, fetchErr
+		return downloadedPage{}, statusCode, fetchErr
 	}
 	if response.ContentLength > maxPageResponseBytes {
 		responseErr := errResponseTooLarge
 		if closeErr := response.Body.Close(); closeErr != nil {
 			responseErr = errors.Join(responseErr, fmt.Errorf("close alib response: %w", closeErr))
 		}
-		return downloadedPage{}, responseErr
+		return downloadedPage{}, statusCode, responseErr
 	}
 
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxPageResponseBytes+1))
@@ -272,7 +280,7 @@ func (c *Client) downloadPageAttempt(ctx context.Context, index int, endpoint *u
 		if closeErr != nil {
 			err = errors.Join(err, fmt.Errorf("close alib response: %w", closeErr))
 		}
-		return downloadedPage{}, err
+		return downloadedPage{}, statusCode, err
 	}
 
 	return downloadedPage{
@@ -280,7 +288,8 @@ func (c *Client) downloadPageAttempt(ctx context.Context, index int, endpoint *u
 		body:        body,
 		contentType: response.Header.Get("Content-Type"),
 		index:       index,
-	}, nil
+		statusCode:  statusCode,
+	}, statusCode, nil
 }
 
 type redactedURLError struct {

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -45,23 +46,101 @@ func Test_Client_fetches_and_parses_page(t *testing.T) {
 	}}, books)
 }
 
-func Test_Client_rejects_non_success_status(t *testing.T) {
+func Test_Client_rejects_non_200_statuses(t *testing.T) {
+	t.Parallel()
+
+	for _, statusCode := range []int{
+		http.StatusCreated,
+		http.StatusNoContent,
+		http.StatusNotModified,
+		http.StatusNotFound,
+		http.StatusTooManyRequests,
+		http.StatusInternalServerError,
+	} {
+		t.Run(http.StatusText(statusCode), func(t *testing.T) {
+			// Given
+			var logs bytes.Buffer
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				writer.WriteHeader(statusCode)
+			}))
+			t.Cleanup(server.Close)
+			client, err := alib.NewClient(
+				[]string{server.URL}, time.Second, 0, 0, slog.New(slog.NewTextHandler(&logs, nil)),
+			)
+			require.NoError(t, err)
+
+			// When
+			books, err := fetchBooks(client, context.Background())
+
+			// Then
+			require.ErrorIs(t, err, alib.ErrUnexpectedStatus)
+			require.Empty(t, books)
+			require.Contains(t, logs.String(), "status_code="+strconv.Itoa(statusCode))
+		})
+	}
+}
+
+func Test_Client_logs_final_status_after_redirect(t *testing.T) {
 	t.Parallel()
 
 	// Given
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writer.WriteHeader(http.StatusServiceUnavailable)
+	var logs bytes.Buffer
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/redirect" {
+			http.Redirect(writer, request, "/listing", http.StatusFound)
+
+			return
+		}
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, err := writer.Write([]byte(testutil.ListingPage("Book", "/book.html", "100 руб.")))
+		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	client, err := alib.NewClient([]string{server.URL}, time.Second, 0, 0, slog.New(slog.DiscardHandler))
+	client, err := alib.NewClient(
+		[]string{server.URL + "/redirect"}, time.Second, 0, 0, slog.New(slog.NewTextHandler(&logs, nil)),
+	)
 	require.NoError(t, err)
 
 	// When
 	books, err := fetchBooks(client, context.Background())
 
 	// Then
-	require.ErrorIs(t, err, alib.ErrUnexpectedStatus)
-	require.Empty(t, books)
+	require.NoError(t, err)
+	require.Len(t, books, 1)
+	require.Contains(t, logs.String(), "msg=alib.page_downloaded index=0 url="+server.URL+"/redirect attempt=1 status_code=200")
+	require.Contains(t, logs.String(), "msg=alib.page_parsed index=0 url="+server.URL+"/redirect books=1 status_code=200")
+}
+
+func Test_Client_logs_status_for_redirect_errors(t *testing.T) {
+	t.Parallel()
+
+	for name, handler := range map[string]http.HandlerFunc{
+		"missing location": func(writer http.ResponseWriter, _ *http.Request) {
+			writer.WriteHeader(http.StatusFound)
+		},
+		"too many redirects": func(writer http.ResponseWriter, request *http.Request) {
+			http.Redirect(writer, request, "/loop", http.StatusFound)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			// Given
+			var logs bytes.Buffer
+			server := httptest.NewServer(handler)
+			t.Cleanup(server.Close)
+			client, err := alib.NewClient(
+				[]string{server.URL}, time.Second, 0, 0, slog.New(slog.NewTextHandler(&logs, nil)),
+			)
+			require.NoError(t, err)
+
+			// When
+			books, err := fetchBooks(client, context.Background())
+
+			// Then
+			require.Error(t, err)
+			require.Empty(t, books)
+			require.Contains(t, logs.String(), "status_code=302")
+		})
+	}
 }
 
 func Test_Client_returns_parse_error_for_structurally_changed_page(t *testing.T) {
@@ -737,8 +816,33 @@ func Test_Client_continues_after_response_body_read_failure(t *testing.T) {
 	require.Equal(t, []alib.Book{{Title: "Book", Price: "100 руб.", BuyURL: server.URL + "/book.html"}}, books)
 	require.Contains(t, logs.String(), "msg=alib.page_download_failed index=0")
 	require.Contains(t, logs.String(), "error=\"read alib response: unexpected EOF\"")
+	require.Contains(t, logs.String(), "status_code=200")
 	require.NotContains(t, logs.String(), "msg=alib.page_parsed index=0")
 	require.Contains(t, logs.String(), "msg=alib.page_parsed index=1")
+}
+
+func Test_Client_logs_zero_status_without_response(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	var logs bytes.Buffer
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		<-request.Context().Done()
+	}))
+	t.Cleanup(server.Close)
+	client, err := alib.NewClient(
+		[]string{server.URL}, 10*time.Millisecond, 0, 0, slog.New(slog.NewTextHandler(&logs, nil)),
+	)
+	require.NoError(t, err)
+
+	// When
+	books, err := fetchBooks(client, context.Background())
+
+	// Then
+	require.Error(t, err)
+	require.Empty(t, books)
+	require.Contains(t, logs.String(), "msg=alib.page_download_failed index=0")
+	require.Contains(t, logs.String(), "status_code=0")
 }
 
 func Test_Client_accepts_all_correct_empty_pages(t *testing.T) {
