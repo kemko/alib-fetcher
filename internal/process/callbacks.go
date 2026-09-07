@@ -148,50 +148,9 @@ func handleGroupedCallbackWithRunContext(
 
 		return
 	}
-	handleRefreshCallbackWithRunContext(answerCtx, runCtx, group.client, match.runner, callback, logger)
-}
-
-func startCallbackListening(
-	ctx context.Context,
-	callbacks CallbackClient,
-	runner *digestRunner,
-	expectedChatID string,
-	logger *slog.Logger,
-) <-chan struct{} {
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		callbacks.ListenCallbacks(
-			ctx,
-			func(callbackCtx context.Context, callback telegram.Callback) {
-				handleCallback(callbackCtx, callbacks, runner, callback, expectedChatID, logger)
-			},
-			func(errorCtx context.Context, err error) {
-				logger.ErrorContext(errorCtx, "callback.poll_failed", slog.Any(logKeyError, err))
-			},
-		)
-	}()
-
-	return done
-}
-
-func handleCallback(
-	ctx context.Context,
-	callbacks CallbackClient,
-	runner *digestRunner,
-	callback telegram.Callback,
-	expectedChatID string,
-	logger *slog.Logger,
-) {
-	if callback.Data != telegram.RefreshCallbackData {
-		return
-	}
-	if !matchesExpectedChat(callback, expectedChatID) {
-		answerRefreshCallback(ctx, callbacks, callback.ID, refreshUnavailableText, logger)
-
-		return
-	}
-	handleRefreshCallback(ctx, callbacks, runner, callback, logger)
+	handleRefreshCallbackWithRunContext(
+		answerCtx, runCtx, group.client, match.runner, callback, logger.With(slog.String(logKeyChatID, match.chatID)),
+	)
 }
 
 func matchesExpectedChat(callback telegram.Callback, expectedChatID string) bool {

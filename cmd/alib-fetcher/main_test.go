@@ -453,7 +453,8 @@ title = ["Второй фильтр"]
 	}))
 	t.Cleanup(telegramServer.Close)
 	routeTelegramRequestsTo(t, telegramServer.URL)
-	logger := slog.New(slog.DiscardHandler)
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
 
 	// When
 	useCommandLine(t, "-once", "-config", configPath)
@@ -480,6 +481,19 @@ title = ["Второй фильтр"]
 	require.NoError(t, err)
 	require.NoError(t, secondState.Close())
 	require.Empty(t, secondPending)
+	loggedChats := make(map[string]bool)
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		var event struct {
+			Message string `json:"msg"`
+			ChatID  string `json:"chat_id"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(line), &event))
+		if strings.HasPrefix(event.Message, "alib.page_") {
+			require.Contains(t, []string{"-1001", "-1002"}, event.ChatID)
+			loggedChats[event.ChatID] = true
+		}
+	}
+	require.Len(t, loggedChats, 2)
 }
 
 func Test_run_once_all_and_selected_chat_keep_other_state_untouched(t *testing.T) {
@@ -625,7 +639,7 @@ func Test_service_reload_applies_new_search_token_and_state_after_inflight_send(
 cron_schedule = "@every 1s"
 timezone = "UTC"
 run_on_startup = true
-http_timeout = "2s"
+http_timeout = "10s"
 alib_max_retries = 0
 
 [[chats]]
@@ -638,7 +652,7 @@ categories = ["tramka"]
 cron_schedule = "@every 1s"
 timezone = "UTC"
 run_on_startup = true
-http_timeout = "2s"
+http_timeout = "10s"
 alib_max_retries = 0
 
 [[chats]]
@@ -695,13 +709,15 @@ categories = ["detektivy"]
 	t.Cleanup(telegramServer.Close)
 	routeTelegramRequestsTo(t, telegramServer.URL)
 
-	logger := slog.New(slog.DiscardHandler)
+	reloadPending := make(chan struct{})
+	logger := slog.New(slog.NewJSONHandler(&reloadLogSignal{pending: reloadPending}, nil))
 	settings, err := config.Load(configPath)
 	require.NoError(t, err)
 	factory := newRuntimeFactory(logger)
 	initial, err := factory.snapshot(settings, "")
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan error, 1)
 	go func() {
 		done <- process.RunReloadable(ctx, initial, func(loadCtx context.Context) (process.ReloadSnapshot, error) {
@@ -723,6 +739,12 @@ categories = ["detektivy"]
 	temporaryConfig := configPath + ".tmp"
 	require.NoError(t, os.WriteFile(temporaryConfig, []byte(updatedConfig), 0o600))
 	require.NoError(t, os.Rename(temporaryConfig, configPath))
+	select {
+	case <-reloadPending:
+	case <-time.After(5 * time.Second):
+		t.Fatal("reload did not pause new digests")
+	}
+	require.NoFileExists(t, filepath.Join(root, "new.db"))
 	close(releaseOldSend)
 	select {
 	case <-newSendStarted:
@@ -742,6 +764,18 @@ categories = ["detektivy"]
 	require.Contains(t, gotAlibPaths, "/detektivy.phtml")
 	require.FileExists(t, filepath.Join(root, "old.db"))
 	require.FileExists(t, filepath.Join(root, "new.db"))
+}
+
+type reloadLogSignal struct {
+	pending chan struct{}
+	once    sync.Once
+}
+
+func (signal *reloadLogSignal) Write(data []byte) (int, error) {
+	if bytes.Contains(data, []byte(`"msg":"config.reload_pending"`)) {
+		signal.once.Do(func() { close(signal.pending) })
+	}
+	return len(data), nil
 }
 
 func Test_run_forget_latest_only_requires_state_path(t *testing.T) {
@@ -1040,13 +1074,13 @@ func Test_run_once_fetches_categories_and_series_in_order_and_sends_partial_dedu
 	require.Equal(t, 1, strings.Count(logOutput, `"msg":"alib.page_download_failed"`))
 	require.Equal(t, 2, strings.Count(logOutput, `"msg":"alib.page_parsed"`))
 	require.Equal(t, 1, strings.Count(logOutput, `"msg":"alib.page_parse_failed"`))
-	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","index":0,"url":"`+alibServer.URL+`/first.phtml?tnew=7"`)
-	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","index":2,"url":"`+alibServer.URL+`/findp.php4?seria=%D1%E5%F0%E8%FF%2C+%F2%EE%EC%E0&lday=7"`)
-	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","index":3,"url":"`+alibServer.URL+`/findp.php4?seria=changed&lday=7"`)
-	require.Contains(t, logOutput, `"msg":"alib.page_download_failed","index":1,"url":"`+alibServer.URL+`/broken.phtml?tnew=7"`)
-	require.Contains(t, logOutput, `"msg":"alib.page_parsed","index":0,"url":"`+alibServer.URL+`/first.phtml?tnew=7","books":2`)
-	require.Contains(t, logOutput, `"msg":"alib.page_parsed","index":2,"url":"`+alibServer.URL+`/findp.php4?seria=%D1%E5%F0%E8%FF%2C+%F2%EE%EC%E0&lday=7","books":1`)
-	require.Contains(t, logOutput, `"msg":"alib.page_parse_failed","index":3,"url":"`+alibServer.URL+`/findp.php4?seria=changed&lday=7"`)
+	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","chat_id":"-100123","index":0,"url":"`+alibServer.URL+`/first.phtml?tnew=7"`)
+	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","chat_id":"-100123","index":2,"url":"`+alibServer.URL+`/findp.php4?seria=%D1%E5%F0%E8%FF%2C+%F2%EE%EC%E0&lday=7"`)
+	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","chat_id":"-100123","index":3,"url":"`+alibServer.URL+`/findp.php4?seria=changed&lday=7"`)
+	require.Contains(t, logOutput, `"msg":"alib.page_download_failed","chat_id":"-100123","index":1,"url":"`+alibServer.URL+`/broken.phtml?tnew=7"`)
+	require.Contains(t, logOutput, `"msg":"alib.page_parsed","chat_id":"-100123","index":0,"url":"`+alibServer.URL+`/first.phtml?tnew=7","books":2`)
+	require.Contains(t, logOutput, `"msg":"alib.page_parsed","chat_id":"-100123","index":2,"url":"`+alibServer.URL+`/findp.php4?seria=%D1%E5%F0%E8%FF%2C+%F2%EE%EC%E0&lday=7","books":1`)
+	require.Contains(t, logOutput, `"msg":"alib.page_parse_failed","chat_id":"-100123","index":3,"url":"`+alibServer.URL+`/findp.php4?seria=changed&lday=7"`)
 	require.Less(t,
 		strings.LastIndex(logOutput, `"msg":"alib.page_downloaded"`),
 		strings.Index(logOutput, `"msg":"alib.page_parsed"`),
@@ -1135,10 +1169,10 @@ func Test_run_once_sends_notification_for_all_correct_empty_pages(t *testing.T) 
 	logOutput := logs.String()
 	require.Equal(t, 2, strings.Count(logOutput, `"msg":"alib.page_downloaded"`))
 	require.Equal(t, 2, strings.Count(logOutput, `"msg":"alib.page_parsed"`))
-	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","index":0,"url":"`+alibServer.URL+`/empty-one?first=true"`)
-	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","index":1,"url":"`+alibServer.URL+`/empty-two?second=true"`)
-	require.Contains(t, logOutput, `"msg":"alib.page_parsed","index":0,"url":"`+alibServer.URL+`/empty-one?first=true","books":0`)
-	require.Contains(t, logOutput, `"msg":"alib.page_parsed","index":1,"url":"`+alibServer.URL+`/empty-two?second=true","books":0`)
+	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","chat_id":"-100123","index":0,"url":"`+alibServer.URL+`/empty-one?first=true"`)
+	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","chat_id":"-100123","index":1,"url":"`+alibServer.URL+`/empty-two?second=true"`)
+	require.Contains(t, logOutput, `"msg":"alib.page_parsed","chat_id":"-100123","index":0,"url":"`+alibServer.URL+`/empty-one?first=true","books":0`)
+	require.Contains(t, logOutput, `"msg":"alib.page_parsed","chat_id":"-100123","index":1,"url":"`+alibServer.URL+`/empty-two?second=true","books":0`)
 	require.Contains(t, logOutput, `"msg":"digest.completed"`)
 	require.Contains(t, logOutput, `"fetched":0`)
 	require.Contains(t, logOutput, `"new":0`)
@@ -1234,13 +1268,13 @@ func Test_run_once_fails_after_requesting_and_logging_all_failed_pages(t *testin
 	require.Equal(t, 1, strings.Count(logOutput, `"msg":"alib.page_downloaded"`))
 	require.Equal(t, 1, strings.Count(logOutput, `"msg":"alib.page_parse_failed"`))
 	require.NotContains(t, logOutput, `"msg":"alib.page_parsed"`)
-	require.Contains(t, logOutput, `"msg":"alib.page_download_failed","index":0,"url":"`+
+	require.Contains(t, logOutput, `"msg":"alib.page_download_failed","chat_id":"-100123","index":0,"url":"`+
 		alibServer.URL+`/status-one?status=one"`)
-	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","index":1,"url":"`+
+	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","chat_id":"-100123","index":1,"url":"`+
 		alibServer.URL+`/broken?scope=broken"`)
-	require.Contains(t, logOutput, `"msg":"alib.page_parse_failed","index":1,"url":"`+
+	require.Contains(t, logOutput, `"msg":"alib.page_parse_failed","chat_id":"-100123","index":1,"url":"`+
 		alibServer.URL+`/broken?scope=broken"`)
-	require.Contains(t, logOutput, `"msg":"alib.page_download_failed","index":2,"url":"`+
+	require.Contains(t, logOutput, `"msg":"alib.page_download_failed","chat_id":"-100123","index":2,"url":"`+
 		alibServer.URL+`/status-two?status=two"`)
 	require.NotContains(t, logOutput, `"msg":"alib.page_failed"`)
 	require.Contains(t, logOutput, `"msg":"digest.failed"`)

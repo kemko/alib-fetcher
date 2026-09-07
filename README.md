@@ -21,12 +21,19 @@ Global fields and defaults:
 - `alib_max_retries`: `3` additional attempts.
 - `message_limit`: `32000`, allowed range `64..32768`.
 
+`fresh_books` controls the optional ✨ marker; it does not filter listings.
+`age:N` uses the inclusive threshold `current local year - N`, with `N >= 0`;
+`since:YYYY` uses that inclusive year. Empty disables only ✨. The current
+year, and the previous year in January, get 🔥; future and unknown years get
+🛸. The configured `timezone` determines the current year and month.
+
 Each `[[chats]]` entry requires `chat_id` (signed decimal `int64` or a
 non-empty `@channel` username) and `telegram_token`. `state_file` is an
 optional file name inside `state_path`; otherwise it is `<normalized chat_id>.db`.
 Numeric IDs are stored in canonical decimal form and usernames are lowercased.
 Absolute paths, path separators, NUL, `.`, and `..` are rejected. Duplicate
-normalized IDs and state files are rejected.
+normalized IDs and state files, including existing symlink and hard-link
+aliases, are rejected.
 
 Search sources are `categories`, `filters`, and `queries`. Categories retain
 the existing ASCII-letter validation. Each filter value makes one independent
@@ -89,6 +96,12 @@ graceful shutdown, message limits, and delivery ordering follow the same
 policy as previous releases. A valid TOML change pauses new work, lets active
 digests finish with their old settings, then applies the complete new snapshot;
 invalid, deleted, or unreadable files leave the current snapshot active.
+The file is checked every second and rechecked after active digests finish.
+Polling keeps answering and skipping refresh presses during that wait.
+Unchanged settings, including comment-only edits, do not restart work.
+Existing chats do not repeat startup digests; newly added chats follow
+`run_on_startup`. Retained tokens keep their polling offsets. Changing a state
+path switches databases without moving history; removed chats keep their files.
 
 To migrate the former single database, change an old `STATE_PATH=/path/state.db`
 to `state_path = "/path"` and set `state_file = "state.db"` for the matching
@@ -97,13 +110,16 @@ chat. The old database is opened in place; no history is copied or rewritten.
 ## Container
 
 Compose runs the service from a read-only root filesystem and mounts the TOML
-directory read-only. The example contains placeholder tokens only. Replace the
-file using a temporary file in the same mounted directory and an atomic rename,
-so the container sees a complete configuration:
+directory read-only. Prepare real tokens and grant the container's GID 65532
+read access before atomically renaming the file. On a Linux Docker host:
 
 ```bash
-mkdir -p config
-install -m 0640 config.example.toml config/config.toml.tmp
+install -d -m 0700 config
+install -m 0600 config.example.toml config/config.toml.tmp
+${EDITOR:-vi} config/config.toml.tmp
+sudo chgrp 65532 config config/config.toml.tmp
+chmod 0750 config
+chmod 0640 config/config.toml.tmp
 mv -f config/config.toml.tmp config/config.toml
 docker compose up -d
 ```
@@ -114,6 +130,8 @@ Telegram tokens, so keep the directory private. `ALIB_FETCHER_IMAGE` remains
 the only Compose environment override; do not put credentials in Compose.
 `config/` and the root `config.toml` are ignored by Git and Docker context,
 while the credential-free `config.example.toml` remains trackable.
+For later updates, copy the live configuration to a temporary file in the
+same directory, edit it, and repeat the group, mode, and rename steps.
 
 ## Development
 

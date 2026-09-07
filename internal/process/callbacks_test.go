@@ -19,7 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func Test_startCallbackListening_ignores_unknown_callback_data(t *testing.T) {
+func Test_startCallbackGroups_ignores_unknown_callback_data(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -43,7 +43,7 @@ func Test_startCallbackListening_ignores_unknown_callback_data(t *testing.T) {
 	}, statePath: filepath.Join(t.TempDir(), "state.db"), logger: slog.New(slog.DiscardHandler)}
 
 	// When
-	done := startCallbackListening(ctx, client, runner, "-100123", slog.New(slog.DiscardHandler))
+	done := startCallbackGroups(ctx, []Recipient{{ChatID: "-100123", Callbacks: client}}, []*digestRunner{runner}, slog.New(slog.DiscardHandler))
 	waitForCallbackLoop(t, done)
 
 	// Then
@@ -52,7 +52,7 @@ func Test_startCallbackListening_ignores_unknown_callback_data(t *testing.T) {
 	require.Empty(t, client.removalsSnapshot())
 }
 
-func Test_startCallbackListening_runs_digest_and_removes_old_button_before_new_send(t *testing.T) {
+func Test_startCallbackGroups_runs_digest_and_removes_old_button_before_new_send(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -83,7 +83,7 @@ func Test_startCallbackListening_runs_digest_and_removes_old_button_before_new_s
 	}, statePath: statePath, logger: slog.New(slog.DiscardHandler)}
 
 	// When
-	done := startCallbackListening(ctx, client, runner, "@books", slog.New(slog.DiscardHandler))
+	done := startCallbackGroups(ctx, []Recipient{{ChatID: "@books", Callbacks: client}}, []*digestRunner{runner}, slog.New(slog.DiscardHandler))
 	waitForSignal(t, sent)
 	runner.wait()
 	cancel()
@@ -395,7 +395,7 @@ func Test_handleRefreshCallback_prefers_error_status_after_discovering_new_book(
 	require.Len(t, sender.messages, 1)
 }
 
-func Test_handleRefreshCallback_logs_final_answer_failure(t *testing.T) {
+func Test_handleGroupedCallback_logs_final_answer_failure(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -410,7 +410,10 @@ func Test_handleRefreshCallback_logs_final_answer_failure(t *testing.T) {
 	}, statePath: filepath.Join(t.TempDir(), "state.db"), logger: slog.New(slog.DiscardHandler)}
 
 	// When
-	handleRefreshCallback(context.Background(), client, runner, telegram.Callback{
+	handleGroupedCallback(context.Background(), callbackGroup{
+		client:     client,
+		recipients: []callbackRecipient{{chatID: "-100123", runner: runner}},
+	}, telegram.Callback{
 		ID:            "callback-1",
 		Data:          telegram.RefreshCallbackData,
 		MessageChatID: -100123,
@@ -421,9 +424,10 @@ func Test_handleRefreshCallback_logs_final_answer_failure(t *testing.T) {
 	// Then
 	require.Contains(t, logs.String(), "msg=callback.answer_failed")
 	require.Contains(t, logs.String(), "callback answer failed")
+	require.Contains(t, logs.String(), "chat_id=-100123")
 }
 
-func Test_startCallbackListening_answers_and_ignores_refresh_from_unexpected_chat(t *testing.T) {
+func Test_startCallbackGroups_answers_and_ignores_refresh_from_unexpected_chat(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -448,7 +452,7 @@ func Test_startCallbackListening_answers_and_ignores_refresh_from_unexpected_cha
 	}, statePath: filepath.Join(t.TempDir(), "state.db"), logger: slog.New(slog.DiscardHandler)}
 
 	// When
-	done := startCallbackListening(ctx, client, runner, "-100123", slog.New(slog.DiscardHandler))
+	done := startCallbackGroups(ctx, []Recipient{{ChatID: "-100123", Callbacks: client}}, []*digestRunner{runner}, slog.New(slog.DiscardHandler))
 	waitForCallbackLoop(t, done)
 	runner.wait()
 
@@ -459,7 +463,7 @@ func Test_startCallbackListening_answers_and_ignores_refresh_from_unexpected_cha
 	require.Zero(t, fetches.Load())
 }
 
-func Test_startCallbackListening_logs_listener_error_without_process_retry(t *testing.T) {
+func Test_startCallbackGroups_logs_listener_error_without_process_retry(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -481,7 +485,7 @@ func Test_startCallbackListening_logs_listener_error_without_process_retry(t *te
 	}
 
 	// When
-	done := startCallbackListening(ctx, client, runner, "", slog.New(slog.NewTextHandler(&logs, nil)))
+	done := startCallbackGroups(ctx, []Recipient{{ChatID: "", Callbacks: client}}, []*digestRunner{runner}, slog.New(slog.NewTextHandler(&logs, nil)))
 	waitForCallbackLoop(t, done)
 
 	// Then
@@ -521,9 +525,11 @@ type recordingCallbackClient struct {
 	answerErr error
 	removeErr error
 	callbacks []telegram.Callback
+	updates   <-chan telegram.Callback
 	answers   []callbackAnswer
 	removals  []removedReplyMarkup
 	listens   atomic.Int32
+	stops     atomic.Int32
 	mu        sync.Mutex
 }
 
@@ -533,6 +539,7 @@ func (c *recordingCallbackClient) ListenCallbacks(
 	reportError telegram.CallbackErrorHandler,
 ) {
 	c.listens.Add(1)
+	defer c.stops.Add(1)
 	for _, callback := range c.callbacks {
 		handle(ctx, callback)
 	}
@@ -542,7 +549,14 @@ func (c *recordingCallbackClient) ListenCallbacks(
 	if c.cancel != nil {
 		c.cancel()
 	}
-	<-ctx.Done()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case callback := <-c.updates:
+			handle(ctx, callback)
+		}
+	}
 }
 
 func (c *recordingCallbackClient) AnswerCallback(ctx context.Context, callbackID string, text string) error {

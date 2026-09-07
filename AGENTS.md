@@ -5,7 +5,7 @@
 `alib-fetcher` is a small always-on Go service. It fetches the newest listings
 from one or more configured Alib pages, records discovered books in an embedded
 bbolt database, renders pending books as Telegram HTML messages, sends them to
-one chat, and records successful deliveries in the same database.
+configured chats, and records successful deliveries in each chat's database.
 
 The module is `github.com/kemko/alib-fetcher`. The executable entry point is
 `./cmd/alib-fetcher`. Go 1.26.5 is the supported toolchain; `make tools`
@@ -16,7 +16,7 @@ installs the pinned golangci-lint v2 release.
 One digest cycle is deliberately ordered as follows:
 
 1. Remove sent records strictly older than 14 days.
-2. Build pages from `ALIB_CATEGORIES`, `ALIB_SERIES`, then `ALIB_PUBLISHERS`,
+2. Build pages from the chat's `categories`, `filters`, then `queries`,
    and download all generated Alib endpoints sequentially, retaining successful
    response bodies and their source order.
 3. Parse successful responses only after all downloads finish, then combine and
@@ -50,10 +50,10 @@ Preserve these semantics:
 - `State.Pending` returns records in first-discovery/source order, not bbolt key
   sort order; the digest sends year `0` records first, then recognized years in
   descending order, with stable first-discovery order within each group.
-- `MESSAGE_LIMIT` counts Unicode runes in displayed Rich Message text after
+- `message_limit` counts Unicode runes in displayed Rich Message text after
   parsing HTML; formatting tags and URL attribute values do not count, while
   encoded text and `<br/>` line breaks do. A listing's `Content` is shortened
-  with `…` to the longest prefix that fits within `MESSAGE_LIMIT - 1` displayed
+  with `…` to the longest prefix that fits within `message_limit - 1` displayed
   runes. If mandatory displayed fields plus minimal content still cannot fit,
   it remains pending and must not block other renderable pending listings;
   `digest.ErrMessageTooLong` is reported.
@@ -94,16 +94,17 @@ Preserve these semantics:
   `фото`; database open does not rewrite them, and the next mutating write uses
   the current `photos` schema.
 - Service mode runs one cycle immediately after startup by default, then follows
-  the cron schedule. `RUN_ON_STARTUP=false` skips the startup cycle. Overlapping
-  cron jobs are skipped.
+  the cron schedule. `run_on_startup = false` skips the startup cycle.
+  Overlapping cron jobs for the same chat are skipped.
 - Service mode starts SDK-managed polling for Telegram `callback_query` updates
   registered for the stable `telegram.RefreshCallbackData` value. `-once` sends
   the refresh button whenever it sends a digest message, including the empty
   notification, but never starts the SDK listener.
 - Refresh callbacks run through the same digest path and bbolt state path as
   startup and scheduled jobs. Startup, scheduled, and refresh-triggered digests
-  share one process-local runner lock; scheduled and refresh-triggered digests
-  skip when another digest is already running.
+  share one process-local runner lock per chat; scheduled and refresh-triggered
+  digests skip when another digest for that chat is already running. Different
+  chats run independently. Chats sharing a token use one SDK client and poller.
 - Callback polling must continue while a refresh-triggered digest is running so
   duplicate button presses can be answered and skipped. The SDK owns update
   offsets and polling retry/backoff; polling errors are reported through the
@@ -116,7 +117,7 @@ Preserve these semantics:
   with `Формирование дайджеста запущено`; the digest continues in the
   background on the service lifetime context and has no overall deadline.
   Digest results and errors are recorded in `digest.completed` and
-  `digest.failed`; `HTTP_TIMEOUT` still applies to each external request.
+  `digest.failed`; `http_timeout` still applies to each external request.
   Toast display duration is controlled by the Telegram client; the Bot API
   cannot guarantee an exact duration.
 - For refresh-triggered digests, remove the clicked message's old reply markup
@@ -131,15 +132,18 @@ Preserve these semantics:
 
 ## Repository map
 
-- `cmd/alib-fetcher/main.go`: thin bootstrap wiring for JSON logging, `-once`,
-  `-forget-latest`, configuration loading, adapter construction, signal
-  context, `internal/process.Run`, and `internal/process.ForgetLatest`.
+- `cmd/alib-fetcher/main.go`: bootstrap wiring for JSON logging, CLI modes,
+  TOML loading, per-chat adapters, shared-token clients, and signal context.
+  Uses `process.RunRecipients` for once mode, `process.RunReloadable` for
+  service mode, and `process.ForgetLatestForChat` for maintenance.
 - `internal/process`: service process lifecycle orchestration, state DB open
   lifetime, startup and scheduled digest runs, robfig/cron lifecycle, refresh
-  callback policy and listener lifecycle, shared digest-runner concurrency, and
-  the state-only forget-latest maintenance operation.
-- `internal/config`: environment loading, generated category/series/publisher
-  endpoints, defaults, and validation.
+  callback policy and listener lifecycle, per-chat runner concurrency,
+  configuration generations, and the state-only forget-latest operation.
+- `internal/config`: strict TOML loading through `github.com/pelletier/go-toml/v2`,
+  generated category/filter/query endpoints, defaults, and validation. Service
+  and maintenance loading share state-mapping validation, including existing
+  filesystem alias checks.
 - `internal/alib`: HTTP client plus charset-aware, DOM-first HTML parser. The
   real page may be Windows-1251. Listings are recognized inside `<p>` elements
   by a title in `<b>` and a `Купить` link; seller links contain `bs.php4`.
@@ -220,9 +224,22 @@ HTTP requests. Exactly one mode is required; no arguments and help print the
 usage. Unknown or incompatible arguments exit 2; config and runtime failures
 exit 1. Tokens and TOML contents are never logged.
 
-`fresh_books` accepts `age:N` or `since:YYYY`; the threshold is inclusive.
-Publication-year marker behavior remains controlled by `timezone` as described
-in the digest tests and renderer.
+`fresh_books` controls the optional `✨` marker, without filtering listings.
+`age:N` uses the inclusive threshold `current local year - N`; `since:YYYY`
+uses that inclusive year. Empty disables only `✨`. The configured `timezone`
+controls the current year (`🔥`), previous year in January (also `🔥`), and
+future years (`🛸`); unknown years also receive `🛸`.
+
+Service mode checks the config file every second. Valid changes stop new
+digests while active work finishes with its old snapshot; polling continues
+answering and skipping refresh presses during this drain. After the drain, old
+polling is joined and the file is rechecked before applying the valid snapshot.
+An invalid or reverted candidate restores the previous configuration. Existing
+chats do not repeat startup work; new chats follow `run_on_startup`. Unchanged
+settings, including comment-only edits, do not restart work. Retained tokens
+keep their polling offsets, and timeouts change only after old requests stop.
+Removing a chat preserves its database; changing a state path switches files
+without migrating history. Repeated identical reload failures log once.
 
 ## Digest and transport details
 
@@ -253,7 +270,7 @@ of displayed Rich Message text after HTML parsing: formatting tags and URL
 attribute values do not consume the limit, while encoded text and `<br/>` line
 breaks do. Chunks may split only between listings. Content that exceeds the
 limit is truncated before HTML escaping to the longest prefix plus `…` that
-fits within `MESSAGE_LIMIT - 1`; only `Content` is shortened. If mandatory
+fits within `message_limit - 1`; only `Content` is shortened. If mandatory
 displayed fields plus minimal content still cannot fit, the listing returns
 `digest.ErrMessageTooLong`.
 
@@ -264,7 +281,7 @@ order and repeats; empty captions use `фото`.
 The Alib client accepts one or more HTTP(S) endpoints, sends
 `User-Agent: alib-fetcher/1.0`, and requires HTTP 200. Failed page requests use
 the cenkalti/backoff exponential backoff with delays of 1, 2, 4, 8, 16, then 30
-seconds, capped at 30 seconds. `ALIB_MAX_RETRIES` sets additional attempts per
+seconds, capped at 30 seconds. `alib_max_retries` sets additional attempts per
 page; the default is three and `0` disables retries. Each attempt uses the
 configured HTTP timeout and the parent context. All attempts for one URL finish
 before the next URL starts, and all downloads finish before successful responses
@@ -295,12 +312,15 @@ Structured logs go to stdout. Stable event names are `scheduler.started`,
 `scheduler.stopped`, `digest.started`, `digest.completed`, `digest.failed`,
 `alib.page_downloaded`, `alib.page_download_failed`, `alib.page_parsed`,
 `alib.page_parse_failed`, `callback.poll_failed`, `callback.answer_failed`,
-`state.forget_latest.completed`, and `service.failed`; digest completion fields
+`state.forget_latest.completed`, `config.reload_pending`, `config.reloaded`,
+`config.reload_failed`, and `service.failed`; digest completion fields
 are `fetched`, `new`, `failed`, `pruned`, and `sent`, while forget-latest completion fields
 are `requested` and `deleted`. Every Alib page event includes the zero-based
 `index` and full configured endpoint `url`, including GET parameters and
 fragments; download events include the one-based per-page `attempt`,
 `alib.page_parsed` includes `books`, and failed events include `error`.
+Recipient-specific events include `chat_id`, including Alib page events and
+matched callback answer failures. Shared polling errors have no single chat ID.
 Keep slog attributes typed, snake_case, and free of secrets. Generated
 page URLs are credential-free and are logged in full as configured endpoints.
 

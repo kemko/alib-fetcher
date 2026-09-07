@@ -2,8 +2,9 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"net/url"
-	"sort"
+	"slices"
 	"strings"
 
 	"golang.org/x/text/encoding/charmap"
@@ -220,12 +221,7 @@ func validateFilterKeys(filters map[string][]string, context searchErrorContext)
 	for _, field := range alibSearchFields {
 		known[field] = struct{}{}
 	}
-	keys := make([]string, 0, len(filters))
-	for field := range filters {
-		keys = append(keys, field)
-	}
-	sort.Strings(keys)
-	for _, field := range keys {
+	for _, field := range slices.Sorted(maps.Keys(filters)) {
 		if _, ok := known[field]; !ok {
 			return invalidSearchValue(context, field, "is not a supported Alib form field")
 		}
@@ -238,7 +234,7 @@ func validateQueryKeys(query map[string]string, index int) error {
 	for _, field := range alibSearchFields {
 		known[field] = struct{}{}
 	}
-	for field := range query {
+	for _, field := range slices.Sorted(maps.Keys(query)) {
 		if _, ok := known[field]; !ok {
 			return fmt.Errorf("%w: queries[%d].%s is not a supported Alib form field", ErrInvalid, index, field)
 		}

@@ -79,28 +79,10 @@ func RunRecipients(
 		return runOnce(ctx, recipients, logger)
 	}
 
-	runners := make([]*digestRunner, 0, len(recipients))
-	for _, recipient := range recipients {
-		runners = append(runners, newDigestRunnerForRecipient(recipient, logger))
-	}
-	scheduler, err := newSchedulerForRunners(ctx, settings, runners)
-	if err != nil {
-		return err
-	}
-
-	callbacksDone := startCallbackGroups(ctx, recipients, runners, logger)
-	logger.InfoContext(ctx, "scheduler.started",
-		slog.String(logKeySchedule, settings.CronSpec),
-		slog.String(logKeyTimezone, settings.Location.String()),
-	)
-	runSchedulerForRunners(ctx, scheduler, runners, settings.RunOnStartup)
-	logger.InfoContext(ctx, "scheduler.stopped")
-	<-callbacksDone
-	for _, runner := range runners {
-		runner.wait()
-	}
-
-	return nil
+	return runServiceGeneration(ctx, ReloadSnapshot{
+		Settings:   settings,
+		Recipients: recipients,
+	}, logger)
 }
 
 func runOnce(ctx context.Context, recipients []Recipient, logger *slog.Logger) error {

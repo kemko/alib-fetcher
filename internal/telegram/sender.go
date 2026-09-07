@@ -408,7 +408,7 @@ func (e *sdkRequestError) Is(target error) bool {
 }
 
 func (client *sdkHTTPClient) Do(request *http.Request) (*http.Response, error) {
-	//nolint:gosec // Operator-configured API base intentionally supports HTTP(S) test and proxy servers.
+	//nolint:gosec // The SDK builds requests for the standard Telegram HTTPS endpoint.
 	response, err := client.client.Do(request)
 	if err != nil {
 		return response, &sdkRequestError{cause: err}

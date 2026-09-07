@@ -20,7 +20,10 @@ import (
 	"github.com/kemko/alib-fetcher/internal/telegram"
 )
 
-const logKeyError = "error"
+const (
+	logKeyError  = "error"
+	logKeyChatID = "chat_id"
+)
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -185,7 +188,7 @@ func (factory *runtimeFactory) snapshot(
 			chat.AlibURLs,
 			settings.HTTPTimeout,
 			settings.AlibMaxRetries,
-			factory.logger,
+			factory.logger.With(slog.String(logKeyChatID, chat.ChatID)),
 		)
 		if err != nil {
 			return process.ReloadSnapshot{}, err

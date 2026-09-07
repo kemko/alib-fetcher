@@ -157,8 +157,7 @@ func startServiceGeneration(
 	for _, recipient := range snapshot.Recipients {
 		runners = append(runners, newDigestRunnerForRecipient(recipient, logger))
 	}
-	scheduler, err := newSchedulerForRunnersWithRunContext(
-		controlCtx,
+	scheduler, err := newSchedulerForRunners(
 		parent,
 		snapshot.Settings,
 		runners,
@@ -216,6 +215,9 @@ func (generation *serviceGeneration) run(
 func (generation *serviceGeneration) stop() {
 	for _, runner := range generation.runners {
 		runner.requestStop()
+	}
+	for _, runner := range generation.runners {
+		runner.wait()
 	}
 	generation.cancel()
 	<-generation.done

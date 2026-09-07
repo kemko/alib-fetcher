@@ -337,7 +337,7 @@ func Test_Client_timeout_change_preserves_update_offset(t *testing.T) {
 			assert.Equal(t, "101", payload["offset"])
 			assert.Equal(t, "6", payload["timeout"])
 			close(thirdPoll)
-			writeTelegramResponse(t, writer, `{"ok":true,"result":[]}`)
+			<-request.Context().Done()
 		default:
 			<-request.Context().Done()
 		}

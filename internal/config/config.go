@@ -4,8 +4,10 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -119,7 +121,7 @@ func LoadForMaintenance(path, chatID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	statePaths, err := validateStateMappings(raw.Chats, stateDir)
+	chats, err := validateStateMappings(raw.Chats, stateDir)
 	if err != nil {
 		return "", err
 	}
@@ -127,11 +129,12 @@ func LoadForMaintenance(path, chatID string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%w: chat_id %w", ErrInvalid, err)
 	}
-	statePath, ok := statePaths[normalized]
-	if !ok {
-		return "", fmt.Errorf("%w: unknown chat %q", ErrInvalid, normalized)
+	for _, chat := range chats {
+		if chat.ChatID == normalized {
+			return chat.StatePath, nil
+		}
 	}
-	return statePath, nil
+	return "", fmt.Errorf("%w: unknown chat %q", ErrInvalid, normalized)
 }
 
 // NormalizeChatID returns the canonical representation used in configuration.
@@ -223,7 +226,7 @@ func formatDecodeError(err error) error {
 }
 
 func validateDocumentKeys(document map[string]any) error {
-	for key := range document {
+	for _, key := range slices.Sorted(maps.Keys(document)) {
 		if !oneOf(key, "state_path", "cron_schedule", "timezone", "run_on_startup", "http_timeout",
 			"alib_max_retries", "message_limit", "fresh_books", "chats") {
 			return fmt.Errorf("unknown field %q", key)
@@ -238,7 +241,8 @@ func validateDocumentKeys(document map[string]any) error {
 		if !chatOK {
 			continue
 		}
-		for key, value := range chat {
+		for _, key := range slices.Sorted(maps.Keys(chat)) {
+			value := chat[key]
 			if !oneOf(key, "chat_id", "telegram_token", "state_file", "categories", "filters", "queries") {
 				return fmt.Errorf("unknown field %q in chats[%d]", key, index)
 			}
@@ -272,13 +276,13 @@ func resolveStateDir(value *string, configPath string) (string, error) {
 	return filepath.Clean(abs), nil
 }
 
-func validateStateMappings(rawChats []rawChat, stateDir string) (map[string]string, error) {
+func validateStateMappings(rawChats []rawChat, stateDir string) ([]Chat, error) {
 	if len(rawChats) == 0 {
 		return nil, fmt.Errorf("%w: chats must contain at least one recipient", ErrInvalid)
 	}
-	paths := make(map[string]string, len(rawChats))
+	chats := make([]Chat, 0, len(rawChats))
 	seenIDs := make(map[string]struct{}, len(rawChats))
-	seenPaths := make(map[string]string, len(rawChats))
+	seenFiles := make(map[string]os.FileInfo, len(rawChats))
 	for index, raw := range rawChats {
 		prefix := fmt.Sprintf("chats[%d]", index)
 		chatID, err := normalizeChatID(raw.ChatID)
@@ -297,36 +301,35 @@ func validateStateMappings(rawChats []rawChat, stateDir string) (map[string]stri
 			return nil, fmt.Errorf("%w: %s.state_file %w", ErrInvalid, prefix, stateFileErr)
 		}
 		statePath := filepath.Join(stateDir, stateFile)
-		canonicalPath := statePath
-		if resolved, resolveErr := filepath.EvalSymlinks(statePath); resolveErr == nil {
-			canonicalPath = resolved
+		if aliasErr := validateStateAlias(statePath, seenFiles); aliasErr != nil {
+			return nil, fmt.Errorf("%w: %s.state_file %w", ErrInvalid, prefix, aliasErr)
 		}
-		if previous, exists := seenPaths[canonicalPath]; exists {
-			return nil, fmt.Errorf("%w: %s.state_file collides with %s", ErrInvalid, prefix, previous)
-		}
-		seenPaths[canonicalPath] = prefix
-		paths[chatID] = statePath
+		chats = append(chats, Chat{ChatID: chatID, StateFile: stateFile, StatePath: statePath})
 	}
-	return paths, nil
+	return chats, nil
+}
+
+func validateStateAlias(path string, seen map[string]os.FileInfo) error {
+	info, err := os.Stat(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect state file: %w", err)
+	}
+	for previousPath, previousInfo := range seen {
+		if path == previousPath || (info != nil && previousInfo != nil && os.SameFile(info, previousInfo)) {
+			return errors.New("collides with another recipient")
+		}
+	}
+	seen[path] = info
+	return nil
 }
 
 func validateChats(rawChats []rawChat, stateDir string) ([]Chat, error) {
-	if len(rawChats) == 0 {
-		return nil, fmt.Errorf("%w: chats must contain at least one recipient", ErrInvalid)
+	chats, err := validateStateMappings(rawChats, stateDir)
+	if err != nil {
+		return nil, err
 	}
-	chats := make([]Chat, 0, len(rawChats))
-	seenIDs := make(map[string]struct{}, len(rawChats))
-	seenPaths := make(map[string]string, len(rawChats))
 	for index, raw := range rawChats {
 		prefix := fmt.Sprintf("chats[%d]", index)
-		chatID, err := normalizeChatID(raw.ChatID)
-		if err != nil {
-			return nil, fmt.Errorf("%w: %s.chat_id %w", ErrInvalid, prefix, err)
-		}
-		if _, exists := seenIDs[chatID]; exists {
-			return nil, fmt.Errorf("%w: %s.chat_id duplicates a normalized recipient", ErrInvalid, prefix)
-		}
-		seenIDs[chatID] = struct{}{}
 		if raw.TelegramToken == "" {
 			return nil, fmt.Errorf("%w: %s.telegram_token is required", ErrInvalid, prefix)
 		}
@@ -336,36 +339,15 @@ func validateChats(rawChats []rawChat, stateDir string) ([]Chat, error) {
 			Filters:    cloneFilters(raw.Filters),
 			Queries:    cloneQueries(raw.Queries),
 		}
-		urls, err := buildSearchURLs(search.Categories, search.Filters, search.Queries, searchErrorContext{
+		urls, searchErr := buildSearchURLs(search.Categories, search.Filters, search.Queries, searchErrorContext{
 			fields: map[string]string{"categories": prefix + ".categories"},
 		})
-		if err != nil {
-			return nil, fmt.Errorf("%w: %s.search: %w", ErrInvalid, prefix, err)
+		if searchErr != nil {
+			return nil, fmt.Errorf("%w: %s.search: %w", ErrInvalid, prefix, searchErr)
 		}
-		stateFile := chatID + ".db"
-		if raw.StateFile != nil {
-			stateFile = *raw.StateFile
-		}
-		if stateFileErr := validateStateFile(stateFile); stateFileErr != nil {
-			return nil, fmt.Errorf("%w: %s.state_file %w", ErrInvalid, prefix, stateFileErr)
-		}
-		statePath := filepath.Join(stateDir, stateFile)
-		canonicalPath := statePath
-		if resolved, resolveErr := filepath.EvalSymlinks(statePath); resolveErr == nil {
-			canonicalPath = resolved
-		}
-		if previous, exists := seenPaths[canonicalPath]; exists {
-			return nil, fmt.Errorf("%w: %s.state_file collides with %s", ErrInvalid, prefix, previous)
-		}
-		seenPaths[canonicalPath] = prefix
-		chats = append(chats, Chat{
-			ChatID:        chatID,
-			TelegramToken: raw.TelegramToken,
-			StateFile:     stateFile,
-			StatePath:     statePath,
-			Search:        search,
-			AlibURLs:      urls,
-		})
+		chats[index].TelegramToken = raw.TelegramToken
+		chats[index].Search = search
+		chats[index].AlibURLs = urls
 	}
 	return chats, nil
 }
@@ -390,20 +372,6 @@ func validateStateFile(value string) error {
 		return errors.New("must be a safe file name")
 	}
 	return nil
-}
-
-// StatePathFor resolves a normalized chat ID to its configured state file.
-func (settings Config) StatePathFor(chatID string) (string, error) {
-	normalized, err := normalizeChatID(chatID)
-	if err != nil {
-		return "", fmt.Errorf("%w: chat_id %w", ErrInvalid, err)
-	}
-	for _, chat := range settings.Chats {
-		if chat.ChatID == normalized {
-			return chat.StatePath, nil
-		}
-	}
-	return "", fmt.Errorf("%w: unknown chat %q", ErrInvalid, normalized)
 }
 
 func parseDuration(value *string) (time.Duration, error) {
@@ -508,6 +476,3 @@ func isASCIIWord(value string) bool {
 	}
 	return true
 }
-
-// CronSpec returns the validated cron schedule.
-func (c Config) CronSpec() string { return c.CronSchedule }

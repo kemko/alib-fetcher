@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -159,6 +160,74 @@ categories = ["deti"]
 			loaded, err := config.Load(writeConfig(t, body))
 			require.ErrorIs(t, err, config.ErrInvalid)
 			require.Empty(t, loaded)
+		})
+	}
+}
+
+func TestLoad_rejects_existing_state_aliases_in_all_modes(t *testing.T) {
+	t.Parallel()
+
+	for name, link := range map[string]func(string, string) error{
+		"hard link": os.Link,
+		"symlink":   os.Symlink,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			stateDir := t.TempDir()
+			original := filepath.Join(stateDir, "original.db")
+			require.NoError(t, os.WriteFile(original, []byte("existing state"), 0o600))
+			require.NoError(t, link(original, filepath.Join(stateDir, "alias.db")))
+			path := writeConfig(t, fmt.Sprintf(`state_path = %q
+[[chats]]
+chat_id = "-1"
+telegram_token = "first"
+state_file = "original.db"
+categories = ["tramka"]
+[[chats]]
+chat_id = "-2"
+telegram_token = "second"
+state_file = "alias.db"
+categories = ["tramka"]
+`, stateDir))
+
+			_, loadErr := config.Load(path)
+			_, maintenanceErr := config.LoadForMaintenance(path, "-1")
+
+			require.ErrorIs(t, loadErr, config.ErrInvalid)
+			require.ErrorContains(t, loadErr, "state_file collides")
+			require.ErrorIs(t, maintenanceErr, config.ErrInvalid)
+			require.ErrorContains(t, maintenanceErr, "state_file collides")
+			contents, err := os.ReadFile(original)
+			require.NoError(t, err)
+			require.Equal(t, "existing state", string(contents))
+		})
+	}
+}
+
+func TestLoad_reports_the_same_error_for_unchanged_invalid_config(t *testing.T) {
+	t.Parallel()
+
+	for name, body := range map[string]string{
+		"global keys": "unknown_a = true\nunknown_b = true\nunknown_c = true\n",
+		"chat keys":   "[[chats]]\nunknown_a = true\nunknown_b = true\nunknown_c = true\n",
+		"query keys": `[[chats]]
+chat_id = "-1"
+telegram_token = "secret"
+[[chats.queries]]
+unknown_a = "a"
+unknown_b = "b"
+unknown_c = "c"
+`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			path := writeConfig(t, body)
+			_, firstErr := config.Load(path)
+			require.Error(t, firstErr)
+			for range 100 {
+				_, err := config.Load(path)
+				require.EqualError(t, err, firstErr.Error())
+			}
 		})
 	}
 }
