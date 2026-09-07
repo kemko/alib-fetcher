@@ -177,5 +177,8 @@ manager, retaining HTTPS certificates, timezone data and the nonroot user.
 Dependabot alerts and security updates are enabled in the GitHub repository
 settings. Security updates create PRs for vulnerable Go modules and GitHub
 Actions; Go vendoring is maintained automatically. `.github/dependabot.yml`
-disables ordinary version-update PRs. This does not scan OS packages inside
-Docker images or automatically merge security PRs.
+checks ordinary GitHub Actions version updates every Saturday at 09:00
+Europe/Moscow. Its numeric limit of 1000 open version-update PRs effectively
+removes the cap for this repository. Ordinary Go module and Docker version
+updates remain disabled. This does not scan OS packages inside Docker images
+or automatically merge security PRs.

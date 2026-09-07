@@ -185,8 +185,9 @@ Preserve these semantics:
   requests never log in or push; a successful `master` push publishes
   `ghcr.io/${github.repository}:latest` from its single image build. Ordinary
   quality commands must not be duplicated in CI. Local `make verify` retains all checks.
-- `.github/dependabot.yml`: normal scheduled version PRs are disabled; updates
-  are intended to be security-only through repository security settings.
+- `.github/dependabot.yml`: GitHub Actions version updates run weekly on Saturday
+  at 09:00 Europe/Moscow, with a numeric limit of 1000 open PRs. Ordinary Go module
+  and Docker version updates are disabled; security updates use repository settings.
 
 ## Configuration contract
 
