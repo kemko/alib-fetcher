@@ -33,7 +33,9 @@ optional file name inside `state_path`; otherwise it is `<normalized chat_id>.db
 Numeric IDs are stored in canonical decimal form and usernames are lowercased.
 Absolute paths, path separators, NUL, `.`, and `..` are rejected. Duplicate
 normalized IDs and state files, including existing symlink and hard-link
-aliases, are rejected. State-file symlinks must point to existing files.
+aliases, are rejected. State filenames must differ after Unicode normalization
+and case-insensitive comparison on every platform, even before files exist.
+State-file symlinks must point to existing files.
 
 Search sources are `categories`, `filters`, and `queries`. Categories retain
 the existing ASCII-letter validation. Each filter value makes one independent

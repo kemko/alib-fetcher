@@ -15,6 +15,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/robfig/cron/v3"
+	"golang.org/x/text/unicode/norm"
 )
 
 // ErrInvalid indicates that one or more configuration values are unusable.
@@ -320,12 +321,15 @@ func validateStateAlias(path string, seen map[string]os.FileInfo) error {
 			return fmt.Errorf("resolve state symlink: %w", err)
 		}
 	}
-	for previousPath, previousInfo := range seen {
-		if path == previousPath || (info != nil && previousInfo != nil && os.SameFile(info, previousInfo)) {
+	// Use portable comparison keys without changing the configured database paths.
+	key := norm.NFC.String(path)
+	for previousKey, previousInfo := range seen {
+		if strings.EqualFold(key, previousKey) ||
+			(info != nil && previousInfo != nil && os.SameFile(info, previousInfo)) {
 			return errors.New("collides with another recipient")
 		}
 	}
-	seen[path] = info
+	seen[key] = info
 	return nil
 }
 

@@ -199,7 +199,9 @@ Each `[[chats]]` entry has `chat_id` (signed decimal `int64` or non-empty
 missing `state_file` uses `<normalized chat_id>.db`; numeric IDs use canonical
 decimal form and usernames are lowercased. A state file is only a filename:
 absolute paths, separators, NUL, `.`, and `..` are rejected. Normalized IDs and
-resolved state files must be unique. The old single-file setting
+resolved state files must be unique. State filenames are compared after Unicode
+normalization and without regard to case on every platform, even before files
+exist; configured database paths are not rewritten. The old single-file setting
 `STATE_PATH=/path/state.db` maps to `state_path = "/path"` and
 `state_file = "state.db"`; the existing database is opened in place.
 

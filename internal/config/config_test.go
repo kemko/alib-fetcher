@@ -164,6 +164,48 @@ categories = ["deti"]
 	}
 }
 
+func TestLoad_rejects_missing_equivalent_state_files_in_all_modes(t *testing.T) {
+	t.Parallel()
+
+	for name, files := range map[string][2]string{
+		"case":          {"Books.db", "books.db"},
+		"normalization": {"caf\u00e9.db", "cafe\u0301.db"},
+		"both":          {"CAF\u00c9.db", "cafe\u0301.db"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			// Given
+			stateDir := t.TempDir()
+			path := writeConfig(t, fmt.Sprintf(`state_path = %q
+[[chats]]
+chat_id = "-1"
+telegram_token = "first"
+state_file = %q
+categories = ["tramka"]
+[[chats]]
+chat_id = "-2"
+telegram_token = "second"
+state_file = %q
+categories = ["tramka"]
+`, stateDir, files[0], files[1]))
+
+			// When
+			_, loadErr := config.Load(path)
+			_, maintenanceErr := config.LoadForMaintenance(path, "-1")
+
+			// Then
+			require.ErrorIs(t, loadErr, config.ErrInvalid)
+			require.ErrorContains(t, loadErr, "state_file collides")
+			require.ErrorIs(t, maintenanceErr, config.ErrInvalid)
+			require.ErrorContains(t, maintenanceErr, "state_file collides")
+			entries, err := os.ReadDir(stateDir)
+			require.NoError(t, err)
+			require.Empty(t, entries)
+		})
+	}
+}
+
 func TestLoad_rejects_existing_state_aliases_in_all_modes(t *testing.T) {
 	t.Parallel()
 
