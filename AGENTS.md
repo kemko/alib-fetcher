@@ -174,15 +174,17 @@ Preserve these semantics:
 - `internal/testutil`: shared test helpers `RenderChunks`, `DisplayedRuneCount`,
   and `ListingPage`. Import only from tests; keep displayed-rune counting
   independent of the production renderer.
-- `Dockerfile`: multi-stage static build; final distroless Debian image runs as
+- `Dockerfile`: copies the filtered context with `COPY . .` and compiles from
+  `vendor` with networking disabled; final distroless Debian image runs as
   UID/GID 65532 (`nonroot`) and stores state under `/var/lib/alib-fetcher`.
 - `docker-compose.yml`: read-only, capability-dropped service with a persistent
   named state volume.
-- `.github/workflows/ci.yml`: runs `make verify` (including govulncheck) on pushes/PRs
+- `.github/workflows/ci.yml`: installs golangci-lint with its official action,
+  runs `make fmt-check lint test build`, and uses the official govulncheck action on pushes/PRs
   to `master`, then validates Compose and builds the production image. Pull
   requests never log in or push; a successful `master` push publishes
   `ghcr.io/${github.repository}:latest` from its single image build. Ordinary
-  quality commands must not be duplicated in CI.
+  quality commands must not be duplicated in CI. Local `make verify` retains all checks.
 - `.github/dependabot.yml`: normal scheduled version PRs are disabled; updates
   are intended to be security-only through repository security settings.
 
@@ -351,20 +353,23 @@ and working for the full development cycle, including from a clean checkout:
 - `make coverage` writes `coverage.out` and fails when total statement coverage
   is below 80%. It includes calls across repository packages with `-coverpkg=./...`.
 - `make build` compiles `bin/alib-fetcher` with reproducible path trimming.
-- `make tools` installs the exact golangci-lint and govulncheck versions used by
-  CI under the ignored project-local `bin/tools` tree.
+- `make tools` installs pinned golangci-lint and govulncheck versions under the
+  ignored project-local `bin/tools` tree. `.golangci-lint-version` is shared
+  with the official CI installer; CI's official govulncheck action uses latest.
 - `make verify` runs `fmt-check`, `lint`, `test`, `govulncheck`, and `build`; it is
   also the default `make` target and provisions the pinned tools automatically.
 
 When requirements change, update Makefile targets so these commands keep doing
 what their names promise. CI and agent workflows must call the Make targets,
-not duplicate their underlying `go` or `golangci-lint` commands. Any
+not duplicate their underlying `go` or `golangci-lint` commands. The official
+govulncheck action owns the CI vulnerability scan. Any
 environment-specific setup belongs inside or under the Make targets rather
 than in undocumented one-off verification commands.
 
-Quality targets must invoke repository-managed tools by explicit paths. Never
+Quality targets must invoke repository-managed tools by explicit paths. CI may
+pass the absolute golangci-lint path installed by the official action. Never
 accept a successful verification from an arbitrary same-named executable found
-earlier in `PATH`; `make tools` and `make verify` must use the same binary.
+earlier in `PATH`; local `make tools` and `make verify` must use the same binary.
 
 The lint configuration is intentionally strict. Important local constraints
 include 120-column lines, gofumpt/goimports formatting, exhaustive error

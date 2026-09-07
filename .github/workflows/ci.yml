@@ -19,8 +19,20 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Verify
-        run: make verify
+      - name: Install golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version-file: .golangci-lint-version
+          install-only: true
+      - name: Verify formatting, lint, tests and build
+        run: make fmt-check lint test build GOLANGCI_LINT="$(command -v golangci-lint)"
+      - name: Scan Go vulnerabilities
+        uses: golang/govulncheck-action@v1
+        with:
+          go-version-input: ''
+          go-version-file: go.mod
+          repo-checkout: false
+          go-package: ./...
 
   container:
     name: Verify container inputs
@@ -51,6 +63,7 @@ jobs:
             --output type=local,dest="${RUNNER_TEMP}/docker-context" \
             .
           test -f "${RUNNER_TEMP}/docker-context/context/go.mod"
+          test -f "${RUNNER_TEMP}/docker-context/context/vendor/modules.txt"
           test ! -e "${RUNNER_TEMP}/docker-context/context/.env"
           test ! -e "${RUNNER_TEMP}/docker-context/context/.env.local"
           test ! -e "${RUNNER_TEMP}/docker-context/context/data/state.db"

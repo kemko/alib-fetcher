@@ -155,8 +155,25 @@ make verify
 and builds the binary. Use `make govulncheck` to scan all packages separately;
 it requires access to the Go vulnerability database. `make tools` installs pinned
 golangci-lint and govulncheck versions under `bin/tools`; verification installs
-missing tools automatically and uses these same binaries locally and in CI.
+missing tools automatically for local checks.
 
-Use `make coverage` for the 80% total statement-coverage gate. CI uses these
-Make targets, validates Compose, and publishes the image only from a successful
-`master` push.
+Use `make coverage` for the 80% total statement-coverage gate. CI installs
+golangci-lint through its official action, using `.golangci-lint-version` just
+like Make, then runs `make fmt-check lint test build` with that binary's explicit
+path. The official Go govulncheck action installs and runs the latest scanner;
+local `make govulncheck` keeps its pinned version. CI validates Compose and
+publishes the image only from a successful `master` push.
+
+Dependencies are committed under `vendor/`; after changing them, run
+`go mod vendor` and commit the regenerated files. Builds, tests and lint use
+these vendored sources. The Docker build copies the context filtered by
+`.dockerignore` with `COPY . .` and compiles with networking disabled. Base
+images, development tools and the vulnerability database still require network
+access. The final image uses distroless static Debian with no shell or package
+manager, retaining HTTPS certificates, timezone data and the nonroot user.
+
+Dependabot alerts and security updates are enabled in the GitHub repository
+settings. Security updates create PRs for vulnerable Go modules and GitHub
+Actions; Go vendoring is maintained automatically. `.github/dependabot.yml`
+disables ordinary version-update PRs. This does not scan OS packages inside
+Docker images or automatically merge security PRs.
