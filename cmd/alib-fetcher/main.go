@@ -74,7 +74,12 @@ func parseCommandLine() (commandOptions, error) {
 	service := flag.Bool("service", false, "run the scheduled service")
 	once := flag.Bool("once", false, "fetch and send one digest, then exit")
 	configPath := flag.String("config", "./config.toml", "path to TOML configuration")
-	chatID := flag.String("chat", "", "recipient chat ID")
+	var chatID string
+	flag.Func("chat", "recipient chat ID", func(value string) error {
+		var err error
+		chatID, err = config.NormalizeChatID(value)
+		return err
+	})
 	var forgetLatest forgetLatestOption
 	flag.Var(&forgetLatest, "forget-latest", "delete the latest state records, then exit")
 	if len(os.Args) == 1 {
@@ -92,7 +97,7 @@ func parseCommandLine() (commandOptions, error) {
 	}
 	options := commandOptions{
 		configPath:   *configPath,
-		chatID:       *chatID,
+		chatID:       chatID,
 		service:      *service,
 		once:         *once,
 		forgetLatest: forgetLatest,
@@ -116,13 +121,6 @@ func validateCommandOptions(options commandOptions) (commandOptions, error) {
 	}
 	if options.service && options.chatID != "" {
 		return options, invalidArguments("-chat is incompatible with -service")
-	}
-	if options.chatID != "" {
-		normalized, err := config.NormalizeChatID(options.chatID)
-		if err != nil {
-			return options, invalidArguments(fmt.Sprintf("-chat: %s", err))
-		}
-		options.chatID = normalized
 	}
 	if options.forgetLatest.set && options.forgetLatest.value <= 0 {
 		return options, invalidArguments("-forget-latest must be positive")

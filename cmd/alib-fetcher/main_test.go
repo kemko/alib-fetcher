@@ -619,13 +619,17 @@ func Test_run_rejects_cli_syntax_before_reading_config_or_opening_state(t *testi
 		{"-once", "-config"},
 		{"-unknown"},
 		{"-once", "unexpected"},
+		{"-once", "-chat="},
+		{"-once", "-chat", ""},
+		{"-service", "-chat="},
+		{"-forget-latest", "1", "-chat="},
 	} {
 		t.Run(strings.Join(arguments, "_"), func(t *testing.T) {
 			missingConfig := filepath.Join(t.TempDir(), "missing.toml")
 			useCommandLine(t, append(arguments, "-config", missingConfig)...)
 			err := run(slog.New(slog.DiscardHandler))
-			require.Error(t, err)
-			require.NotErrorIs(t, err, config.ErrInvalid)
+			var argumentErr commandError
+			require.ErrorAs(t, err, &argumentErr)
 			require.NoFileExists(t, missingConfig)
 		})
 	}

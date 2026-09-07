@@ -84,9 +84,11 @@ alib-fetcher -forget-latest 6 -chat=-1001234567890 -config ./config.toml
 
 Exactly one of `-service`, `-once`, and `-forget-latest N` is required.
 `-chat` is optional for `-once`, required for `-forget-latest`, and forbidden
-for `-service`. No arguments and `-h`/`-help` print help. Argument errors print
-help and exit with status 2; configuration and runtime errors exit with status
-1. `-once` does not start scheduling, callback polling, or config watching;
+for `-service`. An explicitly empty `-chat` is an argument error; only omitting
+it selects every recipient in `-once`. No arguments and `-h`/`-help` print help.
+Argument errors print help and exit with status 2; configuration and runtime
+errors exit with status 1. `-once` does not start scheduling, callback polling,
+or config watching;
 without `-chat` it attempts every recipient and reports errors after all
 recipients finish. `-forget-latest` reads only the state mapping, so it needs
 no Telegram token or search source and performs no HTTP requests.
