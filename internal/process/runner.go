@@ -14,6 +14,8 @@ type digestRunner struct {
 	statePath    string
 	chatID       string
 	lock         sync.Mutex
+	lifecycle    sync.Mutex
+	stopping     bool
 	runs         sync.WaitGroup
 	refreshRuns  sync.WaitGroup
 }
@@ -41,7 +43,9 @@ func newDigestRunnerWithChat(
 }
 
 func (r *digestRunner) runStartup(ctx context.Context) {
-	r.runs.Add(1)
+	if !r.beginRun() {
+		return
+	}
 	defer r.runs.Done()
 	r.lock.Lock()
 	defer r.lock.Unlock()
@@ -51,7 +55,9 @@ func (r *digestRunner) runStartup(ctx context.Context) {
 }
 
 func (r *digestRunner) runScheduled(ctx context.Context) {
-	r.runs.Add(1)
+	if !r.beginRun() {
+		return
+	}
 	defer r.runs.Done()
 	if !r.lock.TryLock() {
 		return
@@ -66,6 +72,11 @@ func (r *digestRunner) tryStartRefresh(
 	ctx context.Context,
 	beforeDelivery func(context.Context) error,
 ) bool {
+	r.lifecycle.Lock()
+	defer r.lifecycle.Unlock()
+	if r.stopping {
+		return false
+	}
 	if !r.lock.TryLock() {
 		return false
 	}
@@ -85,6 +96,24 @@ func (r *digestRunner) tryStartRefresh(
 func (r *digestRunner) wait() {
 	r.refreshRuns.Wait()
 	r.runs.Wait()
+}
+
+func (r *digestRunner) stopAndWait() {
+	r.lifecycle.Lock()
+	r.stopping = true
+	r.lifecycle.Unlock()
+	r.wait()
+}
+
+func (r *digestRunner) beginRun() bool {
+	r.lifecycle.Lock()
+	defer r.lifecycle.Unlock()
+	if r.stopping {
+		return false
+	}
+	r.runs.Add(1)
+
+	return true
 }
 
 func (r *digestRunner) runLocked(

@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	telegrambot "github.com/go-telegram/bot"
@@ -41,10 +43,15 @@ type ClientConfig struct {
 }
 
 // Client owns one Telegram SDK client and its callback polling state.
-type Client struct {
-	bot       *telegrambot.Bot
-	sdkErrors chan error
-	secrets   []string
+type Client struct { //nolint:govet // bot replacement state stays grouped for serialized timeout updates.
+	bot          *telegrambot.Bot
+	httpClient   *http.Client
+	token        string
+	timeout      time.Duration
+	botMutex     sync.RWMutex
+	lastUpdateID atomic.Int64
+	sdkErrors    chan error
+	secrets      []string
 }
 
 // NewClient validates the API settings without exposing the bot token.
@@ -69,24 +76,54 @@ func newClient(config ClientConfig, client *http.Client) (*Client, error) {
 	client.Timeout = config.Timeout
 	client.Transport = &responseLimitRoundTripper{base: transport}
 	telegramClient := &Client{
-		secrets:   []string{config.Token, standardAPIBase},
-		sdkErrors: make(chan error, 1),
+		httpClient: client,
+		token:      config.Token,
+		timeout:    config.Timeout,
+		secrets:    []string{config.Token, standardAPIBase},
+		sdkErrors:  make(chan error, 1),
 	}
-	sdkBot, err := telegrambot.New(
-		config.Token,
-		telegrambot.WithHTTPClient(sdkPollTimeout(config.Timeout), &sdkHTTPClient{client: client}),
-		telegrambot.WithSkipGetMe(),
-		telegrambot.WithAllowedUpdates(telegrambot.AllowedUpdates{models.AllowedUpdateCallbackQuery}),
-		telegrambot.WithErrorsHandler(telegramClient.handleSDKError),
-		telegrambot.WithDefaultHandler(ignoreSDKUpdate),
-		telegrambot.WithNotAsyncHandlers(),
-	)
+	sdkBot, err := telegramClient.newSDKBot(config.Timeout, 0)
 	if err != nil {
 		return nil, &safeCauseError{message: "create Telegram SDK client", cause: err}
 	}
 	telegramClient.bot = sdkBot
 
 	return telegramClient, nil
+}
+
+// SetTimeout updates the SDK polling timeout while preserving its update offset.
+func (c *Client) SetTimeout(timeout time.Duration) error {
+	if timeout <= 0 {
+		return errors.New("update Telegram client: timeout must be positive")
+	}
+
+	c.botMutex.Lock()
+	defer c.botMutex.Unlock()
+	if c.timeout == timeout {
+		return nil
+	}
+	sdkBot, err := c.newSDKBot(timeout, c.lastUpdateID.Load())
+	if err != nil {
+		return &safeCauseError{message: "update Telegram client", cause: err}
+	}
+	c.httpClient.Timeout = timeout
+	c.bot = sdkBot
+	c.timeout = timeout
+
+	return nil
+}
+
+func (c *Client) newSDKBot(timeout time.Duration, initialOffset int64) (*telegrambot.Bot, error) {
+	return telegrambot.New(
+		c.token,
+		telegrambot.WithHTTPClient(sdkPollTimeout(timeout), &sdkHTTPClient{client: c.httpClient}),
+		telegrambot.WithSkipGetMe(),
+		telegrambot.WithAllowedUpdates(telegrambot.AllowedUpdates{models.AllowedUpdateCallbackQuery}),
+		telegrambot.WithErrorsHandler(c.handleSDKError),
+		telegrambot.WithDefaultHandler(c.observeSDKUpdate),
+		telegrambot.WithNotAsyncHandlers(),
+		telegrambot.WithInitialOffset(initialOffset),
+	)
 }
 
 // NewSender creates a sender bound to one Telegram chat.
@@ -145,7 +182,10 @@ func (s *Sender) Send(ctx context.Context, text string, silent bool, attachRefre
 	}
 
 	sdkCtx, call := beginSDKCall(ctx)
-	_, err := s.client.bot.SendRichMessage(sdkCtx, params)
+	s.client.botMutex.RLock()
+	bot := s.client.bot
+	s.client.botMutex.RUnlock()
+	_, err := bot.SendRichMessage(sdkCtx, params)
 
 	return s.client.normalizeSDKCallError(ctx, call, err)
 }

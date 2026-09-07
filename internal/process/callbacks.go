@@ -41,6 +41,16 @@ func startCallbackGroups(
 	runners []*digestRunner,
 	logger *slog.Logger,
 ) <-chan struct{} {
+	return startCallbackGroupsWithRunContext(ctx, ctx, recipients, runners, logger)
+}
+
+func startCallbackGroupsWithRunContext(
+	pollCtx context.Context,
+	runCtx context.Context,
+	recipients []Recipient,
+	runners []*digestRunner,
+	logger *slog.Logger,
+) <-chan struct{} {
 	groups := make([]callbackGroup, 0, len(recipients))
 	for index, recipient := range recipients {
 		if recipient.Callbacks == nil {
@@ -70,9 +80,9 @@ func startCallbackGroups(
 		go func(group callbackGroup) {
 			defer listeners.Done()
 			group.client.ListenCallbacks(
-				ctx,
+				pollCtx,
 				func(callbackCtx context.Context, callback telegram.Callback) {
-					handleGroupedCallback(callbackCtx, group, callback, logger)
+					handleGroupedCallbackWithRunContext(callbackCtx, runCtx, group, callback, logger)
 				},
 				func(errorCtx context.Context, err error) {
 					logger.ErrorContext(errorCtx, "callback.poll_failed", slog.Any(logKeyError, err))
@@ -107,6 +117,16 @@ func handleGroupedCallback(
 	callback telegram.Callback,
 	logger *slog.Logger,
 ) {
+	handleGroupedCallbackWithRunContext(ctx, ctx, group, callback, logger)
+}
+
+func handleGroupedCallbackWithRunContext(
+	answerCtx context.Context,
+	runCtx context.Context,
+	group callbackGroup,
+	callback telegram.Callback,
+	logger *slog.Logger,
+) {
 	if callback.Data != telegram.RefreshCallbackData {
 		return
 	}
@@ -117,18 +137,18 @@ func handleGroupedCallback(
 			continue
 		}
 		if match != nil {
-			answerRefreshCallback(ctx, group.client, callback.ID, refreshUnavailableText, logger)
+			answerRefreshCallback(answerCtx, group.client, callback.ID, refreshUnavailableText, logger)
 
 			return
 		}
 		match = &group.recipients[index]
 	}
 	if match == nil {
-		answerRefreshCallback(ctx, group.client, callback.ID, refreshUnavailableText, logger)
+		answerRefreshCallback(answerCtx, group.client, callback.ID, refreshUnavailableText, logger)
 
 		return
 	}
-	handleRefreshCallback(ctx, group.client, match.runner, callback, logger)
+	handleRefreshCallbackWithRunContext(answerCtx, runCtx, group.client, match.runner, callback, logger)
 }
 
 func startCallbackListening(
@@ -194,6 +214,17 @@ func handleRefreshCallback(
 	callback telegram.Callback,
 	logger *slog.Logger,
 ) {
+	handleRefreshCallbackWithRunContext(ctx, ctx, callbacks, runner, callback, logger)
+}
+
+func handleRefreshCallbackWithRunContext(
+	answerCtx context.Context,
+	runCtx context.Context,
+	callbacks CallbackClient,
+	runner *digestRunner,
+	callback telegram.Callback,
+	logger *slog.Logger,
+) {
 	beforeDelivery := func(runCtx context.Context) error {
 		if err := callbacks.RemoveReplyMarkup(runCtx, callback.MessageChatID, callback.MessageID); err != nil {
 			return fmt.Errorf("remove refresh button: %w", err)
@@ -201,14 +232,14 @@ func handleRefreshCallback(
 
 		return nil
 	}
-	started := runner.tryStartRefresh(ctx, beforeDelivery)
+	started := runner.tryStartRefresh(runCtx, beforeDelivery)
 	if started {
-		answerRefreshCallback(ctx, callbacks, callback.ID, refreshStartedText, logger)
+		answerRefreshCallback(answerCtx, callbacks, callback.ID, refreshStartedText, logger)
 
 		return
 	}
 
-	answerRefreshCallback(ctx, callbacks, callback.ID, refreshAlreadyRunningText, logger)
+	answerRefreshCallback(answerCtx, callbacks, callback.ID, refreshAlreadyRunningText, logger)
 }
 
 func answerRefreshCallback(

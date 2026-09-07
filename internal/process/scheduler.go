@@ -12,12 +12,21 @@ func newSchedulerForRunners(
 	settings Settings,
 	runners []*digestRunner,
 ) (*cron.Cron, error) {
+	return newSchedulerForRunnersWithRunContext(ctx, ctx, settings, runners)
+}
+
+func newSchedulerForRunnersWithRunContext(
+	_ context.Context,
+	runCtx context.Context,
+	settings Settings,
+	runners []*digestRunner,
+) (*cron.Cron, error) {
 	scheduler := cron.New(
 		cron.WithLocation(settings.Location),
 	)
 	for _, runner := range runners {
 		job := func() {
-			runner.runScheduled(ctx)
+			runner.runScheduled(runCtx)
 		}
 		if _, scheduleErr := scheduler.AddFunc(settings.CronSpec, job); scheduleErr != nil {
 			return nil, fmt.Errorf("schedule digest: %w", scheduleErr)
@@ -40,9 +49,12 @@ func runSchedulerForRunners(
 	}
 	scheduler.Start()
 	<-ctx.Done()
+	for _, runner := range runners {
+		runner.requestStop()
+	}
 	<-scheduler.Stop().Done()
 	for _, runner := range runners {
-		runner.wait()
+		runner.stopAndWait()
 	}
 }
 

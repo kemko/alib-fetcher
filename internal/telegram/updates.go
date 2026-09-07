@@ -24,11 +24,15 @@ type CallbackErrorHandler func(context.Context, error)
 
 // ListenCallbacks runs SDK-managed polling until ctx is canceled.
 func (c *Client) ListenCallbacks(ctx context.Context, handle CallbackHandler, reportError CallbackErrorHandler) {
-	handlerID := c.bot.RegisterHandler(
+	c.botMutex.RLock()
+	bot := c.bot
+	c.botMutex.RUnlock()
+	handlerID := bot.RegisterHandler(
 		telegrambot.HandlerTypeCallbackQueryData,
 		RefreshCallbackData,
 		telegrambot.MatchTypeExact,
 		func(_ context.Context, _ *telegrambot.Bot, update *models.Update) {
+			c.observeUpdate(update)
 			if handle == nil || update.CallbackQuery == nil {
 				return
 			}
@@ -36,21 +40,24 @@ func (c *Client) ListenCallbacks(ctx context.Context, handle CallbackHandler, re
 			handle(ctx, callbackFromSDK(update.CallbackQuery))
 		},
 	)
-	defer c.bot.UnregisterHandler(handlerID)
+	defer bot.UnregisterHandler(handlerID)
 
 	errorsDone := make(chan struct{})
 	go func() {
 		defer close(errorsDone)
 		c.reportCallbackErrors(ctx, reportError)
 	}()
-	c.bot.Start(ctx)
+	bot.Start(ctx)
 	<-errorsDone
 }
 
 // AnswerCallback acknowledges a Telegram callback query.
 func (c *Client) AnswerCallback(ctx context.Context, callbackID string, text string) error {
 	sdkCtx, call := beginSDKCall(ctx)
-	_, err := c.bot.AnswerCallbackQuery(sdkCtx, &telegrambot.AnswerCallbackQueryParams{
+	c.botMutex.RLock()
+	bot := c.bot
+	c.botMutex.RUnlock()
+	_, err := bot.AnswerCallbackQuery(sdkCtx, &telegrambot.AnswerCallbackQueryParams{
 		CallbackQueryID: callbackID,
 		Text:            text,
 	})
@@ -61,7 +68,10 @@ func (c *Client) AnswerCallback(ctx context.Context, callbackID string, text str
 // RemoveReplyMarkup removes the inline keyboard from a message.
 func (c *Client) RemoveReplyMarkup(ctx context.Context, chatID int64, messageID int) error {
 	sdkCtx, call := beginSDKCall(ctx)
-	_, err := c.bot.EditMessageReplyMarkup(sdkCtx, &telegrambot.EditMessageReplyMarkupParams{
+	c.botMutex.RLock()
+	bot := c.bot
+	c.botMutex.RUnlock()
+	_, err := bot.EditMessageReplyMarkup(sdkCtx, &telegrambot.EditMessageReplyMarkupParams{
 		ChatID:    chatID,
 		MessageID: messageID,
 		ReplyMarkup: models.InlineKeyboardMarkup{
@@ -88,7 +98,15 @@ func (c *Client) reportCallbackErrors(ctx context.Context, reportError CallbackE
 	}
 }
 
-func ignoreSDKUpdate(context.Context, *telegrambot.Bot, *models.Update) {}
+func (c *Client) observeSDKUpdate(_ context.Context, _ *telegrambot.Bot, update *models.Update) {
+	c.observeUpdate(update)
+}
+
+func (c *Client) observeUpdate(update *models.Update) {
+	if update != nil {
+		c.lastUpdateID.Store(update.ID)
+	}
+}
 
 func callbackFromSDK(query *models.CallbackQuery) Callback {
 	callback := Callback{ID: query.ID, Data: query.Data}

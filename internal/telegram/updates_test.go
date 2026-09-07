@@ -264,6 +264,65 @@ func Test_Sender_listener_applies_short_HTTP_timeout_to_polling(t *testing.T) {
 	assert.Equal(t, int32(1), requestCount.Load())
 }
 
+func Test_Client_timeout_change_preserves_update_offset(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	var requests atomic.Int32
+	secondPoll := make(chan struct{})
+	thirdPoll := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		count := requests.Add(1)
+		assert.Equal(t, "/bottest-token/getUpdates", request.URL.Path)
+		payload := readMultipartPayload(t, request)
+		switch count {
+		case 1:
+			assert.Equal(t, "1", payload["offset"])
+			assert.Equal(t, "3", payload["timeout"])
+			writeTelegramResponse(t, writer, `{"ok":true,"result":[{"update_id":100,"callback_query":{"id":"unknown","data":"unknown"}}]}`)
+		case 2:
+			close(secondPoll)
+			<-releaseSecond
+		case 3:
+			assert.Equal(t, "101", payload["offset"])
+			assert.Equal(t, "6", payload["timeout"])
+			close(thirdPoll)
+			writeTelegramResponse(t, writer, `{"ok":true,"result":[]}`)
+		default:
+			<-request.Context().Done()
+		}
+	}))
+	t.Cleanup(server.Close)
+	client, err := newTestClientWithTimeout(server.URL, 4*time.Second)
+	require.NoError(t, err)
+	firstCtx, firstCancel := context.WithCancel(context.Background())
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		client.ListenCallbacks(firstCtx, nil, nil)
+	}()
+	waitForSignal(t, secondPoll, "first polling cycle did not start its second request")
+	firstCancel()
+	close(releaseSecond)
+	waitForListener(t, firstDone)
+
+	// When
+	require.NoError(t, client.SetTimeout(7*time.Second))
+	secondCtx, secondCancel := context.WithCancel(context.Background())
+	secondDone := make(chan struct{})
+	go func() {
+		defer close(secondDone)
+		client.ListenCallbacks(secondCtx, nil, nil)
+	}()
+	waitForSignal(t, thirdPoll, "restarted polling did not reach the server")
+	secondCancel()
+
+	// Then
+	waitForListener(t, secondDone)
+	require.Equal(t, int32(3), requests.Load())
+}
+
 func Test_Sender_answers_callback_query(t *testing.T) {
 	t.Parallel()
 

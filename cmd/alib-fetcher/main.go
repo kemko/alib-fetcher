@@ -135,30 +135,76 @@ func runWithConfig(logger *slog.Logger, settings config.Config, once bool) error
 }
 
 func runWithConfigForChat(logger *slog.Logger, settings config.Config, once bool, selectedChat string) error {
+	factory := newRuntimeFactory(logger)
+	initial, err := factory.snapshot(settings, selectedChat)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	if once {
+		return process.RunRecipients(ctx, initial.Settings, initial.Recipients, true, logger)
+	}
+
+	return process.RunReloadable(ctx, initial, func(loadCtx context.Context) (process.ReloadSnapshot, error) {
+		if loadErr := loadCtx.Err(); loadErr != nil {
+			return process.ReloadSnapshot{}, loadErr
+		}
+		latest, loadErr := config.Load(settings.Path)
+		if loadErr != nil {
+			return process.ReloadSnapshot{}, loadErr
+		}
+
+		return factory.snapshot(latest, selectedChat)
+	}, logger)
+}
+
+type runtimeFactory struct {
+	clients map[string]*telegram.Client
+	logger  *slog.Logger
+}
+
+func newRuntimeFactory(logger *slog.Logger) *runtimeFactory {
+	return &runtimeFactory{
+		clients: make(map[string]*telegram.Client),
+		logger:  logger,
+	}
+}
+
+func (factory *runtimeFactory) snapshot(
+	settings config.Config,
+	selectedChat string,
+) (process.ReloadSnapshot, error) {
 	recipients := make([]process.Recipient, 0, len(settings.Chats))
-	clients := make(map[string]*telegram.Client, len(settings.Chats))
+	usedClients := make(map[*telegram.Client]struct{}, len(settings.Chats))
 	for _, chat := range settings.Chats {
 		if selectedChat != "" && chat.ChatID != selectedChat {
 			continue
 		}
-		fetcher, err := alib.NewClient(chat.AlibURLs, settings.HTTPTimeout, settings.AlibMaxRetries, logger)
+		fetcher, err := alib.NewClient(
+			chat.AlibURLs,
+			settings.HTTPTimeout,
+			settings.AlibMaxRetries,
+			factory.logger,
+		)
 		if err != nil {
-			return err
+			return process.ReloadSnapshot{}, err
 		}
-		telegramClient := clients[chat.TelegramToken]
+		telegramClient := factory.clients[chat.TelegramToken]
 		if telegramClient == nil {
 			telegramClient, err = telegram.NewClient(telegram.ClientConfig{
 				Token:   chat.TelegramToken,
 				Timeout: settings.HTTPTimeout,
 			})
 			if err != nil {
-				return err
+				return process.ReloadSnapshot{}, err
 			}
-			clients[chat.TelegramToken] = telegramClient
+			factory.clients[chat.TelegramToken] = telegramClient
 		}
+		usedClients[telegramClient] = struct{}{}
 		telegramAdapter, err := telegramClient.NewSender(chat.ChatID)
 		if err != nil {
-			return err
+			return process.ReloadSnapshot{}, err
 		}
 		var freshBooks app.FreshBooksPolicy
 		if settings.FreshBooks != nil {
@@ -180,18 +226,29 @@ func runWithConfigForChat(logger *slog.Logger, settings config.Config, once bool
 	}
 	if len(recipients) == 0 {
 		if selectedChat == "" {
-			return errors.New("no recipients configured")
+			return process.ReloadSnapshot{}, errors.New("no recipients configured")
 		}
-		return fmt.Errorf("unknown chat %q", selectedChat)
+		return process.ReloadSnapshot{}, fmt.Errorf("unknown chat %q", selectedChat)
 	}
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
 
-	return process.RunRecipients(ctx, process.Settings{
-		CronSpec:     settings.CronSchedule,
-		Location:     settings.Location,
-		RunOnStartup: settings.RunOnStartup,
-	}, recipients, once, logger)
+	return process.ReloadSnapshot{
+		Settings: process.Settings{
+			CronSpec:     settings.CronSchedule,
+			Location:     settings.Location,
+			RunOnStartup: settings.RunOnStartup,
+		},
+		Recipients: recipients,
+		Key:        settings,
+		Prepare: func() error {
+			for client := range usedClients {
+				if err := client.SetTimeout(settings.HTTPTimeout); err != nil {
+					return err
+				}
+			}
+
+			return nil
+		},
+	}, nil
 }
 
 type forgetLatestOption struct {
