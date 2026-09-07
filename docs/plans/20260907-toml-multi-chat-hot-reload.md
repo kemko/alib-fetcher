@@ -347,19 +347,19 @@ title = ["Понедельник начинается в субботу"]
 - Modify: `.github/workflows/ci.yml`
 - Modify: `internal/config/config_test.go`
 
-- [ ] Документировать TOML-поля, значения select/checkbox, порядок запросов, общие настройки и настройки
+- [x] Документировать TOML-поля, значения select/checkbox, порядок запросов, общие настройки и настройки
       получателя.
-- [ ] Описать -service, оба варианта -once, -forget-latest, справку и переход с прежнего STATE_PATH на общий
+- [x] Описать -service, оба варианта -once, -forget-latest, справку и переход с прежнего STATE_PATH на общий
       каталог и state_file. CLAUDE.md отсутствует; обновить AGENTS.md.
-- [ ] Завершить перевод Compose на конфигурационный каталог: atomic rename должен быть виден контейнеру.
+- [x] Завершить перевод Compose на конфигурационный каталог: atomic rename должен быть виден контейнеру.
       Удалить сервисные переменные окружения и сохранить ALIB_FETCHER_IMAGE как параметр выбора образа.
-- [ ] Сохранить nonroot, read-only rootfs, ограничения capabilities и существующий volume
+- [x] Сохранить nonroot, read-only rootfs, ограничения capabilities и существующий volume
       /var/lib/alib-fetcher. Документировать доступ UID 65532 к TOML с токенами.
-- [ ] Исключить локальные конфиги из Git и Docker context, оставить credential-free config.example.toml
+- [x] Исключить локальные конфиги из Git и Docker context, оставить credential-free config.example.toml
       доступным для отслеживания. Обновить автоматические проверки исключений CI и убрать фиктивные
       Telegram-переменные из проверки Compose.
-- [ ] Обновить тест чтения config.example.toml и проверки документированных сценариев запуска.
-- [ ] Выполнить make verify, make coverage и docker compose config --quiet.
+- [x] Обновить тест чтения config.example.toml и проверки документированных сценариев запуска.
+- [x] Выполнить make verify, make coverage и docker compose config --quiet.
 
 ## Ограничения
 

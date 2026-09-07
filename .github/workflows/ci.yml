@@ -40,11 +40,16 @@ jobs:
           git check-ignore --no-index --quiet .env
           git check-ignore --no-index --quiet .env.local
           git check-ignore --no-index --quiet data/state.db
+          git check-ignore --no-index --quiet config.toml
+          git check-ignore --no-index --quiet config/config.toml
           if git check-ignore --no-index --quiet .env.example; then
             exit 1
           fi
-          mkdir -p data nested .ralphex
-          touch .env .env.local data/state.db state.db nested/state.db .ralphex/secret
+          if git check-ignore --no-index --quiet config.example.toml; then
+            exit 1
+          fi
+          mkdir -p data nested config .ralphex
+          touch .env .env.local data/state.db state.db nested/state.db config.toml config/config.toml .ralphex/secret
           docker buildx build \
             --file .github/docker-context.Dockerfile \
             --output type=local,dest="${RUNNER_TEMP}/docker-context" \
@@ -55,11 +60,10 @@ jobs:
           test ! -e "${RUNNER_TEMP}/docker-context/context/data/state.db"
           test ! -e "${RUNNER_TEMP}/docker-context/context/state.db"
           test ! -e "${RUNNER_TEMP}/docker-context/context/nested/state.db"
+          test ! -e "${RUNNER_TEMP}/docker-context/context/config.toml"
+          test ! -e "${RUNNER_TEMP}/docker-context/context/config/config.toml"
           test ! -e "${RUNNER_TEMP}/docker-context/context/.ralphex/secret"
       - name: Validate Compose configuration
-        env:
-          TELEGRAM_BOT_TOKEN: dummy-token
-          TELEGRAM_CHAT_ID: "-1001234567890"
         run: docker compose config --quiet
 
   image:

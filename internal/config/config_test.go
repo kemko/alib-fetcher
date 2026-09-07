@@ -231,6 +231,18 @@ func TestLoad_reads_repository_example(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, loaded.Chats, 2)
+	require.Equal(t, "/var/lib/alib-fetcher/state.db", loaded.Chats[0].StatePath)
+	require.Equal(t, "/var/lib/alib-fetcher/@another_channel.db", loaded.Chats[1].StatePath)
+	require.Equal(t, []string{
+		"https://www.alib.ru/tramka.phtml?tnew=7",
+		"https://www.alib.ru/detektivy.phtml?tnew=7",
+		"https://alib.ru/findp.php4?seria=%CB%E8%F2%E5%F0%E0%F2%F3%F0%ED%FB%E5+%EF%E0%EC%FF%F2%ED%E8%EA%E8&lday=7",
+		"https://alib.ru/findp.php4?seria=%C6%C7%CB&lday=7",
+		"https://alib.ru/findp.php4?izdat=%CD%E0%F3%EA%E0&lday=7",
+		"https://alib.ru/findp.php4?author=%D1%F2%F0%F3%E3%E0%F6%EA%E8%E5&seria=%C1%E8%E1%EB%E8%EE%F2%E5%EA%E0+%EF%F0%E8%EA%EB%FE%F7%E5%ED%E8%E9&cena2=3000&lday=14&fotoonly=da",
+	}, loaded.Chats[0].AlibURLs)
+	require.Equal(t, "REPLACE_WITH_TOKEN", loaded.Chats[0].TelegramToken)
+	require.Equal(t, "REPLACE_WITH_ANOTHER_TOKEN", loaded.Chats[1].TelegramToken)
 }
 
 func writeConfig(t *testing.T, body string) string {

@@ -7,4 +7,6 @@
 /bin/
 /coverage.out
 /data/
+config.toml
+/config/
 /tnew7.txt

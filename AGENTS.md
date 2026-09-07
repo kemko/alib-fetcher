@@ -183,57 +183,46 @@ Preserve these semantics:
 
 ## Configuration contract
 
-Required for digest and service modes; `-forget-latest` reads only `STATE_PATH`
-and ignores the remaining service configuration:
+The process reads strict TOML from `./config.toml` or `-config PATH`. Global
+fields are `state_path` (default `/var/lib/alib-fetcher`, a directory),
+`cron_schedule` (`0 0 * * *`), `timezone` (`Europe/Moscow`), `run_on_startup`
+(`true`), `fresh_books` (empty), `http_timeout` (`30s`), `alib_max_retries`
+(`3`), and `message_limit` (`32000`, range `64..32768`). Relative
+`state_path` values are resolved from the config directory.
 
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_CHAT_ID` (signed decimal `int64` chat ID or non-empty `@channel`
-  username, with no whitespace)
+Each `[[chats]]` entry has `chat_id` (signed decimal `int64` or non-empty
+`@channel`), `telegram_token`, optional `state_file`, and search sources. A
+missing `state_file` uses `<normalized chat_id>.db`; numeric IDs use canonical
+decimal form and usernames are lowercased. A state file is only a filename:
+absolute paths, separators, NUL, `.`, and `..` are rejected. Normalized IDs and
+resolved state files must be unique. The old single-file setting
+`STATE_PATH=/path/state.db` maps to `state_path = "/path"` and
+`state_file = "state.db"`; the existing database is opened in place.
 
-Optional defaults:
+Search sources are `categories`, `filters`, and `queries`. Categories contain
+non-empty ASCII-letter names and use `tnew=7`. The supported form fields are
+`author`, `title`, `seria`, `izdat`, `gorodiz`, `isbnp`, `god1`, `god2`,
+`cena1`, `cena2`, `sod`, `bsonly`, `gorod`, `lday`, `noreprint`, `nograv`,
+`fotoonly`, `minus`, `sumfind`, `tipfind`, and `sortby`. Values are strings;
+checkboxes (`noreprint`, `nograv`, `fotoonly`) accept only `da`, `sumfind`
+accepts `1..5`, `sortby` accepts `0..10`, and `tipfind` accepts the Alib rubric
+identifiers. Missing `lday` becomes `7`. Each filter value creates one
+request; each query map creates one request with all its fields. Requests run
+in category, form-field, then query order; duplicate URLs are removed after
+the first. Values are encoded in Windows-1251, then URL-escaped. Every chat
+needs at least one source.
 
-| Variable | Default | Validation/meaning |
-| --- | --- | --- |
-| `CRON_SCHEDULE` | `0 0 * * *` | robfig standard five-field cron; descriptors such as `@hourly` and `@every 6h` are accepted |
-| `TIMEZONE` | `Europe/Moscow` | IANA location used by cron and publication-year markers |
-| `RUN_ON_STARTUP` | `true` | whether service mode runs one digest cycle immediately after startup |
-| `FRESH_BOOKS` | empty | optional inclusive `✨` threshold: `age:N` or `since:YYYY`; empty disables only `✨` |
-| `STATE_PATH` | `/var/lib/alib-fetcher/state.db` | bbolt database; parent directories are created with mode `0750`, DB with `0600` |
-| `ALIB_CATEGORIES` | empty | Optional one-record CSV list of non-empty ASCII-letter category names; each becomes `https://www.alib.ru/<category>.phtml?tnew=7` |
-| `ALIB_SERIES` | empty | Optional one-record CSV list of Unicode series names representable in Windows-1251; each becomes `https://alib.ru/findp.php4?seria=<encoded>&lday=7` |
-| `ALIB_PUBLISHERS` | empty | Optional one-record CSV list of Unicode publisher names representable in Windows-1251; each becomes `https://alib.ru/findp.php4?izdat=<encoded>&lday=7` |
-| `ALIB_MAX_RETRIES` | `3` | Number of additional attempts after the first failed Alib request; `0` disables retries; cenkalti/backoff delays are 1, 2, 4, 8, 16, then 30 seconds, capped at 30 seconds |
-| `HTTP_TIMEOUT` | `30s` | positive Go duration applied per external request |
-| `MESSAGE_LIMIT` | `32000` | displayed Rich Message text rune count after HTML parsing, allowed range 64..32768 |
+`-service` runs all chats with independent runners, shared-token polling, and
+config watching. `-once` runs all chats or the selected `-chat` without
+scheduling, polling, or watching. `-forget-latest N` requires `-chat` and reads
+only the state mapping; it needs no token, source, or schedule and makes no
+HTTP requests. Exactly one mode is required; no arguments and help print the
+usage. Unknown or incompatible arguments exit 2; config and runtime failures
+exit 1. Tokens and TOML contents are never logged.
 
-Invalid configuration, including a malformed or overflowing
-`TELEGRAM_CHAT_ID`, prevents process startup. Errors name the invalid variable.
-`ALIB_CATEGORIES`, `ALIB_SERIES`, and `ALIB_PUBLISHERS` are optional separately,
-but at least one must contain a non-empty CSV list. Lists reject empty elements
-and malformed quotes; surrounding whitespace is trimmed. Categories accept only
-ASCII letters. Series and publishers are entered as Unicode, including commas
-when CSV-quoted, but each value must be representable in Windows-1251. Their
-Windows-1251 bytes are percent-encoded as one `seria` or `izdat` query value; an
-unrepresentable character is a configuration error naming the source variable.
-Generated endpoints always use the fixed seven-day window (`tnew=7` for
-categories and `lday=7` for series and publishers), retaining
-category-then-series-then-publisher order and ignoring repeated series or
-publisher names after their first occurrence.
-Never log or expose the bot token; note that the SDK internally puts it in the
-Bot API URL.
-
-`FRESH_BOOKS=age:N` accepts a non-negative integer and sets the inclusive lower
-year to `current local year - N`; `age:0` therefore includes only the current
-year. `FRESH_BOOKS=since:YYYY` accepts a four-digit inclusive lower year. Empty
-or absent `FRESH_BOOKS` disables `✨`, not `🔥`. The cycle time in `TIMEZONE`
-controls classification: the current year gets `🔥`; in January, the previous
-year also gets `🔥` regardless of the optional threshold. Other recognized
-years from the threshold through the current year get `✨`. A recognized year
-greater than the current year gets `🛸` independently of `FRESH_BOOKS`; a year
-`0` also gets `🛸`, while other unrecognized years get no marker. The recognized
-year is the last four-digit year in the bibliography followed by `г` or `г.`;
-years elsewhere in
-the listing do not participate.
+`fresh_books` accepts `age:N` or `since:YYYY`; the threshold is inclusive.
+Publication-year marker behavior remains controlled by `timezone` as described
+in the digest tests and renderer.
 
 ## Digest and transport details
 
@@ -370,18 +359,21 @@ retention boundaries, message limits, startup scheduling, and cancellation.
 Useful local run commands:
 
 ```bash
-TELEGRAM_BOT_TOKEN=... TELEGRAM_CHAT_ID=... STATE_PATH=./data/state.db \
-  go run ./cmd/alib-fetcher -once
+go run ./cmd/alib-fetcher -once -config ./config.toml
 
-TELEGRAM_BOT_TOKEN=... TELEGRAM_CHAT_ID=... CRON_SCHEDULE='*/30 * * * *' \
-  STATE_PATH=./data/state.db go run ./cmd/alib-fetcher
+go run ./cmd/alib-fetcher -once -chat=-1001234567890 -config ./config.toml
+
+go run ./cmd/alib-fetcher -service -config ./config.toml
+
+go run ./cmd/alib-fetcher -forget-latest 10 -chat=-1001234567890 \
+  -config ./config.toml
 ```
 
-Local files `.env`, `.env.*`, `data/`, `bin/`, `coverage.out`, and `tnew7.txt`
-are ignored; a credential-free `.env.example` may be tracked. `.env*`, local
-data, and database files are excluded from the Docker build context. Do not
-commit credentials, state databases, captured production data, or generated
-binaries.
+Local files `.env`, `.env.*`, `config.toml`, `config/`, `data/`, `bin/`,
+`coverage.out`, and `tnew7.txt` are ignored. The credential-free
+`config.example.toml` remains tracked. Local configs, data, and database files
+are excluded from the Docker build context. Do not commit credentials, state
+databases, captured production data, or generated binaries.
 
 ## Change and commit policy
 
@@ -416,9 +408,10 @@ volume mounted at `/var/lib/alib-fetcher`; do not move mutable state elsewhere
 without updating the image, Compose, and README together. Preserve the nonroot
 runtime, capability drop, and `no-new-privileges` hardening.
 
-For Compose, `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` must come from the
-environment. `FRESH_BOOKS`, `TIMEZONE`, and `ALIB_FETCHER_IMAGE` are
-credential-free runtime overrides; Compose passes an empty `FRESH_BOOKS` by
-default. Never bake secrets into the image or commit them in Compose. Local
-`.env` files must stay untracked and out of the Docker build context;
-`.env.example` must never contain credentials.
+Compose mounts the local `config/` directory read-only at
+`/etc/alib-fetcher` and starts `-service -config /etc/alib-fetcher/config.toml`.
+Write a replacement beside the live file and rename it atomically in the same
+directory; this makes complete TOML snapshots visible to the container. The
+mounted file must be readable by UID/GID 65532 and contains Telegram tokens, so
+keep the directory private. `ALIB_FETCHER_IMAGE` is the only Compose
+environment override. Never bake secrets into the image or commit them.

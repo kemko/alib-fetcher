@@ -31,11 +31,16 @@ normalized IDs and state files are rejected.
 Search sources are `categories`, `filters`, and `queries`. Categories retain
 the existing ASCII-letter validation. Each filter value makes one independent
 Alib form request, in form-field order; each query map makes one request, in
-TOML order. All 21 Alib form fields are supported. Values are strings, checkbox
-values are `da`, `sumfind` is `1..5`, `sortby` is `0..10`, and `tipfind` uses
-the form rubric identifiers. Missing `lday` defaults to `7`. At least one
-source is required for every chat. Values are encoded as Windows-1251 before
-URL escaping.
+TOML order. Values are strings; checkbox values are `da`, `sumfind` is `1..5`,
+`sortby` is `0..10`, and `tipfind` uses the form rubric identifiers. The fields
+are `author`, `title`, `seria`,
+`izdat`, `gorodiz`, `isbnp`, `god1`, `god2`, `cena1`, `cena2`, `sod`, `bsonly`,
+`gorod`, `lday`, `noreprint`, `nograv`, `fotoonly`, `minus`, `sumfind`,
+`tipfind`, and `sortby`. Missing `lday` defaults to `7`; `filters` values are
+independent requests, while each `queries` map is one request containing all
+its fields. Sources run in category, form-field, then query order; duplicate
+URLs are removed after the first occurrence. At least one source is required
+for every chat. Values are encoded as Windows-1251 before URL escaping.
 
 The file is decoded strictly: unknown global or chat fields, malformed TOML,
 wrong types, invalid IDs, search values, and unsafe state names fail before
@@ -72,24 +77,34 @@ Exactly one of `-service`, `-once`, and `-forget-latest N` is required.
 `-chat` is optional for `-once`, required for `-forget-latest`, and forbidden
 for `-service`. No arguments and `-h`/`-help` print help. Argument errors print
 help and exit with status 2; configuration and runtime errors exit with status
-1. `-once` does not start scheduling, callback polling, or config watching.
+1. `-once` does not start scheduling, callback polling, or config watching;
+without `-chat` it attempts every recipient and reports errors after all
+recipients finish. `-forget-latest` reads only the state mapping, so it needs
+no Telegram token or search source and performs no HTTP requests.
 
 The service runs startup and scheduled work independently for each chat and
 uses one Telegram SDK client/poller for chats sharing a token. It keeps
 pending books and retention state per database. Refresh callbacks, retries,
 graceful shutdown, message limits, and delivery ordering follow the same
-policy as previous releases.
+policy as previous releases. A valid TOML change pauses new work, lets active
+digests finish with their old settings, then applies the complete new snapshot;
+invalid, deleted, or unreadable files leave the current snapshot active.
+
+To migrate the former single database, change an old `STATE_PATH=/path/state.db`
+to `state_path = "/path"` and set `state_file = "state.db"` for the matching
+chat. The old database is opened in place; no history is copied or rewritten.
 
 ## Container
 
 Compose runs the service from a read-only root filesystem and mounts the TOML
-directory read-only. Replace the file using an atomic rename so the container
-sees a complete configuration:
+directory read-only. The example contains placeholder tokens only. Replace the
+file using a temporary file in the same mounted directory and an atomic rename,
+so the container sees a complete configuration:
 
 ```bash
 mkdir -p config
-cp config.example.toml config/config.toml
-chmod 640 config/config.toml
+install -m 0640 config.example.toml config/config.toml.tmp
+mv -f config/config.toml.tmp config/config.toml
 docker compose up -d
 ```
 
@@ -97,6 +112,8 @@ The container keeps state in the named `/var/lib/alib-fetcher` volume and runs
 as UID/GID 65532. The mounted TOML must be readable by that user and contains
 Telegram tokens, so keep the directory private. `ALIB_FETCHER_IMAGE` remains
 the only Compose environment override; do not put credentials in Compose.
+`config/` and the root `config.toml` are ignored by Git and Docker context,
+while the credential-free `config.example.toml` remains trackable.
 
 ## Development
 
