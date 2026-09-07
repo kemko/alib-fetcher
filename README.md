@@ -145,12 +145,18 @@ same directory, edit it, and repeat the group, mode, and rename steps.
 
 ## Development
 
-Go 1.26.5 is supported. Run the canonical quality gate:
+Go 1.27.1 is supported. Run the canonical quality gate:
 
 ```bash
 make verify
 ```
 
+`make verify` checks formatting, runs lint, race-enabled tests and govulncheck,
+and builds the binary. Use `make govulncheck` to scan all packages separately;
+it requires access to the Go vulnerability database. `make tools` installs pinned
+golangci-lint and govulncheck versions under `bin/tools`; verification installs
+missing tools automatically and uses these same binaries locally and in CI.
+
 Use `make coverage` for the 80% total statement-coverage gate. CI uses these
-Make targets, runs `govulncheck`, validates Compose, and publishes the image
-only from a successful `master` push.
+Make targets, validates Compose, and publishes the image only from a successful
+`master` push.

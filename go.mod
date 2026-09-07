@@ -1,6 +1,6 @@
 module github.com/kemko/alib-fetcher
 
-go 1.26.5
+go 1.27.1
 
 require (
 	github.com/cenkalti/backoff/v7 v7.0.0
@@ -10,8 +10,8 @@ require (
 	github.com/stretchr/testify v1.11.1
 	github.com/urfave/cli/v3 v3.11.0
 	go.etcd.io/bbolt v1.4.3
-	golang.org/x/net v0.55.0
-	golang.org/x/text v0.37.0
+	golang.org/x/net v0.56.0
+	golang.org/x/text v0.39.0
 )
 
 require (

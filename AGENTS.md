@@ -8,8 +8,8 @@ bbolt database, renders pending books as Telegram HTML messages, sends them to
 configured chats, and records successful deliveries in each chat's database.
 
 The module is `github.com/kemko/alib-fetcher`. The executable entry point is
-`./cmd/alib-fetcher`. Go 1.26.5 is the supported toolchain; `make tools`
-installs the pinned golangci-lint v2 release.
+`./cmd/alib-fetcher`. Go 1.27.1 is the supported toolchain; `make tools`
+installs the pinned golangci-lint v2 and govulncheck releases.
 
 ## Runtime flow and invariants
 
@@ -178,7 +178,7 @@ Preserve these semantics:
   UID/GID 65532 (`nonroot`) and stores state under `/var/lib/alib-fetcher`.
 - `docker-compose.yml`: read-only, capability-dropped service with a persistent
   named state volume.
-- `.github/workflows/ci.yml`: runs `make verify` and `govulncheck` on pushes/PRs
+- `.github/workflows/ci.yml`: runs `make verify` (including govulncheck) on pushes/PRs
   to `master`, then validates Compose and builds the production image. Pull
   requests never log in or push; a successful `master` push publishes
   `ghcr.io/${github.repository}:latest` from its single image build. Ordinary
@@ -338,22 +338,23 @@ make verify
 ```
 
 It checks formatting, runs strict golangci-lint, executes race-enabled shuffled
-tests without cache, and builds the binary. It does not silently rewrite source
-files. The Makefile must remain sufficient and working for the full development
-cycle, including from a clean checkout:
+tests without cache, scans vulnerabilities with govulncheck, and builds the binary.
+It does not silently rewrite source files. The Makefile must remain sufficient
+and working for the full development cycle, including from a clean checkout:
 
 - `make fmt` formats all Go code with the configured golangci-lint formatters.
 - `make fmt-check` fails and prints a diff when Go code is not formatted.
 - `make lint` runs the complete configured linter set.
+- `make govulncheck` scans all packages using the Go vulnerability database.
 - `make test` runs the complete test suite with the race detector, shuffled
   order, and no result cache.
 - `make coverage` writes `coverage.out` and fails when total statement coverage
   is below 80%. It includes calls across repository packages with `-coverpkg=./...`.
 - `make build` compiles `bin/alib-fetcher` with reproducible path trimming.
-- `make tools` installs the exact golangci-lint version used by CI under the
-  ignored project-local `bin/tools` tree.
-- `make verify` runs `fmt-check`, `lint`, `test`, and `build`; it is also the
-  default `make` target and provisions the pinned tool automatically.
+- `make tools` installs the exact golangci-lint and govulncheck versions used by
+  CI under the ignored project-local `bin/tools` tree.
+- `make verify` runs `fmt-check`, `lint`, `test`, `govulncheck`, and `build`; it is
+  also the default `make` target and provisions the pinned tools automatically.
 
 When requirements change, update Makefile targets so these commands keep doing
 what their names promise. CI and agent workflows must call the Make targets,

@@ -21,10 +21,6 @@ jobs:
           cache: true
       - name: Verify
         run: make verify
-      - name: Scan Go vulnerabilities
-        uses: golang/govulncheck-action@v1
-        with:
-          go-package: ./...
 
   container:
     name: Verify container inputs
