@@ -306,7 +306,6 @@ func Test_Load_builds_AlibURLs_from_categories_series_and_publishers(t *testing.
 			want: []string{
 				"https://www.alib.ru/tramka.phtml?tnew=7",
 				"https://www.alib.ru/deti.phtml?tnew=7",
-				"https://www.alib.ru/tramka.phtml?tnew=7",
 			},
 		},
 		"series only": {

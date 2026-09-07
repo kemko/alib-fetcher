@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -14,7 +13,6 @@ import (
 	"unicode"
 
 	"github.com/robfig/cron/v3"
-	"golang.org/x/text/encoding/charmap"
 )
 
 // ErrInvalid indicates that one or more environment values are unusable.
@@ -113,52 +111,32 @@ func buildAlibURLs() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(categories) == 0 && len(series) == 0 && len(publishers) == 0 {
+	filters := make(map[string][]string, 2)
+	if len(series) > 0 {
+		filters[searchFieldSeria] = series
+	}
+	if len(publishers) > 0 {
+		filters[searchFieldPublisher] = publishers
+	}
+	if len(categories) == 0 && len(filters) == 0 {
 		return nil, fmt.Errorf(
 			"%w: ALIB_CATEGORIES, ALIB_SERIES, and ALIB_PUBLISHERS must not all be empty",
 			ErrInvalid,
 		)
 	}
 
-	endpoints := make([]string, 0, len(categories)+len(series)+len(publishers))
-	for _, category := range categories {
-		if !isASCIIWord(category) {
-			return nil, fmt.Errorf("%w: ALIB_CATEGORIES contains invalid category %q", ErrInvalid, category)
-		}
-		endpoints = append(endpoints, "https://www.alib.ru/"+category+".phtml?tnew=7")
-	}
-	endpoints, err = appendAlibSearchURLs(endpoints, "ALIB_SERIES", "seria", series)
-	if err != nil {
-		return nil, err
-	}
-
-	return appendAlibSearchURLs(endpoints, "ALIB_PUBLISHERS", "izdat", publishers)
-}
-
-func appendAlibSearchURLs(endpoints []string, variable, parameter string, values []string) ([]string, error) {
-	seenValues := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		if _, seen := seenValues[value]; seen {
-			continue
-		}
-		seenValues[value] = struct{}{}
-
-		endpoint := url.URL{Scheme: "https", Host: "alib.ru", Path: "/findp.php4"}
-		encoded, encodeErr := charmap.Windows1251.NewEncoder().Bytes([]byte(value))
-		if encodeErr != nil {
-			return nil, fmt.Errorf(
-				"%w: %s item %q cannot be represented in Windows-1251: %w",
-				ErrInvalid,
-				variable,
-				value,
-				encodeErr,
-			)
-		}
-		endpoint.RawQuery = parameter + "=" + url.QueryEscape(string(encoded)) + "&lday=7"
-		endpoints = append(endpoints, endpoint.String())
-	}
-
-	return endpoints, nil
+	return buildSearchURLs(
+		categories,
+		filters,
+		nil,
+		searchErrorContext{
+			fields: map[string]string{
+				"categories":         "ALIB_CATEGORIES",
+				searchFieldSeria:     "ALIB_SERIES",
+				searchFieldPublisher: "ALIB_PUBLISHERS",
+			},
+		},
+	)
 }
 
 func parseCSVList(name string) ([]string, error) {
