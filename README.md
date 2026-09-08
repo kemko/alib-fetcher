@@ -19,6 +19,11 @@ Global fields and defaults:
 - `fresh_books`: empty, `age:N`, or `since:YYYY`.
 - `http_timeout`: `30s`.
 - `alib_max_retries`: `3` additional attempts.
+- `alib_download_delay`: `0s`; a non-negative Go duration between the final
+  attempt for one Alib page and the first attempt for the next. For example,
+  `"0.5s"` and `"500ms"`. It is not applied before the first page, after the
+  last page, between retries, or during redirects; cancellation stops the
+  wait. A valid service reload applies the new delay after active work ends.
 - `message_limit`: `32000`, allowed range `64..32768`.
 
 `fresh_books` controls the optional ✨ marker; it does not filter listings.
@@ -26,6 +31,13 @@ Global fields and defaults:
 `since:YYYY` uses that inclusive year. Empty disables only ✨. The current
 year, and the previous year in January, get 🔥; future and unknown years get
 🛸. The configured `timezone` determines the current year and month.
+Publication years are the last four-digit bibliography year followed by `г`,
+`г.`, or `гг`/`гг.`; spaces and a dot before the suffix are accepted.
+
+Alib accepts only a final HTTP 200 response after redirects. Every
+`alib.page_downloaded`, `alib.page_download_failed`, `alib.page_parsed`, and
+`alib.page_parse_failed` event includes numeric `status_code`; it is `0` when
+no HTTP response was received.
 
 Each `[[chats]]` entry requires `chat_id` (signed decimal `int64` or a
 non-empty `@channel` username) and `telegram_token`. `state_file` is an

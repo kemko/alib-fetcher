@@ -197,6 +197,26 @@ func Test_Book_unmarshals_legacy_listing_without_seller(t *testing.T) {
 	require.Empty(t, book.Photos)
 }
 
+func Test_Book_unmarshals_legacy_year_suffix_variant(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	legacy := []byte(`{
+		"title": "Книга.",
+		"text_before_seller": "М., 1954-2000 гг.\nЦена: 500 руб.",
+		"buy_url": "https://www.alib.ru/book.html"
+	}`)
+
+	// When
+	var book alib.Book
+	err := json.Unmarshal(legacy, &book)
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, "М., 1954-2000 гг.", book.Bibliography)
+	require.Equal(t, 2000, book.PublicationYear)
+}
+
 func semanticBook(buyURL string) alib.Book {
 	return alib.Book{
 		Title:           "Мартынов Г. Каллистяне.",

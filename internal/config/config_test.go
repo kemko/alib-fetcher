@@ -33,6 +33,7 @@ categories = ["tramka"]
 	require.Equal(t, "0 0 * * *", loaded.CronSchedule)
 	require.Equal(t, "Europe/Moscow", loaded.Location.String())
 	require.Equal(t, 30*time.Second, loaded.HTTPTimeout)
+	require.Zero(t, loaded.AlibDownloadDelay)
 	require.Equal(t, 32000, loaded.MessageLimit)
 	require.Zero(t, loaded.AlibMaxRetries)
 	require.False(t, loaded.RunOnStartup)
@@ -153,13 +154,41 @@ categories = ["tramka"]
 	}
 }
 
+func TestLoad_parses_alib_download_delay(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		value string
+		want  time.Duration
+	}{
+		{value: `"0s"`},
+		{value: `"0.5s"`, want: 500 * time.Millisecond},
+		{value: `"500ms"`, want: 500 * time.Millisecond},
+	} {
+		t.Run(testCase.value, func(t *testing.T) {
+			configPath := writeConfig(t, fmt.Sprintf(`alib_download_delay = %s
+[[chats]]
+chat_id = "-100123"
+telegram_token = "token"
+categories = ["tramka"]
+`, testCase.value))
+
+			loaded, err := config.Load(configPath)
+
+			require.NoError(t, err)
+			require.Equal(t, testCase.want, loaded.AlibDownloadDelay)
+		})
+	}
+}
+
 func TestLoad_rejects_invalid_service_values(t *testing.T) {
 	t.Parallel()
 
 	for field, values := range map[string][]string{
-		"http_timeout":     {`"invalid"`, `"0s"`, `"-1s"`},
-		"alib_max_retries": {"-1"},
-		"cron_schedule":    {`"not a cron expression"`},
+		"http_timeout":        {`"invalid"`, `"0s"`, `"-1s"`},
+		"alib_max_retries":    {"-1"},
+		"alib_download_delay": {`"invalid"`, `"-1s"`, "1", `"999999999999999999999999999h"`},
+		"cron_schedule":       {`"not a cron expression"`},
 		"fresh_books": {
 			`"age:-1"`, `"age:+5"`, `"age:1.5"`, `"age:"`,
 			`"since:999"`, `"since:0000"`, `"since:10000"`, `"since:20a1"`, `"fresh:2021"`,
@@ -442,6 +471,7 @@ func TestLoad_reads_repository_example(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, loaded.Chats, 2)
+	require.Equal(t, 500*time.Millisecond, loaded.AlibDownloadDelay)
 	require.Equal(t, "/var/lib/alib-fetcher/state.db", loaded.Chats[0].StatePath)
 	require.Equal(t, "/var/lib/alib-fetcher/@another_channel.db", loaded.Chats[1].StatePath)
 	require.Equal(t, []string{

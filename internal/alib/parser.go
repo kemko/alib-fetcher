@@ -564,18 +564,30 @@ func parsePublicationYear(bibliography string) int {
 }
 
 func hasYearSuffix(characters []rune, index int) bool {
-	for index < len(characters) && unicode.IsSpace(characters[index]) {
-		index++
+	index = skipSpaces(characters, index)
+	if index < len(characters) && characters[index] == '.' {
+		index = skipSpaces(characters, index+1)
 	}
 	if index >= len(characters) || characters[index] != 'г' {
 		return false
 	}
 	index++
+	if index < len(characters) && characters[index] == 'г' {
+		index++
+	}
 	if index < len(characters) && characters[index] == '.' {
 		return true
 	}
 
 	return index == len(characters) || !unicode.IsLetter(characters[index]) && !unicode.IsDigit(characters[index])
+}
+
+func skipSpaces(characters []rune, index int) int {
+	for index < len(characters) && unicode.IsSpace(characters[index]) {
+		index++
+	}
+
+	return index
 }
 
 func isASCIIDigit(character rune) bool {

@@ -58,16 +58,17 @@ func (policy FreshBooksPolicy) LowerYear(currentYear int) int {
 
 // Config contains validated process-level settings and recipients.
 type Config struct {
-	Location       *time.Location
-	FreshBooks     *FreshBooksPolicy
-	StatePath      string
-	CronSchedule   string
-	Path           string
-	Chats          []Chat
-	AlibMaxRetries int
-	HTTPTimeout    time.Duration
-	MessageLimit   int
-	RunOnStartup   bool
+	Location          *time.Location
+	FreshBooks        *FreshBooksPolicy
+	StatePath         string
+	CronSchedule      string
+	Path              string
+	Chats             []Chat
+	AlibDownloadDelay time.Duration
+	AlibMaxRetries    int
+	HTTPTimeout       time.Duration
+	MessageLimit      int
+	RunOnStartup      bool
 }
 
 // Chat contains settings and generated sources for one recipient.
@@ -81,15 +82,16 @@ type Chat struct {
 }
 
 type rawConfig struct {
-	StatePath      *string   `toml:"state_path"`
-	CronSchedule   *string   `toml:"cron_schedule"`
-	Timezone       *string   `toml:"timezone"`
-	RunOnStartup   *bool     `toml:"run_on_startup"`
-	HTTPTimeout    *string   `toml:"http_timeout"`
-	AlibMaxRetries *int      `toml:"alib_max_retries"`
-	MessageLimit   *int      `toml:"message_limit"`
-	FreshBooks     *string   `toml:"fresh_books"`
-	Chats          []rawChat `toml:"chats"`
+	StatePath         *string   `toml:"state_path"`
+	CronSchedule      *string   `toml:"cron_schedule"`
+	Timezone          *string   `toml:"timezone"`
+	RunOnStartup      *bool     `toml:"run_on_startup"`
+	HTTPTimeout       *string   `toml:"http_timeout"`
+	AlibDownloadDelay *string   `toml:"alib_download_delay"`
+	AlibMaxRetries    *int      `toml:"alib_max_retries"`
+	MessageLimit      *int      `toml:"message_limit"`
+	FreshBooks        *string   `toml:"fresh_books"`
+	Chats             []rawChat `toml:"chats"`
 }
 
 type rawChat struct {
@@ -168,6 +170,10 @@ func validate(raw rawConfig, configPath string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("%w: http_timeout must be a positive Go duration", ErrInvalid)
 	}
+	settings.AlibDownloadDelay, err = parseNonNegativeDuration(raw.AlibDownloadDelay)
+	if err != nil {
+		return Config{}, fmt.Errorf("%w: alib_download_delay must be a non-negative Go duration", ErrInvalid)
+	}
 	if raw.FreshBooks != nil && *raw.FreshBooks != "" {
 		policy, parseErr := parseFreshBooks(*raw.FreshBooks)
 		if parseErr != nil {
@@ -229,7 +235,7 @@ func formatDecodeError(err error) error {
 func validateDocumentKeys(document map[string]any) error {
 	for _, key := range slices.Sorted(maps.Keys(document)) {
 		if !oneOf(key, "state_path", "cron_schedule", "timezone", "run_on_startup", "http_timeout",
-			"alib_max_retries", "message_limit", "fresh_books", "chats") {
+			"alib_max_retries", "alib_download_delay", "message_limit", "fresh_books", "chats") {
 			return fmt.Errorf("unknown field %q", key)
 		}
 	}
@@ -390,6 +396,17 @@ func parseDuration(value *string) (time.Duration, error) {
 	}
 	parsed, err := time.ParseDuration(*value)
 	if err != nil || parsed <= 0 {
+		return 0, errors.New("invalid duration")
+	}
+	return parsed, nil
+}
+
+func parseNonNegativeDuration(value *string) (time.Duration, error) {
+	if value == nil {
+		return 0, nil
+	}
+	parsed, err := time.ParseDuration(*value)
+	if err != nil || parsed < 0 {
 		return 0, errors.New("invalid duration")
 	}
 	return parsed, nil
