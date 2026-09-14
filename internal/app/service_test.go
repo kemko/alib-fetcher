@@ -917,6 +917,53 @@ func Test_Service_sends_renderable_pending_books_when_one_pending_book_is_too_lo
 	require.Equal(t, 1, hookCalls)
 }
 
+func Test_Service_keeps_byte_oversized_new_and_pending_books_unacknowledged(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	now := time.Date(2026, time.August, 5, 0, 0, 0, 0, time.UTC)
+	state, err := store.Open(filepath.Join(t.TempDir(), "state.db"), now)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, state.Close()) })
+	longURL := "https://example.com/" + strings.Repeat("x", 35000)
+	pendingTooLarge := alib.Book{
+		Title:     "Ранее сохранённая",
+		Seller:    "amudsen",
+		SellerURL: longURL,
+		BuyURL:    "https://example.com/pending-too-large",
+	}
+	newTooLarge := pendingTooLarge
+	newTooLarge.Title = "Новая слишком большая"
+	newTooLarge.BuyURL = "https://example.com/new-too-large"
+	good := alib.Book{Title: "Отправляемая", BuyURL: "https://example.com/good"}
+	_, err = state.RecordDiscovered(context.Background(), []alib.Book{pendingTooLarge}, now.Add(-time.Hour))
+	require.NoError(t, err)
+	sender := &fakeSender{}
+	service := app.NewService(app.Dependencies{
+		Fetcher:      fakeFetcher{books: []alib.Book{newTooLarge, good}},
+		State:        state,
+		Sender:       sender,
+		MessageLimit: 32000,
+		Now:          func() time.Time { return now },
+	})
+
+	// When
+	result, runErr := service.Run(context.Background())
+	existing, existingErr := state.Existing(context.Background(), []alib.Book{newTooLarge, good})
+	pending, pendingErr := state.Pending(context.Background())
+
+	// Then
+	require.NoError(t, runErr)
+	require.NoError(t, existingErr)
+	require.NoError(t, pendingErr)
+	require.Equal(t, app.Result{Fetched: 2, New: 1, Sent: 1, Failed: 2}, result)
+	require.Equal(t, []bool{false, true}, existing)
+	require.Equal(t, []alib.Book{pendingTooLarge}, pending)
+	require.Len(t, sender.messages, 1)
+	require.Contains(t, strings.Join(sender.messages, ""), good.BuyURL)
+	require.Equal(t, 1, strings.Count(strings.Join(sender.messages, ""), "Не удалось обработать книг: 2"))
+}
+
 func Test_Service_sends_and_marks_book_with_truncated_content(t *testing.T) {
 	t.Parallel()
 

@@ -300,6 +300,114 @@ func Test_run_once_uses_default_rich_message_limit_and_listing_block_chunks(t *t
 	}
 }
 
+func Test_run_once_retries_only_unacknowledged_html_byte_limited_chunk(t *testing.T) {
+	// Given
+	useOnceMode(t)
+	const bookCount = 30
+	sellerPath := "/bs.php4?bs=amudsen-" + strings.Repeat("x", 1200)
+	alibServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		for index := range bookCount {
+			_, err := fmt.Fprintf(writer, `<p><b>Кириллическая книга %02d.</b> М., 2020 г.<br>
+(До заказа внимательно прочтите условия продажи продавца <a href="%s">BS - amudsen</a>, Москва.)<br>
+Цена: %d руб. <a href="/book-%02d.html"><b>Купить</b></a></p>`, index, sellerPath, index, index)
+			assert.NoError(t, err)
+		}
+	}))
+	t.Cleanup(alibServer.Close)
+
+	telegramRequests := make(chan telegramRequest, 8)
+	var requestCount atomic.Int32
+	rejectSecond := atomic.Bool{}
+	rejectSecond.Store(true)
+	telegramServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		telegramRequests <- telegramRequest{Message: decodeTelegramMessage(t, request), Path: request.URL.Path}
+		requestNumber := requestCount.Add(1)
+		if rejectSecond.Load() && requestNumber == 2 {
+			writeTelegramResponse(t, writer, `{"ok":false,"description":"temporary rejection"}`)
+
+			return
+		}
+		writeTelegramResponse(t, writer, `{"ok":true,"result":{}}`)
+	}))
+	t.Cleanup(telegramServer.Close)
+
+	statePath := filepath.Join(t.TempDir(), "state.db")
+	setRunEnvironment(t, telegramServer.URL, statePath)
+	unsetEnvironment(t, "MESSAGE_LIMIT")
+	logger := slog.New(slog.DiscardHandler)
+
+	// When the second chunk is rejected.
+	firstErr := runWithAlibURLs(t, logger, alibServer.URL)
+	require.Error(t, firstErr)
+	require.Len(t, telegramRequests, 2)
+	firstRequests := []telegramRequest{<-telegramRequests, <-telegramRequests}
+	state, err := store.Open(statePath, time.Now())
+	require.NoError(t, err)
+	pending, err := state.Pending(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, state.Close())
+
+	// Then only the first accepted chunk is acknowledged.
+	require.NotEmpty(t, pending)
+	require.Less(t, len(pending), bookCount)
+	for index, request := range firstRequests {
+		require.Equal(t, "/bottest-token/sendRichMessage", request.Path)
+		require.LessOrEqual(t, len(request.Message.RichMessage.HTML), 34996)
+		require.LessOrEqual(t, testutil.DisplayedRuneCount(t, request.Message.RichMessage.HTML), 32000)
+		if index == 0 {
+			require.True(t, request.Message.DisableNotification)
+			require.Nil(t, request.Message.ReplyMarkup)
+		} else {
+			require.False(t, request.Message.DisableNotification)
+			requireRefreshButton(t, request.Message)
+		}
+	}
+
+	// When the remaining chunk is accepted, then the next cycle finds no books to resend.
+	rejectSecond.Store(false)
+	secondErr := runWithAlibURLs(t, logger, alibServer.URL)
+	require.NoError(t, secondErr)
+	require.NotEmpty(t, telegramRequests)
+	secondRequests := make([]telegramRequest, len(telegramRequests))
+	for index := range secondRequests {
+		secondRequests[index] = <-telegramRequests
+	}
+	thirdErr := runWithAlibURLs(t, logger, alibServer.URL)
+	require.NoError(t, thirdErr)
+	require.Len(t, telegramRequests, 1)
+	thirdRequest := <-telegramRequests
+
+	// Then
+	for _, request := range secondRequests {
+		require.LessOrEqual(t, len(request.Message.RichMessage.HTML), 34996)
+		require.Contains(t, request.Message.RichMessage.HTML, "Продавец: <a href=")
+		require.Contains(t, request.Message.RichMessage.HTML, ">amudsen</a>")
+		require.Contains(t, request.Message.RichMessage.HTML, "Цена:")
+		require.Contains(t, request.Message.RichMessage.HTML, "Купить</a>")
+	}
+	acceptedHTML := make([]string, 1, 1+len(secondRequests))
+	acceptedHTML[0] = firstRequests[0].Message.RichMessage.HTML
+	for _, request := range secondRequests {
+		acceptedHTML = append(acceptedHTML, request.Message.RichMessage.HTML)
+	}
+	acceptedDigest := strings.Join(acceptedHTML, "")
+	require.Less(t, testutil.DisplayedRuneCount(t, acceptedDigest), 32000)
+	for index := range bookCount {
+		buyURL := alibServer.URL + fmt.Sprintf("/book-%02d.html", index)
+		require.Equal(t, 1, strings.Count(acceptedDigest, buyURL), buyURL)
+	}
+	require.Equal(t, "Новых книг не обнаружено.", thirdRequest.Message.RichMessage.HTML)
+	requireRefreshButton(t, thirdRequest.Message)
+
+	state, err = store.Open(statePath, time.Now())
+	require.NoError(t, err)
+	pending, err = state.Pending(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, pending)
+	require.NoError(t, state.Close())
+}
+
 func Test_run_rejects_non_positive_forget_latest(t *testing.T) {
 	for _, value := range []string{"0", "-1"} {
 		t.Run(value, func(t *testing.T) {

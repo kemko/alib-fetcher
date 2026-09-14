@@ -50,12 +50,16 @@ Preserve these semantics:
 - `State.Pending` returns records in first-discovery/source order, not bbolt key
   sort order; the digest sends year `0` records first, then recognized years in
   descending order, with stable first-discovery order within each group.
-- `message_limit` counts Unicode runes in displayed Rich Message text after
-  parsing HTML; formatting tags and URL attribute values do not count, while
-  encoded text and `<br/>` line breaks do. A listing's `Content` is shortened
-  with `…` to the longest prefix that fits within `message_limit - 1` displayed
-  runes. If mandatory displayed fields plus minimal content still cannot fit,
-  it remains pending and must not block other renderable pending listings;
+- Each rendered Telegram message has three independent limits: `message_limit`
+  displayed Unicode runes, 34996 UTF-8 bytes of source HTML, and 500 Rich
+  Message blocks (ordinary chunks have at most 250 listings). Formatting tags
+  and URL attribute values do not count toward displayed runes, but do count
+  toward source HTML bytes; encoded text and `<br/>` line breaks count in both
+  applicable units. A listing's `Content` alone is shortened with `…` to the
+  longest source-rune prefix that fits both text limits, with
+  `message_limit - 1` displayed runes. If mandatory fields plus minimal content
+  still cannot fit, a new listing is not recorded and an existing one remains
+  pending; it must not block renderable pending listings and
   `digest.ErrMessageTooLong` is reported.
 - Chunks split before Telegram's 500-block limit. Ordinary chunks contain at most
   250 listings.
@@ -233,9 +237,12 @@ needs at least one source.
 config watching. `-once` runs all chats or the selected `-chat` without
 scheduling, polling, or watching. `-forget-latest N` requires `-chat` and reads
 only the state mapping; it needs no token, source, or schedule and makes no
-HTTP requests. Exactly one mode is required; no arguments and help print the
-usage. Unknown or incompatible arguments exit 2; config and runtime failures
-exit 1. Tokens and TOML contents are never logged.
+HTTP requests. It is a manual recovery operation that can cause duplicate
+delivery: `N` means the last `N` discovered records, not books assumed lost
+from a particular message. The HTML-limit fix never resends confirmed records.
+Exactly one mode is required; no arguments and help print the usage. Unknown or
+incompatible arguments exit 2; config and runtime failures exit 1. Tokens and
+TOML contents are never logged.
 
 `fresh_books` controls the optional `✨` marker, without filtering listings.
 `age:N` uses the inclusive threshold `current local year - N`; `since:YYYY`
@@ -280,14 +287,16 @@ The seller format is
 plain text. Missing optional fields must not create extra empty sections. Photo
 links use normalized source captions and fall back to `фото` when empty, in source
 order including repeats; the line is omitted when no photos exist. All dynamic
-text and URLs must be HTML-escaped. Limits are counted in Unicode runes
-of displayed Rich Message text after HTML parsing: formatting tags and URL
-attribute values do not consume the limit, while encoded text and `<br/>` line
-breaks do. Chunks may split only between listings. Content that exceeds the
-limit is truncated before HTML escaping to the longest prefix plus `…` that
-fits within `message_limit - 1`; only `Content` is shortened. If mandatory
-displayed fields plus minimal content still cannot fit, the listing returns
-`digest.ErrMessageTooLong`.
+text and URLs must be HTML-escaped. Each message has three independent limits:
+`message_limit` displayed Unicode runes after HTML parsing, 34996 UTF-8 bytes
+of source HTML, and 500 Rich Message blocks. Formatting tags and URL attributes
+do not consume displayed runes, but do consume source HTML bytes; encoded text
+and `<br/>` line breaks count in both applicable units. Chunks may split only
+between listings. Content that exceeds either text limit is truncated before
+HTML escaping to the longest source-rune prefix plus `…` that fits within
+`message_limit - 1` displayed runes and the byte limit; only `Content` is
+shortened. If mandatory fields plus minimal content still cannot fit, the
+listing returns `digest.ErrMessageTooLong`.
 
 Source photos are never downloaded or transformed. Every photo renders in one
 `Смотрите` section with its source URL and normalized caption, preserving source

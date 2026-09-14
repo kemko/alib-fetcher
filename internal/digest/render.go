@@ -20,6 +20,9 @@ const (
 	sectionBreak          = lineBreak + lineBreak
 	listingSeparator      = "<hr/>"
 	richMessageBlockLimit = 500
+	// richMessageHTMLByteLimit stays below TDLib clean_input_string's 35000-byte truncation boundary.
+	// https://github.com/tdlib/td/blob/master/td/telegram/misc.cpp#L69
+	richMessageHTMLByteLimit = 34996
 )
 
 // ErrMessageTooLong indicates that one listing cannot fit into a message.
@@ -46,13 +49,13 @@ func RenderSendable(books []alib.Book, options Options, previousFailures int) ([
 
 			return summaryChunks, nil, err
 		}
-		if renderedRuneCount(emptyNotification) > options.Limit {
+		if exceedsTextLimits(emptyNotification, options.Limit) {
 			return nil, nil, fmt.Errorf("%w: empty notification", ErrMessageTooLong)
 		}
 
 		return []Chunk{{Text: emptyNotification, Books: make([]alib.Book, 0)}}, nil, nil
 	}
-	if renderedRuneCount(header) > options.Limit {
+	if exceedsTextLimits(header, options.Limit) {
 		return nil, nil, fmt.Errorf("%w: %s", ErrMessageTooLong, books[0].BuyURL)
 	}
 
@@ -102,15 +105,19 @@ func RenderSendable(books []alib.Book, options Options, previousFailures int) ([
 func RenderBook(book alib.Book, options Options) (string, error) {
 	item := renderBook(book, options)
 	itemLimit := options.Limit
-	if renderedRuneCount(item) > itemLimit && strings.TrimSpace(book.Content) != "" {
+	if exceedsTextLimits(item, itemLimit) && strings.TrimSpace(book.Content) != "" {
 		item = truncateContent(book, options)
 		itemLimit--
 	}
-	if renderedRuneCount(item) > itemLimit {
+	if exceedsTextLimits(item, itemLimit) {
 		return "", fmt.Errorf("%w: %s", ErrMessageTooLong, book.BuyURL)
 	}
 
 	return item, nil
+}
+
+func exceedsTextLimits(text string, runeLimit int) bool {
+	return renderedRuneCount(text) > runeLimit || len(text) > richMessageHTMLByteLimit
 }
 
 func appendBook(
@@ -151,13 +158,13 @@ func appendBook(
 
 func renderFailureSummary(failed int, options Options) ([]Chunk, error) {
 	summary := failureSummary(failed)
-	if renderedRuneCount(summary) > options.Limit {
+	if exceedsTextLimits(summary, options.Limit) {
 		return nil, fmt.Errorf("%w: failure summary", ErrMessageTooLong)
 	}
 	if !chunkExceedsLimits(1, header+sectionBreak+summary, options.Limit) {
 		return []Chunk{{Text: header + sectionBreak + summary, Books: make([]alib.Book, 0)}}, nil
 	}
-	if renderedRuneCount(header) > options.Limit {
+	if exceedsTextLimits(header, options.Limit) {
 		return nil, fmt.Errorf("%w: failure summary", ErrMessageTooLong)
 	}
 
@@ -172,7 +179,7 @@ func failureSummary(failed int) string {
 }
 
 func chunkExceedsLimits(blocks int, text string, textLimit int) bool {
-	return blocks > richMessageBlockLimit || renderedRuneCount(text) > textLimit
+	return blocks > richMessageBlockLimit || exceedsTextLimits(text, textLimit)
 }
 
 func truncateContent(book alib.Book, options Options) string {
@@ -182,7 +189,7 @@ func truncateContent(book alib.Book, options Options) string {
 		middle := (low + high + 1) / 2
 		candidate := book
 		candidate.Content = string(contentRunes[:middle]) + "…"
-		if renderedRuneCount(renderBook(candidate, options)) <= options.Limit-1 {
+		if !exceedsTextLimits(renderBook(candidate, options), options.Limit-1) {
 			low = middle
 			continue
 		}
