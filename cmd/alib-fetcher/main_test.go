@@ -339,6 +339,8 @@ func Test_run_once_retries_only_unacknowledged_html_byte_limited_chunk(t *testin
 
 	// When the second chunk is rejected.
 	firstErr := runWithAlibURLs(t, logger, alibServer.URL)
+	require.Error(t, firstErr)
+	require.Len(t, telegramRequests, 2)
 	firstRequests := []telegramRequest{<-telegramRequests, <-telegramRequests}
 	state, err := store.Open(statePath, time.Now())
 	require.NoError(t, err)
@@ -347,8 +349,6 @@ func Test_run_once_retries_only_unacknowledged_html_byte_limited_chunk(t *testin
 	require.NoError(t, state.Close())
 
 	// Then only the first accepted chunk is acknowledged.
-	require.Error(t, firstErr)
-	require.Len(t, firstRequests, 2)
 	require.NotEmpty(t, pending)
 	require.Less(t, len(pending), bookCount)
 	for index, request := range firstRequests {
@@ -367,17 +367,18 @@ func Test_run_once_retries_only_unacknowledged_html_byte_limited_chunk(t *testin
 	// When the remaining chunk is accepted, then the next cycle finds no books to resend.
 	rejectSecond.Store(false)
 	secondErr := runWithAlibURLs(t, logger, alibServer.URL)
+	require.NoError(t, secondErr)
+	require.NotEmpty(t, telegramRequests)
 	secondRequests := make([]telegramRequest, len(telegramRequests))
 	for index := range secondRequests {
 		secondRequests[index] = <-telegramRequests
 	}
 	thirdErr := runWithAlibURLs(t, logger, alibServer.URL)
+	require.NoError(t, thirdErr)
+	require.Len(t, telegramRequests, 1)
 	thirdRequest := <-telegramRequests
 
 	// Then
-	require.NoError(t, secondErr)
-	require.NoError(t, thirdErr)
-	require.NotEmpty(t, secondRequests)
 	for _, request := range secondRequests {
 		require.LessOrEqual(t, len(request.Message.RichMessage.HTML), 34996)
 		require.Contains(t, request.Message.RichMessage.HTML, "Продавец: <a href=")

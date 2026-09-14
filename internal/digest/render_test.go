@@ -508,18 +508,23 @@ func Test_Render_moves_complete_listing_when_HTML_framing_exceeds_limit(t *testi
 
 	// Given
 	books := []alib.Book{
-		{Title: "Первая", Content: strings.Repeat("a", 17400), BuyURL: "https://example.com/1"},
-		{Title: "Вторая", Content: strings.Repeat("a", 17400), BuyURL: "https://example.com/2"},
+		{Title: "Первая", Content: strings.Repeat("я", 8600), BuyURL: "https://example.com/1"},
+		{Title: "Вторая", Content: strings.Repeat("я", 8600), BuyURL: "https://example.com/2"},
 	}
 	first, err := digest.RenderBook(books[0], digest.Options{Limit: 32000})
 	require.NoError(t, err)
 	second, err := digest.RenderBook(books[1], digest.Options{Limit: 32000})
 	require.NoError(t, err)
-	require.Greater(
-		t,
-		len(`<b>Новые книги на Alib.ru</b><br/><br/>`+first+`<hr/>`+second),
-		34996,
-	)
+	const heading = `<b>Новые книги на Alib.ru</b><br/><br/>`
+	padding := 34996 - len(heading+first+second)
+	require.Positive(t, padding)
+	books[1].Content += strings.Repeat("a", padding)
+	second, err = digest.RenderBook(books[1], digest.Options{Limit: 32000})
+	require.NoError(t, err)
+	require.Len(t, heading+first+second, 34996)
+	require.Greater(t, len(heading+first+`<hr/>`+second), 34996)
+	require.Less(t, len(first+`<hr/>`+second), 34996)
+	require.Less(t, testutil.DisplayedRuneCount(t, heading+first+`<hr/>`+second), 32000)
 
 	// When
 	chunks, renderErr := testutil.RenderChunks(t, books, digest.Options{Limit: 32000})
@@ -529,6 +534,8 @@ func Test_Render_moves_complete_listing_when_HTML_framing_exceeds_limit(t *testi
 	require.Len(t, chunks, 2)
 	require.Equal(t, []alib.Book{books[0]}, chunks[0].Books)
 	require.Equal(t, []alib.Book{books[1]}, chunks[1].Books)
+	require.Equal(t, heading+first, chunks[0].Text)
+	require.Equal(t, second, chunks[1].Text)
 	for _, chunk := range chunks {
 		require.LessOrEqual(t, len(chunk.Text), 34996)
 		require.NotContains(t, chunk.Text, "…")
@@ -645,7 +652,18 @@ func Test_RenderBook_truncates_content_at_HTML_byte_limit(t *testing.T) {
 	require.LessOrEqual(t, len(item), 34996)
 	require.LessOrEqual(t, testutil.DisplayedRuneCount(t, item), 31999)
 	require.Contains(t, item, "&lt;&amp;🛸<br/>")
-	require.True(t, strings.HasSuffix(strings.Split(item, "<br/><br/>")[1], "…"))
+	sections := strings.Split(item, "<br/><br/>")
+	require.Len(t, sections, 3)
+	require.True(t, strings.HasSuffix(sections[1], "…"))
+	prefix := html.UnescapeString(strings.ReplaceAll(strings.TrimSuffix(sections[1], "…"), "<br/>", "\n"))
+	source := []rune(strings.TrimSpace(book.Content))
+	prefixLength := len([]rune(prefix))
+	require.Less(t, prefixLength, len(source))
+	require.Equal(t, string(source[:prefixLength]), prefix)
+	nextContent := string(source[:prefixLength+1]) + "…"
+	nextHTML := strings.ReplaceAll(html.EscapeString(nextContent), "\n", "<br/>")
+	nextItem := sections[0] + "<br/><br/>" + nextHTML + "<br/><br/>" + sections[2]
+	require.Greater(t, len(nextItem), 34996, "one more source rune must exceed the HTML byte limit")
 }
 
 func Test_RenderBook_long_URL_uses_HTML_bytes_not_displayed_runes(t *testing.T) {
