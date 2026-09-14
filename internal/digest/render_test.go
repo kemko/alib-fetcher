@@ -468,6 +468,88 @@ func Test_Render_rejects_listing_over_rune_limit(t *testing.T) {
 	require.Empty(t, item)
 }
 
+func Test_RenderBook_enforces_HTML_byte_limit(t *testing.T) {
+	t.Parallel()
+
+	base := alib.Book{Title: "Книга", BuyURL: "https://example.com/book"}
+	baseItem, err := digest.RenderBook(base, digest.Options{Limit: 32000})
+	require.NoError(t, err)
+	contentPrefixLength := len("<br/><br/>")
+
+	tests := []struct {
+		name      string
+		bytes     int
+		truncated bool
+	}{
+		{name: "34995 bytes", bytes: 34995},
+		{name: "34996 bytes", bytes: 34996},
+		{name: "34997 bytes", bytes: 34997, truncated: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Given
+			book := base
+			contentBytes := test.bytes - len(baseItem) - contentPrefixLength
+			book.Content = strings.Repeat("я", contentBytes/2) + strings.Repeat("a", contentBytes%2)
+
+			// When
+			item, renderErr := digest.RenderBook(book, digest.Options{Limit: 32000})
+
+			// Then
+			require.NoError(t, renderErr)
+			require.LessOrEqual(t, len(item), 34996)
+			if test.truncated {
+				require.Contains(t, item, "…")
+				return
+			}
+			require.Len(t, item, test.bytes)
+			require.NotContains(t, item, "…")
+		})
+	}
+}
+
+func Test_RenderBook_truncates_content_at_HTML_byte_limit(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	book := alib.Book{
+		Title:   "Книга",
+		Content: strings.Repeat("<&🛸\n", 10000),
+		BuyURL:  "https://example.com/book",
+	}
+
+	// When
+	item, err := digest.RenderBook(book, digest.Options{Limit: 32000})
+
+	// Then
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(item), 34996)
+	require.LessOrEqual(t, testutil.DisplayedRuneCount(t, item), 31999)
+	require.Contains(t, item, "&lt;&amp;🛸<br/>")
+	require.True(t, strings.HasSuffix(strings.Split(item, "<br/><br/>")[1], "…"))
+}
+
+func Test_RenderBook_rejects_mandatory_fields_over_HTML_byte_limit(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	book := alib.Book{
+		Title:   "Книга",
+		Content: "Описание",
+		BuyURL:  "https://example.com/" + strings.Repeat("a", 35000),
+	}
+
+	// When
+	item, err := digest.RenderBook(book, digest.Options{Limit: 32000})
+
+	// Then
+	require.ErrorIs(t, err, digest.ErrMessageTooLong)
+	require.ErrorContains(t, err, book.BuyURL)
+	require.Empty(t, item)
+}
+
 func Test_RenderSendable_skips_oversized_listings_in_one_pass(t *testing.T) {
 	t.Parallel()
 

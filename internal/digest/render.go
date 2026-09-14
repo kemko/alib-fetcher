@@ -20,6 +20,9 @@ const (
 	sectionBreak          = lineBreak + lineBreak
 	listingSeparator      = "<hr/>"
 	richMessageBlockLimit = 500
+	// richMessageHTMLByteLimit stays below TDLib clean_input_string's 35000-byte truncation boundary.
+	// https://github.com/tdlib/td/blob/master/td/telegram/misc.cpp#L69
+	richMessageHTMLByteLimit = 34996
 )
 
 // ErrMessageTooLong indicates that one listing cannot fit into a message.
@@ -102,15 +105,19 @@ func RenderSendable(books []alib.Book, options Options, previousFailures int) ([
 func RenderBook(book alib.Book, options Options) (string, error) {
 	item := renderBook(book, options)
 	itemLimit := options.Limit
-	if renderedRuneCount(item) > itemLimit && strings.TrimSpace(book.Content) != "" {
+	if exceedsTextLimits(item, itemLimit) && strings.TrimSpace(book.Content) != "" {
 		item = truncateContent(book, options)
 		itemLimit--
 	}
-	if renderedRuneCount(item) > itemLimit {
+	if exceedsTextLimits(item, itemLimit) {
 		return "", fmt.Errorf("%w: %s", ErrMessageTooLong, book.BuyURL)
 	}
 
 	return item, nil
+}
+
+func exceedsTextLimits(text string, runeLimit int) bool {
+	return renderedRuneCount(text) > runeLimit || len(text) > richMessageHTMLByteLimit
 }
 
 func appendBook(
@@ -182,7 +189,7 @@ func truncateContent(book alib.Book, options Options) string {
 		middle := (low + high + 1) / 2
 		candidate := book
 		candidate.Content = string(contentRunes[:middle]) + "…"
-		if renderedRuneCount(renderBook(candidate, options)) <= options.Limit-1 {
+		if !exceedsTextLimits(renderBook(candidate, options), options.Limit-1) {
 			low = middle
 			continue
 		}
