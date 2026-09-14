@@ -64,3 +64,14 @@ func TestTruncateContentUsesRenderedHTMLByteLimit(t *testing.T) {
 		t.Fatalf("rendered content was not truncated: %q", rendered)
 	}
 }
+
+func TestChunkExceedsLimitsIncludesHTMLBytes(t *testing.T) {
+	t.Parallel()
+
+	if chunkExceedsLimits(1, strings.Repeat("a", richMessageHTMLByteLimit), 40000) {
+		t.Fatal("chunk at HTML byte limit exceeds limits")
+	}
+	if !chunkExceedsLimits(1, strings.Repeat("a", richMessageHTMLByteLimit+1), 40000) {
+		t.Fatal("chunk above HTML byte limit does not exceed limits")
+	}
+}

@@ -49,13 +49,13 @@ func RenderSendable(books []alib.Book, options Options, previousFailures int) ([
 
 			return summaryChunks, nil, err
 		}
-		if renderedRuneCount(emptyNotification) > options.Limit {
+		if exceedsTextLimits(emptyNotification, options.Limit) {
 			return nil, nil, fmt.Errorf("%w: empty notification", ErrMessageTooLong)
 		}
 
 		return []Chunk{{Text: emptyNotification, Books: make([]alib.Book, 0)}}, nil, nil
 	}
-	if renderedRuneCount(header) > options.Limit {
+	if exceedsTextLimits(header, options.Limit) {
 		return nil, nil, fmt.Errorf("%w: %s", ErrMessageTooLong, books[0].BuyURL)
 	}
 
@@ -158,13 +158,13 @@ func appendBook(
 
 func renderFailureSummary(failed int, options Options) ([]Chunk, error) {
 	summary := failureSummary(failed)
-	if renderedRuneCount(summary) > options.Limit {
+	if exceedsTextLimits(summary, options.Limit) {
 		return nil, fmt.Errorf("%w: failure summary", ErrMessageTooLong)
 	}
 	if !chunkExceedsLimits(1, header+sectionBreak+summary, options.Limit) {
 		return []Chunk{{Text: header + sectionBreak + summary, Books: make([]alib.Book, 0)}}, nil
 	}
-	if renderedRuneCount(header) > options.Limit {
+	if exceedsTextLimits(header, options.Limit) {
 		return nil, fmt.Errorf("%w: failure summary", ErrMessageTooLong)
 	}
 
@@ -179,7 +179,7 @@ func failureSummary(failed int) string {
 }
 
 func chunkExceedsLimits(blocks int, text string, textLimit int) bool {
-	return blocks > richMessageBlockLimit || renderedRuneCount(text) > textLimit
+	return blocks > richMessageBlockLimit || exceedsTextLimits(text, textLimit)
 }
 
 func truncateContent(book alib.Book, options Options) string {

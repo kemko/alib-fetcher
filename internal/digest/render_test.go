@@ -446,6 +446,120 @@ func Test_Render_splits_before_rich_message_block_limit(t *testing.T) {
 	require.NotContains(t, chunks[1].Text, "<hr/>")
 	for _, chunk := range chunks {
 		require.LessOrEqual(t, testutil.DisplayedRuneCount(t, chunk.Text), messageLimit)
+		require.LessOrEqual(t, len(chunk.Text), 34996)
+	}
+}
+
+func Test_Render_splits_before_HTML_byte_limit(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	books := make([]alib.Book, 30)
+	for index := range books {
+		books[index] = alib.Book{
+			Title:     strings.Repeat("Кириллица ", 100),
+			Seller:    "amudsen",
+			SellerURL: "https://www.alib.ru/bs.php4?uid=amudsen",
+			Price:     "1000 руб.",
+			BuyURL:    fmt.Sprintf("https://www.alib.ru/book-%d.html", index),
+		}
+	}
+
+	// When
+	chunks, err := testutil.RenderChunks(t, books, digest.Options{Limit: 32000})
+
+	// Then
+	require.NoError(t, err)
+	require.Greater(t, len(chunks), 1)
+	texts := make([]string, len(chunks))
+	for index, chunk := range chunks {
+		texts[index] = chunk.Text
+	}
+	allText := strings.Join(texts, "")
+	previousPosition := -1
+	bookIndex := 0
+	for _, chunk := range chunks {
+		require.LessOrEqual(t, len(chunk.Text), 34996)
+		require.LessOrEqual(t, testutil.DisplayedRuneCount(t, chunk.Text), 32000)
+		require.LessOrEqual(t, len(chunk.Books)*2-1, 500)
+		for _, book := range chunk.Books {
+			require.Equal(t, books[bookIndex], book)
+			bookIndex++
+			require.Contains(t, chunk.Text, "Продавец: "+
+				`<a href="https://www.alib.ru/bs.php4?uid=amudsen">amudsen</a>`)
+			require.Contains(t, chunk.Text, "Цена: 1000 руб.")
+			require.Contains(t, chunk.Text, html.EscapeString(book.BuyURL))
+			position := strings.Index(allText, html.EscapeString(book.BuyURL))
+			require.Equal(t, 1, strings.Count(allText, html.EscapeString(book.BuyURL)))
+			require.Greater(t, position, previousPosition)
+			previousPosition = position
+		}
+	}
+	require.Equal(t, len(books), bookIndex)
+	require.Less(t, testutil.DisplayedRuneCount(t, allText), 32000)
+	require.Greater(t, len(allText), 35000)
+}
+
+func Test_Render_moves_complete_listing_when_HTML_framing_exceeds_limit(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	books := []alib.Book{
+		{Title: "Первая", Content: strings.Repeat("a", 17400), BuyURL: "https://example.com/1"},
+		{Title: "Вторая", Content: strings.Repeat("a", 17400), BuyURL: "https://example.com/2"},
+	}
+	first, err := digest.RenderBook(books[0], digest.Options{Limit: 32000})
+	require.NoError(t, err)
+	second, err := digest.RenderBook(books[1], digest.Options{Limit: 32000})
+	require.NoError(t, err)
+	require.Greater(
+		t,
+		len(`<b>Новые книги на Alib.ru</b><br/><br/>`+first+`<hr/>`+second),
+		34996,
+	)
+
+	// When
+	chunks, renderErr := testutil.RenderChunks(t, books, digest.Options{Limit: 32000})
+
+	// Then
+	require.NoError(t, renderErr)
+	require.Len(t, chunks, 2)
+	require.Equal(t, []alib.Book{books[0]}, chunks[0].Books)
+	require.Equal(t, []alib.Book{books[1]}, chunks[1].Books)
+	for _, chunk := range chunks {
+		require.LessOrEqual(t, len(chunk.Text), 34996)
+		require.NotContains(t, chunk.Text, "…")
+	}
+}
+
+func Test_Render_splits_failure_summary_at_HTML_byte_limit(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	book := alib.Book{
+		Title:   "Книга",
+		Content: strings.Repeat("я", 17500),
+		BuyURL:  "https://example.com/book",
+	}
+	item, err := digest.RenderBook(book, digest.Options{Limit: 32000})
+	require.NoError(t, err)
+	require.Greater(t, len(item+`<hr/>Не удалось обработать книг: 1`), 34996)
+
+	// When
+	chunks, skippedBuyURLs, renderErr := digest.RenderSendable(
+		[]alib.Book{book},
+		digest.Options{Limit: 32000},
+		1,
+	)
+
+	// Then
+	require.NoError(t, renderErr)
+	require.Empty(t, skippedBuyURLs)
+	require.Len(t, chunks, 3)
+	require.Equal(t, []alib.Book{book}, chunks[1].Books)
+	require.Equal(t, "Не удалось обработать книг: 1", chunks[2].Text)
+	for _, chunk := range chunks {
+		require.LessOrEqual(t, len(chunk.Text), 34996)
 	}
 }
 
