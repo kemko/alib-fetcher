@@ -399,7 +399,7 @@ func Test_Render_uses_header_only_chunk_when_first_listing_fits_only_without_hea
 	}, chunks)
 }
 
-func Test_Render_does_not_count_divider_toward_message_limit(t *testing.T) {
+func Test_Render_divider_uses_HTML_bytes_but_not_displayed_runes(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -410,7 +410,8 @@ func Test_Render_does_not_count_divider_toward_message_limit(t *testing.T) {
 	unlimitedChunks, err := testutil.RenderChunks(t, books, digest.Options{Limit: 4096})
 	require.NoError(t, err)
 	require.Len(t, unlimitedChunks, 1)
-	limitWithoutDivider := testutil.DisplayedRuneCount(t, strings.Replace(unlimitedChunks[0].Text, "<hr/>", "", 1))
+	withoutDivider := strings.Replace(unlimitedChunks[0].Text, "<hr/>", "", 1)
+	limitWithoutDivider := testutil.DisplayedRuneCount(t, withoutDivider)
 
 	// When
 	chunks, err := testutil.RenderChunks(t, books, digest.Options{Limit: limitWithoutDivider})
@@ -419,6 +420,8 @@ func Test_Render_does_not_count_divider_toward_message_limit(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, chunks, 1)
 	require.Equal(t, unlimitedChunks, chunks)
+	require.Equal(t, limitWithoutDivider, testutil.DisplayedRuneCount(t, unlimitedChunks[0].Text))
+	require.Equal(t, len("<hr/>"), len(unlimitedChunks[0].Text)-len(withoutDivider))
 }
 
 func Test_Render_splits_before_rich_message_block_limit(t *testing.T) {
@@ -645,15 +648,22 @@ func Test_RenderBook_truncates_content_at_HTML_byte_limit(t *testing.T) {
 	require.True(t, strings.HasSuffix(strings.Split(item, "<br/><br/>")[1], "…"))
 }
 
-func Test_RenderBook_rejects_mandatory_fields_over_HTML_byte_limit(t *testing.T) {
+func Test_RenderBook_long_URL_uses_HTML_bytes_not_displayed_runes(t *testing.T) {
 	t.Parallel()
 
 	// Given
+	shortURL := "https://example.com/book"
 	book := alib.Book{
 		Title:   "Книга",
 		Content: "Описание",
 		BuyURL:  "https://example.com/" + strings.Repeat("a", 35000),
 	}
+	shortBook := book
+	shortBook.BuyURL = shortURL
+	shortItem, err := digest.RenderBook(shortBook, digest.Options{Limit: 32000})
+	require.NoError(t, err)
+	require.Less(t, testutil.DisplayedRuneCount(t, shortItem), 32000)
+	require.Greater(t, len(shortItem)+len(book.BuyURL)-len(shortURL), 34996)
 
 	// When
 	item, err := digest.RenderBook(book, digest.Options{Limit: 32000})

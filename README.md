@@ -26,6 +26,19 @@ Global fields and defaults:
   wait. A valid service reload applies the new delay after active work ends.
 - `message_limit`: `32000`, allowed range `64..32768`.
 
+Every rendered Telegram message has three independent limits: `message_limit`
+displayed Unicode runes, 34996 bytes of source UTF-8 HTML, and 500 Rich Message
+blocks (ordinary digest chunks contain at most 250 listings). HTML tags and URL
+attributes do not consume `message_limit`, but they do consume the HTML byte
+limit. `<br/>` contributes one displayed rune; escaped text contributes its
+decoded displayed runes and its encoded HTML bytes.
+
+Only a listing's `Content` is shortened: when either text limit is exceeded, it
+is reduced to the longest source-rune prefix plus `…` that fits both limits. If
+mandatory fields, including links, still do not fit, a new listing is not saved;
+an existing pending listing remains pending, is reported as a book-specific
+failure, and does not block other listings.
+
 `fresh_books` controls the optional ✨ marker; it does not filter listings.
 `age:N` uses the inclusive threshold `current local year - N`, with `N >= 0`;
 `since:YYYY` uses that inclusive year. Empty disables only ✨. The current
@@ -91,7 +104,10 @@ alib-fetcher -service -config ./config.toml
 ```
 
 Forget the newest records from one selected database without Telegram or Alib
-access:
+access. This is a recovery operation: it can cause duplicates on the next
+digest. `N` selects the last `N` discovered records, not automatically inferred
+lost books from one particular message. Confirmed records are never resent by
+the HTML-limit fix itself:
 
 ```bash
 alib-fetcher -forget-latest 6 -chat=-1001234567890 -config ./config.toml
