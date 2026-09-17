@@ -197,7 +197,9 @@ Preserve these semantics:
 
 ## Configuration contract
 
-The process reads strict TOML from `./config.toml` or `-config PATH`. Global
+The process reads strict TOML from `-config PATH`, then `ALIB_FETCHER_CONFIG`,
+then `./config.toml`; an empty environment value uses the default path.
+Relative configuration paths are resolved from the working directory. Global
 fields are `state_path` (default `/var/lib/alib-fetcher`, a directory),
 `cron_schedule` (`0 0 * * *`), `timezone` (`Europe/Moscow`), `run_on_startup`
 (`true`), `fresh_books` (empty), `http_timeout` (`30s`), `alib_max_retries`

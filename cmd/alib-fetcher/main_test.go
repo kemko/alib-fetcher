@@ -806,6 +806,21 @@ func Test_parseCommandLine_help_is_available_without_configuration(t *testing.T)
 	}
 }
 
+func Test_parseCommandLine_help_includes_config_environment(t *testing.T) {
+	// Given
+	t.Setenv("ALIB_FETCHER_CONFIG", filepath.Join(t.TempDir(), "missing.toml"))
+	var output, errors bytes.Buffer
+
+	// When
+	options, err := parseCommandLineArgs([]string{"alib-fetcher", "-help"}, &output, &errors)
+
+	// Then
+	require.NoError(t, err)
+	require.True(t, options.help)
+	require.Contains(t, output.String(), "ALIB_FETCHER_CONFIG")
+	require.Empty(t, errors.String())
+}
+
 func Test_main_subprocess_exit_codes(t *testing.T) {
 	t.Parallel()
 
@@ -924,7 +939,9 @@ func Test_run_without_arguments_only_prints_help(t *testing.T) {
 }
 
 func Test_run_help_does_not_read_configuration(t *testing.T) {
-	useCommandLine(t, "-help", "-config", filepath.Join(t.TempDir(), "missing.toml"))
+	missingConfig := filepath.Join(t.TempDir(), "missing.toml")
+	t.Setenv("ALIB_FETCHER_CONFIG", missingConfig)
+	useCommandLine(t, "-help")
 
 	require.NoError(t, run(slog.New(slog.DiscardHandler)))
 }
@@ -1382,6 +1399,47 @@ func Test_run_forget_latest_only_requires_state_path(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, reopened.Close())
 	require.Empty(t, pending)
+}
+
+func Test_run_forget_latest_uses_config_from_environment(t *testing.T) {
+	// Given
+	statePath := filepath.Join(t.TempDir(), "state.db")
+	setEnvironmentAbsentDigestConfiguration(t)
+	setMaintenanceConfig(t, statePath, "-100123")
+	t.Setenv("ALIB_FETCHER_CONFIG", os.Getenv("ALIB_TEST_CONFIG"))
+	useCommandLine(t, "-forget-latest", "1", "-chat", "-100123")
+	state, err := store.Open(statePath, time.Now())
+	require.NoError(t, err)
+	book := alib.Book{BuyURL: "https://example.com/book"}
+	_, err = state.RecordDiscovered(context.Background(), []alib.Book{book}, time.Now())
+	require.NoError(t, err)
+	require.NoError(t, state.Close())
+
+	// When
+	err = run(slog.New(slog.DiscardHandler))
+
+	// Then
+	require.NoError(t, err)
+	reopened, err := store.Open(statePath, time.Now())
+	require.NoError(t, err)
+	pending, err := reopened.Pending(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, reopened.Close())
+	require.Empty(t, pending)
+}
+
+func Test_run_returns_environment_config_error(t *testing.T) {
+	// Given
+	missingConfig := filepath.Join(t.TempDir(), "missing.toml")
+	t.Setenv("ALIB_FETCHER_CONFIG", missingConfig)
+	useCommandLine(t, "-once")
+
+	// When
+	err := run(slog.New(slog.DiscardHandler))
+
+	// Then
+	require.ErrorIs(t, err, os.ErrNotExist)
+	require.ErrorContains(t, err, missingConfig)
 }
 
 func Test_run_forget_latest_documented_cli_scenario_deletes_latest_records_without_http(t *testing.T) {

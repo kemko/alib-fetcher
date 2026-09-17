@@ -6,8 +6,10 @@ bbolt database.
 
 ## Configuration
 
-The service reads TOML from `./config.toml`, or from the path passed to
-`-config`. See [config.example.toml](config.example.toml).
+The service reads TOML from the path passed to `-config`, then
+`ALIB_FETCHER_CONFIG`, then `./config.toml`. An empty environment value keeps
+the default path. Relative paths are resolved from the working directory. See
+[config.example.toml](config.example.toml).
 
 Global fields and defaults:
 
@@ -116,6 +118,12 @@ Run the scheduled service:
 
 ```bash
 alib-fetcher -service -config ./config.toml
+```
+
+Or select its configuration through the environment:
+
+```bash
+ALIB_FETCHER_CONFIG=/path/config.toml alib-fetcher -service
 ```
 
 Forget the newest records from one selected database without Telegram or Alib
