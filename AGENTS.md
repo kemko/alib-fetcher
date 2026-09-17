@@ -77,8 +77,10 @@ Preserve these semantics:
   specified duration and retries the same chunk before later chunks. The wait
   honors context cancellation, and the chunk remains unacknowledged until a
   retry succeeds.
-- A valid Alib search page with no listings is a successful empty result. An
-  empty or structurally changed page is `alib.ErrNoBooks`; a cycle fails only
+- An HTTP 200 page with no listing candidates is a successful empty result,
+  independent of search-page markup. A page with no successfully parsed books
+  and at least one malformed listing without a usable buy URL is
+  `alib.ErrNoBooks`; a cycle fails only
   when every configured page fails or the context is canceled.
 - Retention uses a strict boundary for sent records: records sent before the
   14-day cutoff are removed; a record exactly at the cutoff remains. Pending
@@ -312,8 +314,8 @@ before the next URL starts, and all downloads finish before successful responses
 are parsed in source order. Responses larger than 4 MiB are rejected as
 download failures. Listings are then combined in first-seen order and
 deduplicated by `BuyURL`; a failed download or parse does not discard successful
-results from other pages. A valid empty search page is successful, while a cycle
-fails if no page parses successfully. The client logs
+results from other pages. An HTTP 200 page without listing candidates is
+successful, while a cycle fails if no page parses successfully. The client logs
 `alib.page_downloaded` or
 `alib.page_download_failed` for each attempt, with a one-based `attempt` that
 resets for each page. After all downloads finish, each successfully downloaded
@@ -336,7 +338,8 @@ flood-control retry, chat filtering, refresh ordering, and runner-lock policy.
 Structured logs go to stdout. Stable event names are `scheduler.started`,
 `scheduler.stopped`, `digest.started`, `digest.completed`, `digest.failed`,
 `alib.page_downloaded`, `alib.page_download_failed`, `alib.page_parsed`,
-`alib.page_parse_failed`, `callback.poll_failed`, `callback.answer_failed`,
+`alib.page_parse_failed`, `alib.book_parse_failed`, `digest.book_render_failed`,
+`callback.poll_failed`, `callback.answer_failed`,
 `state.forget_latest.completed`, `config.reload_pending`, `config.reloaded`,
 `config.reload_failed`, and `service.failed`; digest completion fields
 are `fetched`, `new`, `failed`, `pruned`, and `sent`, while forget-latest completion fields
@@ -345,6 +348,11 @@ are `requested` and `deleted`. Every Alib page event includes the zero-based
 fragments; download events include the one-based per-page `attempt`,
 `alib.page_parsed` includes `books`, failed events include `error`, and every
 page event includes `status_code` (`0` when no response exists).
+Each malformed listing occurrence logs `alib.book_parse_failed` with page `index`,
+`url`, zero-based candidate `listing_index`, available `title` and `buy_url`,
+`error`, and `status_code`. Deduplication still controls the digest failure count.
+New and pending books that cannot be rendered log `digest.book_render_failed`
+with `title`, `buy_url`, `error`, and `message_limit`.
 Recipient-specific events include `chat_id`, including Alib page events and
 matched callback answer failures. Shared polling errors have no single chat ID.
 Keep slog attributes typed, snake_case, and free of secrets. Generated

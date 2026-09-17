@@ -26,6 +26,7 @@ import (
 
 	"github.com/kemko/alib-fetcher/internal/alib"
 	"github.com/kemko/alib-fetcher/internal/config"
+	"github.com/kemko/alib-fetcher/internal/digest"
 	"github.com/kemko/alib-fetcher/internal/process"
 	"github.com/kemko/alib-fetcher/internal/store"
 	"github.com/kemko/alib-fetcher/internal/telegram"
@@ -1557,17 +1558,21 @@ func Test_run_once_fetches_categories_and_series_in_order_and_sends_partial_dedu
 	require.Contains(t, combinedHTML, "…")
 	require.Equal(t, 1, strings.Count(combinedHTML, "Не удалось обработать книг: 1"))
 	logOutput := logs.String()
+	require.Contains(t, logOutput, `"msg":"alib.book_parse_failed","chat_id":"-100123"`)
+	require.Contains(t, logOutput, `"msg":"digest.book_render_failed","chat_id":"-100123"`)
+	require.Contains(t, logOutput, `"buy_url":"`+alibServer.URL+oversizedPath+`"`)
+	require.Contains(t, logOutput, digest.ErrMessageTooLong.Error())
 	require.Equal(t, 3, strings.Count(logOutput, `"msg":"alib.page_downloaded"`))
 	require.Equal(t, 1, strings.Count(logOutput, `"msg":"alib.page_download_failed"`))
-	require.Equal(t, 2, strings.Count(logOutput, `"msg":"alib.page_parsed"`))
-	require.Equal(t, 1, strings.Count(logOutput, `"msg":"alib.page_parse_failed"`))
+	require.Equal(t, 3, strings.Count(logOutput, `"msg":"alib.page_parsed"`))
+	require.NotContains(t, logOutput, `"msg":"alib.page_parse_failed"`)
 	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","chat_id":"-100123","index":0,"url":"`+alibServer.URL+`/first.phtml?tnew=7"`)
 	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","chat_id":"-100123","index":2,"url":"`+alibServer.URL+`/findp.php4?seria=%D1%E5%F0%E8%FF%2C+%F2%EE%EC%E0&lday=7"`)
 	require.Contains(t, logOutput, `"msg":"alib.page_downloaded","chat_id":"-100123","index":3,"url":"`+alibServer.URL+`/findp.php4?seria=changed&lday=7"`)
 	require.Contains(t, logOutput, `"msg":"alib.page_download_failed","chat_id":"-100123","index":1,"url":"`+alibServer.URL+`/broken.phtml?tnew=7"`)
 	require.Contains(t, logOutput, `"msg":"alib.page_parsed","chat_id":"-100123","index":0,"url":"`+alibServer.URL+`/first.phtml?tnew=7","books":2`)
 	require.Contains(t, logOutput, `"msg":"alib.page_parsed","chat_id":"-100123","index":2,"url":"`+alibServer.URL+`/findp.php4?seria=%D1%E5%F0%E8%FF%2C+%F2%EE%EC%E0&lday=7","books":1`)
-	require.Contains(t, logOutput, `"msg":"alib.page_parse_failed","chat_id":"-100123","index":3,"url":"`+alibServer.URL+`/findp.php4?seria=changed&lday=7"`)
+	require.Contains(t, logOutput, `"msg":"alib.page_parsed","chat_id":"-100123","index":3,"url":"`+alibServer.URL+`/findp.php4?seria=changed&lday=7","books":0`)
 	requireAlibPageStatuses(t, logOutput, []int{200, 502, 200, 200})
 	require.Less(t,
 		strings.LastIndex(logOutput, `"msg":"alib.page_downloaded"`),
@@ -1618,7 +1623,11 @@ func Test_run_once_sends_notification_for_all_correct_empty_pages(t *testing.T) 
 	alibServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		alibRequests <- alibRequest{Path: request.URL.Path, RawQuery: request.URL.RawQuery}
 		writer.Header().Set("Content-Type", "text/html; charset=windows-1251")
-		_, writeErr := writer.Write(emptyPage)
+		page := emptyPage
+		if request.URL.Path == "/empty-two" {
+			page = []byte(`<html><body><p>No results</p></body></html>`)
+		}
+		_, writeErr := writer.Write(page)
 		assert.NoError(t, writeErr)
 	}))
 	t.Cleanup(alibServer.Close)
@@ -1717,7 +1726,7 @@ func Test_run_once_fails_after_requesting_and_logging_all_failed_pages(t *testin
 			writer.WriteHeader(http.StatusBadGateway)
 		case "/broken":
 			writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_, err := writer.Write([]byte("<html><body>changed</body></html>"))
+			_, err := writer.Write([]byte(`<p><b>Broken</b> Цена: 100 руб.</p>`))
 			assert.NoError(t, err)
 		default:
 			t.Errorf("unexpected Alib path %q", request.URL.Path)

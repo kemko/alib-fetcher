@@ -292,7 +292,7 @@ func Test_Parse_skips_listings_with_sale_nodes_before_title(t *testing.T) {
 	}
 }
 
-func Test_Parse_rejects_page_without_books(t *testing.T) {
+func Test_Parse_accepts_page_without_books(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -303,7 +303,7 @@ func Test_Parse_rejects_page_without_books(t *testing.T) {
 	books, err := alib.Parse(bytes.NewBufferString("<html><body>empty</body></html>"), baseURL, "text/html")
 
 	// Then
-	require.ErrorIs(t, err, alib.ErrNoBooks)
+	require.NoError(t, err)
 	require.Empty(t, books)
 }
 
@@ -324,7 +324,7 @@ func Test_Parse_accepts_empty_windows1251_search_page(t *testing.T) {
 	require.Empty(t, books)
 }
 
-func Test_Parse_rejects_structurally_changed_empty_search_page(t *testing.T) {
+func Test_Parse_accepts_changed_empty_search_page(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -338,11 +338,11 @@ func Test_Parse_rejects_structurally_changed_empty_search_page(t *testing.T) {
 		baseURL, "text/html; charset=windows-1251")
 
 	// Then
-	require.ErrorIs(t, err, alib.ErrNoBooks)
+	require.NoError(t, err)
 	require.Empty(t, books)
 }
 
-func Test_Parse_rejects_search_page_shell_without_empty_result_marker(t *testing.T) {
+func Test_Parse_accepts_search_page_without_empty_result_marker(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -354,7 +354,7 @@ func Test_Parse_rejects_search_page_shell_without_empty_result_marker(t *testing
 	books, err := alib.Parse(bytes.NewBufferString(page), baseURL, "text/html")
 
 	// Then
-	require.ErrorIs(t, err, alib.ErrNoBooks)
+	require.NoError(t, err)
 	require.Empty(t, books)
 }
 
@@ -398,7 +398,7 @@ func Test_Parse_rejects_listing_without_buy_link_on_empty_search_page(t *testing
 	require.Empty(t, books)
 }
 
-func Test_Parse_rejects_unrecognized_listing_in_empty_result_region(t *testing.T) {
+func Test_Parse_accepts_page_without_recognizable_listing_candidates(t *testing.T) {
 	t.Parallel()
 
 	// Given
@@ -413,7 +413,7 @@ func Test_Parse_rejects_unrecognized_listing_in_empty_result_region(t *testing.T
 	books, err := alib.Parse(bytes.NewReader(page), baseURL, "text/html; charset=windows-1251")
 
 	// Then
-	require.ErrorIs(t, err, alib.ErrNoBooks)
+	require.NoError(t, err)
 	require.Empty(t, books)
 }
 

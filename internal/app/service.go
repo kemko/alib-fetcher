@@ -5,12 +5,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"sort"
 	"time"
 
 	"github.com/kemko/alib-fetcher/internal/alib"
 	"github.com/kemko/alib-fetcher/internal/digest"
+)
+
+const (
+	logKeyTitle        = "title"
+	logKeyBuyURL       = "buy_url"
+	logKeyError        = "error"
+	logKeyMessageLimit = "message_limit"
 )
 
 // Fetcher obtains the latest source listings.
@@ -39,6 +47,7 @@ type FreshBooksPolicy interface {
 
 // Dependencies contains the service adapters and digest policy.
 type Dependencies struct {
+	Logger         *slog.Logger
 	Fetcher        Fetcher
 	State          State
 	Sender         Sender
@@ -68,6 +77,9 @@ type Service struct {
 func NewService(dependencies Dependencies) *Service {
 	if dependencies.Wait == nil {
 		dependencies.Wait = wait
+	}
+	if dependencies.Logger == nil {
+		dependencies.Logger = slog.New(slog.DiscardHandler)
 	}
 	return &Service{dependencies: dependencies}
 }
@@ -99,7 +111,7 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 	if err != nil {
 		return result, err
 	}
-	recordableBooks, newBooks := recordableFetched(books, existing, failedURLs, renderOptions)
+	recordableBooks, newBooks := s.recordableFetched(ctx, books, existing, failedURLs, renderOptions)
 	result.Failed = unidentifiedFailures + len(failedURLs)
 	if len(recordableBooks) > 0 {
 		_, err = s.dependencies.State.RecordDiscovered(ctx, recordableBooks, cycleTime)
@@ -152,6 +164,11 @@ func (s *Service) renderAndSend(
 	previousFailures int,
 ) (int, int, error) {
 	chunks, skippedBuyURLs, err := digest.RenderSendable(pending, options, previousFailures)
+	for _, book := range pending {
+		if slices.Contains(skippedBuyURLs, book.BuyURL) {
+			s.logRenderFailure(ctx, book, digest.ErrMessageTooLong, options.Limit)
+		}
+	}
 	if err != nil {
 		return 0, previousFailures, fmt.Errorf("render digest: %w", err)
 	}
@@ -180,7 +197,8 @@ func (s *Service) renderAndSend(
 	return sent, previousFailures + len(skippedBuyURLs), nil
 }
 
-func recordableFetched(
+func (s *Service) recordableFetched(
+	ctx context.Context,
 	books []alib.Book,
 	existing []bool,
 	failedURLs map[string]struct{},
@@ -194,7 +212,8 @@ func recordableFetched(
 			continue
 		}
 
-		if !renderable(book, options) {
+		if _, err := digest.RenderBook(book, options); err != nil {
+			s.logRenderFailure(ctx, book, err, options.Limit)
 			failedURLs[book.BuyURL] = struct{}{}
 			continue
 		}
@@ -205,10 +224,10 @@ func recordableFetched(
 	return recordable, newBooks
 }
 
-func renderable(book alib.Book, options digest.Options) bool {
-	_, err := digest.RenderBook(book, options)
-
-	return err == nil
+func (s *Service) logRenderFailure(ctx context.Context, book alib.Book, err error, limit int) {
+	s.dependencies.Logger.ErrorContext(ctx, "digest.book_render_failed",
+		slog.String(logKeyTitle, book.Title), slog.String(logKeyBuyURL, book.BuyURL),
+		slog.Any(logKeyError, err), slog.Int(logKeyMessageLimit, limit))
 }
 
 func sortPending(pending []alib.Book) []alib.Book {
