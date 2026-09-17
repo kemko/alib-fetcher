@@ -52,6 +52,21 @@ Alib accepts only a final HTTP 200 response after redirects. Every
 `alib.page_parse_failed` event includes numeric `status_code`; it is `0` when
 no HTTP response was received.
 
+An HTTP 200 page without listing candidates is a successful empty result,
+independent of the search form or empty-result markup. HTTP status alone cannot
+distinguish empty results from a page whose listing markup has changed completely.
+Recognizable but malformed listings still count as book failures.
+
+`alib.book_parse_failed` records each malformed listing occurrence with `chat_id`,
+page `index`, full source `url`, zero-based `listing_index`, `title`, `buy_url`,
+`error`, and `status_code`. Missing titles or buy URLs are logged as empty strings;
+the page URL and listing index locate those failures. Duplicate occurrences may
+produce several log events; a successfully parsed duplicate removes the failure
+from the digest count. `digest.book_render_failed` identifies new or pending books
+that exceed message limits, with `chat_id`, `title`, `buy_url`, `error`, and
+`message_limit`. The `failed` count in `digest.completed` includes both parsing and
+rendering failures.
+
 Each `[[chats]]` entry requires `chat_id` (signed decimal `int64` or a
 non-empty `@channel` username) and `telegram_token`. `state_file` is an
 optional file name inside `state_path`; otherwise it is `<normalized chat_id>.db`.

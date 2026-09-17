@@ -1,8 +1,10 @@
 package app_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -114,8 +116,10 @@ func Test_Service_retries_unrenderable_new_book_without_recording(t *testing.T) 
 	t.Cleanup(func() { require.NoError(t, state.Close()) })
 	book := alib.Book{Title: strings.Repeat("Очень длинная книга ", 20), BuyURL: "https://example.com/oversized"}
 	events := make([]string, 0)
+	var logs bytes.Buffer
 	sender := &fakeSender{}
 	service := app.NewService(app.Dependencies{
+		Logger:       slog.New(slog.NewJSONHandler(&logs, nil)),
 		Fetcher:      fakeFetcher{books: []alib.Book{book}, events: &events},
 		State:        state,
 		Sender:       sender,
@@ -137,6 +141,7 @@ func Test_Service_retries_unrenderable_new_book_without_recording(t *testing.T) 
 	require.Equal(t, []bool{false}, existing)
 	require.Equal(t, []string{"fetch", "fetch"}, events)
 	require.Len(t, sender.messages, 2)
+	require.Equal(t, 2, strings.Count(logs.String(), `"msg":"digest.book_render_failed"`))
 }
 
 func Test_Service_preserves_state_at_content_truncation_boundary(t *testing.T) {
@@ -938,8 +943,10 @@ func Test_Service_keeps_byte_oversized_new_and_pending_books_unacknowledged(t *t
 	good := alib.Book{Title: "Отправляемая", BuyURL: "https://example.com/good"}
 	_, err = state.RecordDiscovered(context.Background(), []alib.Book{pendingTooLarge}, now.Add(-time.Hour))
 	require.NoError(t, err)
+	var logs bytes.Buffer
 	sender := &fakeSender{}
 	service := app.NewService(app.Dependencies{
+		Logger:       slog.New(slog.NewJSONHandler(&logs, nil)),
 		Fetcher:      fakeFetcher{books: []alib.Book{newTooLarge, good}},
 		State:        state,
 		Sender:       sender,
@@ -953,6 +960,12 @@ func Test_Service_keeps_byte_oversized_new_and_pending_books_unacknowledged(t *t
 	pending, pendingErr := state.Pending(context.Background())
 
 	// Then
+	require.Equal(t, 2, strings.Count(logs.String(), `"msg":"digest.book_render_failed"`))
+	for _, book := range []alib.Book{newTooLarge, pendingTooLarge} {
+		require.Contains(t, logs.String(), `"title":"`+book.Title+`","buy_url":"`+book.BuyURL+`"`)
+	}
+	require.Contains(t, logs.String(), digest.ErrMessageTooLong.Error())
+	require.Contains(t, logs.String(), `"message_limit":32000`)
 	require.NoError(t, runErr)
 	require.NoError(t, existingErr)
 	require.NoError(t, pendingErr)

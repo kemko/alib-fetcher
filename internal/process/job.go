@@ -70,6 +70,7 @@ func executeJobForChat(
 	}
 	defer joinCloseError(&jobErr, state)
 
+	dependencies.Logger = logger.With(startedAttributes...)
 	dependencies.State = state
 	service := app.NewService(dependencies)
 	result, jobErr = service.Run(ctx)

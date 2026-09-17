@@ -23,6 +23,9 @@ const (
 	logKeyBooks          = "books"
 	logKeyAttempt        = "attempt"
 	logKeyStatusCode     = "status_code"
+	logKeyListingIndex   = "listing_index"
+	logKeyTitle          = "title"
+	logKeyBuyURL         = "buy_url"
 )
 
 // ErrUnexpectedStatus indicates that Alib.ru did not return an HTTP 200 response.
@@ -133,6 +136,7 @@ func (c *Client) FetchWithResult(ctx context.Context) (FetchResult, error) {
 		if contextErr := ctx.Err(); contextErr != nil {
 			return FetchResult{}, contextErr
 		}
+		c.logListingFailures(ctx, page, pageResult.failures)
 		if parseErr != nil {
 			if errors.Is(parseErr, ErrNoBooks) {
 				unidentifiedFailures += pageResult.UnidentifiedFailures
@@ -168,6 +172,16 @@ func (c *Client) FetchWithResult(ctx context.Context) (FetchResult, error) {
 		FailedBuyURLs:        state.failedBuyURLs(),
 		UnidentifiedFailures: unidentifiedFailures,
 	}, nil
+}
+
+func (c *Client) logListingFailures(ctx context.Context, page downloadedPage, failures []listingFailure) {
+	for _, failure := range failures {
+		c.logger.ErrorContext(ctx, "alib.book_parse_failed",
+			slog.Int(logKeyIndex, page.index), slog.String(logKeyURL, page.endpoint.String()),
+			slog.Int(logKeyListingIndex, failure.index), slog.String(logKeyTitle, failure.book.Title),
+			slog.String(logKeyBuyURL, failure.book.BuyURL), slog.Any(logKeyError, failure.err),
+			slog.Int(logKeyStatusCode, page.statusCode))
+	}
 }
 
 func (c *Client) downloadPages(ctx context.Context) ([]downloadedPage, []error, error) {

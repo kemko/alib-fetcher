@@ -3,6 +3,7 @@ package alib_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -143,28 +144,45 @@ func Test_Client_logs_status_for_redirect_errors(t *testing.T) {
 	}
 }
 
-func Test_Client_returns_parse_error_for_structurally_changed_page(t *testing.T) {
+func Test_Client_accepts_HTTP_200_without_listings(t *testing.T) {
 	t.Parallel()
 
-	// Given
-	var requests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		requests.Add(1)
-		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, err := writer.Write([]byte(`<html><body>No listings here</body></html>`))
-		assert.NoError(t, err)
-	}))
-	t.Cleanup(server.Close)
-	client, err := alib.NewClient([]string{server.URL}, time.Second, 0, 1, slog.New(slog.DiscardHandler))
-	require.NoError(t, err)
+	for name, page := range map[string]string{
+		"empty body":   "",
+		"no results":   `<html><body><p>Ничего не найдено</p></body></html>`,
+		"changed form": `<form name="search"><input name="seria"></form><p>Найдено книг: 0</p>`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 
-	// When
-	books, err := fetchBooks(client, context.Background())
+			// Given
+			var requests atomic.Int32
+			var logs bytes.Buffer
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				requests.Add(1)
+				writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+				_, err := writer.Write([]byte(page))
+				assert.NoError(t, err)
+			}))
+			t.Cleanup(server.Close)
+			client, err := alib.NewClient([]string{server.URL + "/findp.php4?seria=empty&lday=7"},
+				time.Second, 0, 1, slog.New(slog.NewTextHandler(&logs, nil)))
+			require.NoError(t, err)
 
-	// Then
-	require.ErrorIs(t, err, alib.ErrNoBooks)
-	require.Empty(t, books)
-	require.Equal(t, int32(1), requests.Load())
+			// When
+			result, err := client.FetchWithResult(context.Background())
+
+			// Then
+			require.NoError(t, err)
+			require.Empty(t, result.Books)
+			require.Empty(t, result.FailedBuyURLs)
+			require.Zero(t, result.UnidentifiedFailures)
+			require.Equal(t, int32(1), requests.Load())
+			require.Contains(t, logs.String(), "msg=alib.page_parsed")
+			require.Contains(t, logs.String(), "books=0 status_code=200")
+			require.NotContains(t, logs.String(), "failed")
+		})
+	}
 }
 
 func Test_Client_returns_context_error_when_request_is_canceled(t *testing.T) {
@@ -630,7 +648,7 @@ func Test_Client_logs_full_URL_for_parse_failure(t *testing.T) {
 	var logs bytes.Buffer
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, err := writer.Write([]byte("<html><body>changed</body></html>"))
+		_, err := writer.Write([]byte(`<p><b>Broken</b> Цена: 100 руб.</p>`))
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
@@ -699,7 +717,7 @@ func Test_Client_downloads_all_pages_before_parsing_and_logs_outcomes(t *testing
 			writer.WriteHeader(http.StatusBadGateway)
 		case "/broken":
 			writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_, writeErr := writer.Write([]byte("<html><body>changed</body></html>"))
+			_, writeErr := writer.Write([]byte(`<p><b>Broken</b> Цена: 100 руб.</p>`))
 			assert.NoError(t, writeErr)
 		case "/success":
 			writer.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -886,7 +904,7 @@ func Test_Client_returns_combined_error_when_all_pages_fail(t *testing.T) {
 			return
 		}
 		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, err := writer.Write([]byte("<html><body>changed</body></html>"))
+		_, err := writer.Write([]byte(`<p><b>Broken</b> Цена: 100 руб.</p>`))
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
@@ -1287,4 +1305,106 @@ func (handler *cancelOnMessageHandler) Handle(ctx context.Context, record slog.R
 	}
 
 	return err
+}
+
+func Test_Client_logs_malformed_listing_identity_and_reason(t *testing.T) {
+	t.Parallel()
+
+	const logKeyChatID = "chat_id"
+	type failureEvent struct {
+		Message      string `json:"msg"`
+		ChatID       string `json:"chat_id"`
+		URL          string `json:"url"`
+		Title        string `json:"title"`
+		BuyURL       string `json:"buy_url"`
+		Error        string `json:"error"`
+		Index        int    `json:"index"`
+		ListingIndex int    `json:"listing_index"`
+		StatusCode   int    `json:"status_code"`
+	}
+
+	for name, testCase := range map[string]struct {
+		listing string
+		title   string
+		buyPath string
+		reason  string
+	}{
+		"missing title": {
+			listing: `<p>Без названия <a href="/broken">Купить</a></p>`,
+			buyPath: "/broken", reason: "missing title",
+		},
+		"missing buy link": {
+			listing: `<p><b>Без ссылки</b> Цена: 100 руб.</p>`,
+			title:   "Без ссылки", reason: "missing buy link",
+		},
+		"missing buy URL": {
+			listing: `<p><b>Пустая ссылка</b> <a>Купить</a></p>`,
+			title:   "Пустая ссылка", reason: "missing or invalid buy URL",
+		},
+		"invalid buy URL": {
+			listing: `<p><b>Неверная ссылка</b> <a href="%zz">Купить</a></p>`,
+			title:   "Неверная ссылка", reason: "missing or invalid buy URL",
+		},
+		"nested title": {
+			listing: `<p><a href="/extra"><b>Вложенное название</b></a> <a href="/broken">Купить</a></p>`,
+			title:   "Вложенное название", buyPath: "/broken",
+			reason: "title or buy link is nested inside another listing link",
+		},
+		"buy link before title": {
+			listing: `<p><a href="/broken">Купить</a> <b>Ссылка до названия</b></p>`,
+			title:   "Ссылка до названия", buyPath: "/broken", reason: "buy link precedes title",
+		},
+		"seller before title": {
+			listing: `<p><a href="/bs.php4?bs=Seller">BS - Seller</a><br><b>Сбойная книга</b> <a href="/broken">Купить</a></p>`,
+			title:   "Сбойная книга", buyPath: "/broken", reason: "seller link is not between title and buy link",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			// Given
+			var logs bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&logs, nil)).With(slog.String(logKeyChatID, "-123"))
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+				_, err := writer.Write([]byte(`<p>Обычный текст</p>` +
+					testutil.ListingPage("Рабочая книга", "/good", "100 руб.") + testCase.listing))
+				assert.NoError(t, err)
+			}))
+			t.Cleanup(server.Close)
+			pageURL := server.URL + "/findp.php4?seria=test&lday=7#results"
+			client, err := alib.NewClient([]string{pageURL}, time.Second, 0, 0, logger)
+			require.NoError(t, err)
+
+			// When
+			result, err := client.FetchWithResult(context.Background())
+
+			// Then
+			require.NoError(t, err)
+			require.Len(t, result.Books, 1)
+			require.Equal(t, 1, len(result.FailedBuyURLs)+result.UnidentifiedFailures)
+			var failures []failureEvent
+			for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+				var event failureEvent
+				require.NoError(t, json.Unmarshal([]byte(line), &event))
+				if event.Message == "alib.book_parse_failed" {
+					failures = append(failures, event)
+				}
+			}
+			require.Len(t, failures, 1)
+			failure := failures[0]
+			require.Equal(t, "-123", failure.ChatID)
+			require.Equal(t, pageURL, failure.URL)
+			require.Zero(t, failure.Index)
+			require.Equal(t, 1, failure.ListingIndex)
+			require.Equal(t, 200, failure.StatusCode)
+			require.Equal(t, testCase.title, failure.Title)
+			require.Equal(t, testCase.reason, failure.Error)
+			buyURL := ""
+			if testCase.buyPath != "" {
+				buyURL = server.URL + testCase.buyPath
+			}
+			require.Equal(t, buyURL, failure.BuyURL)
+		})
+	}
 }
