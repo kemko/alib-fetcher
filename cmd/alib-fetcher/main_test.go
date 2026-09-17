@@ -1379,7 +1379,7 @@ func Test_run_forget_latest_only_requires_state_path(t *testing.T) {
 	// Given
 	statePath := filepath.Join(t.TempDir(), "state.db")
 	setEnvironmentAbsentDigestConfiguration(t)
-	setMaintenanceConfig(t, statePath, "-100123")
+	setMaintenanceConfig(t, statePath)
 	useCommandLine(t, "-forget-latest", "1", "-chat", "-100123", "-config", os.Getenv("ALIB_TEST_CONFIG"))
 	state, err := store.Open(statePath, time.Now())
 	require.NoError(t, err)
@@ -1405,7 +1405,7 @@ func Test_run_forget_latest_uses_config_from_environment(t *testing.T) {
 	// Given
 	statePath := filepath.Join(t.TempDir(), "state.db")
 	setEnvironmentAbsentDigestConfiguration(t)
-	setMaintenanceConfig(t, statePath, "-100123")
+	setMaintenanceConfig(t, statePath)
 	t.Setenv("ALIB_FETCHER_CONFIG", os.Getenv("ALIB_TEST_CONFIG"))
 	useCommandLine(t, "-forget-latest", "1", "-chat", "-100123")
 	state, err := store.Open(statePath, time.Now())
@@ -1442,11 +1442,53 @@ func Test_run_returns_environment_config_error(t *testing.T) {
 	require.ErrorContains(t, err, missingConfig)
 }
 
+func Test_run_empty_config_path_loads_default_file(t *testing.T) {
+	testCases := map[string]struct {
+		environment string
+		arguments   []string
+	}{
+		"empty environment": {},
+		"empty flag overrides environment": {
+			environment: "missing.toml",
+			arguments:   []string{"-config", ""},
+		},
+	}
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			// Given
+			statePath := filepath.Join(t.TempDir(), "state.db")
+			setMaintenanceConfig(t, statePath)
+			t.Chdir(filepath.Dir(os.Getenv("ALIB_TEST_CONFIG")))
+			t.Setenv("ALIB_FETCHER_CONFIG", testCase.environment)
+			arguments := append([]string{"-forget-latest", "1", "-chat", "-100123"}, testCase.arguments...)
+			useCommandLine(t, arguments...)
+			state, err := store.Open(statePath, time.Now())
+			require.NoError(t, err)
+			book := alib.Book{BuyURL: "https://example.com/book"}
+			_, err = state.RecordDiscovered(context.Background(), []alib.Book{book}, time.Now())
+			require.NoError(t, err)
+			require.NoError(t, state.Close())
+
+			// When
+			err = run(slog.New(slog.DiscardHandler))
+
+			// Then
+			require.NoError(t, err)
+			reopened, err := store.Open(statePath, time.Now())
+			require.NoError(t, err)
+			pending, err := reopened.Pending(context.Background())
+			require.NoError(t, err)
+			require.NoError(t, reopened.Close())
+			require.Empty(t, pending)
+		})
+	}
+}
+
 func Test_run_forget_latest_documented_cli_scenario_deletes_latest_records_without_http(t *testing.T) {
 	// Given
 	statePath := filepath.Join(t.TempDir(), "state.db")
 	setEnvironmentAbsentDigestConfiguration(t)
-	setMaintenanceConfig(t, statePath, "-100123")
+	setMaintenanceConfig(t, statePath)
 	books := make([]alib.Book, 8)
 	for index := range books {
 		books[index] = alib.Book{BuyURL: fmt.Sprintf("https://example.com/book-%d", index)}
@@ -1485,11 +1527,11 @@ func Test_run_rejects_missing_Alib_tracking_configuration_before_http(t *testing
 	require.ErrorContains(t, err, "categories, filters, and queries")
 }
 
-func setMaintenanceConfig(t *testing.T, statePath, chatID string) {
+func setMaintenanceConfig(t *testing.T, statePath string) {
 	t.Helper()
 	configPath := filepath.Join(t.TempDir(), "config.toml")
-	content := fmt.Sprintf("state_path = %q\n\n[[chats]]\nchat_id = %q\nstate_file = %q\n",
-		filepath.Dir(statePath), chatID, filepath.Base(statePath))
+	content := fmt.Sprintf("state_path = %q\n\n[[chats]]\nchat_id = \"-100123\"\nstate_file = %q\n",
+		filepath.Dir(statePath), filepath.Base(statePath))
 	require.NoError(t, os.WriteFile(configPath, []byte(content), 0o600))
 	t.Setenv("ALIB_TEST_CONFIG", configPath)
 }
