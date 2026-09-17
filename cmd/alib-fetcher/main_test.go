@@ -425,7 +425,7 @@ func Test_run_rejects_non_positive_forget_latest(t *testing.T) {
 }
 
 func Test_parseCommandLine_accepts_each_mode(t *testing.T) {
-	t.Parallel()
+	unsetEnvironment(t, "ALIB_FETCHER_CONFIG")
 
 	testCases := map[string]struct {
 		arguments []string
@@ -606,7 +606,7 @@ func Test_parseCommandLine_rejects_invalid_arguments(t *testing.T) {
 }
 
 func Test_parseCommandLine_normalizes_chat_and_tracks_explicit_values(t *testing.T) {
-	t.Parallel()
+	unsetEnvironment(t, "ALIB_FETCHER_CONFIG")
 
 	testCases := map[string]struct {
 		arguments []string
@@ -658,6 +658,98 @@ func Test_parseCommandLine_normalizes_chat_and_tracks_explicit_values(t *testing
 
 	for name, testCase := range testCases {
 		t.Run(name, func(t *testing.T) {
+			var output, errors bytes.Buffer
+
+			got, err := parseCommandLineArgs(testCase.arguments, &output, &errors)
+
+			require.NoError(t, err)
+			require.Equal(t, testCase.want, got)
+			require.Empty(t, output.String())
+			require.Empty(t, errors.String())
+		})
+	}
+}
+
+func Test_parseCommandLine_reads_config_path_from_environment(t *testing.T) {
+	testCases := map[string]struct {
+		arguments   []string
+		environment *string
+		want        commandOptions
+	}{
+		"once": {
+			arguments:   []string{"alib-fetcher", "-once"},
+			environment: stringPointer("environment.toml"),
+			want: commandOptions{
+				configPath: "environment.toml",
+				once:       true,
+			},
+		},
+		"service": {
+			arguments:   []string{"alib-fetcher", "-service"},
+			environment: stringPointer("environment.toml"),
+			want: commandOptions{
+				configPath: "environment.toml",
+				service:    true,
+			},
+		},
+		"forget latest": {
+			arguments:   []string{"alib-fetcher", "-forget-latest", "1", "-chat", "-100123"},
+			environment: stringPointer("environment.toml"),
+			want: commandOptions{
+				configPath: "environment.toml",
+				chatID:     "-100123",
+				forgetLatest: forgetLatestOption{
+					value: 1,
+					set:   true,
+				},
+			},
+		},
+		"short flag overrides environment": {
+			arguments:   []string{"alib-fetcher", "-once", "-config", "short.toml"},
+			environment: stringPointer("environment.toml"),
+			want: commandOptions{
+				configPath: "short.toml",
+				once:       true,
+			},
+		},
+		"long flag overrides environment": {
+			arguments:   []string{"alib-fetcher", "-once", "--config", "long.toml"},
+			environment: stringPointer("environment.toml"),
+			want: commandOptions{
+				configPath: "long.toml",
+				once:       true,
+			},
+		},
+		"absent environment uses default": {
+			arguments: []string{"alib-fetcher", "-once"},
+			want: commandOptions{
+				configPath: "./config.toml",
+				once:       true,
+			},
+		},
+		"empty environment leaves loader default": {
+			arguments:   []string{"alib-fetcher", "-once"},
+			environment: stringPointer(""),
+			want: commandOptions{
+				once: true,
+			},
+		},
+		"empty flag overrides environment": {
+			arguments:   []string{"alib-fetcher", "-once", "-config", ""},
+			environment: stringPointer("environment.toml"),
+			want: commandOptions{
+				once: true,
+			},
+		},
+	}
+
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			if testCase.environment == nil {
+				unsetEnvironment(t, "ALIB_FETCHER_CONFIG")
+			} else {
+				t.Setenv("ALIB_FETCHER_CONFIG", *testCase.environment)
+			}
 			var output, errors bytes.Buffer
 
 			got, err := parseCommandLineArgs(testCase.arguments, &output, &errors)
@@ -2051,6 +2143,10 @@ func valueOr(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func stringPointer(value string) *string {
+	return &value
 }
 
 func unsetEnvironment(t *testing.T, key string) {
