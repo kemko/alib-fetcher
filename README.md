@@ -151,7 +151,9 @@ no Telegram token or search source and performs no HTTP requests.
 
 The service runs startup and scheduled work independently for each chat and
 uses one Telegram SDK client/poller for chats sharing a token. It keeps
-pending books and retention state per database. Refresh callbacks, retries,
+pending books and retention state per database. Legacy pending records without a queue number
+come first in discovery order, sorted by observation time and then buy URL.
+Numbered records follow in queue order. Refresh callbacks, retries,
 graceful shutdown, message limits, and delivery ordering follow the same
 policy as previous releases. A valid TOML change pauses new work, lets active
 digests finish with their old settings, then applies the complete new snapshot;

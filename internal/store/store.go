@@ -220,7 +220,7 @@ func (s *Store) Pending(ctx context.Context) ([]alib.Book, error) {
 	sort.SliceStable(pendingRecords, func(leftIndex, rightIndex int) bool {
 		left := pendingRecords[leftIndex]
 		right := pendingRecords[rightIndex]
-		if left.queueOrder > 0 && right.queueOrder > 0 && left.queueOrder != right.queueOrder {
+		if left.queueOrder != right.queueOrder {
 			return left.queueOrder < right.queueOrder
 		}
 		if left.observedAt != right.observedAt {
@@ -370,11 +370,6 @@ func latestRecords(ctx context.Context, bucket *bolt.Bucket) ([]latestRecord, er
 }
 
 func latestRecordIsNewer(left, right latestRecord) bool {
-	leftHasQueueOrder := left.queueOrder > 0
-	rightHasQueueOrder := right.queueOrder > 0
-	if leftHasQueueOrder != rightHasQueueOrder {
-		return leftHasQueueOrder
-	}
 	if left.queueOrder != right.queueOrder {
 		return left.queueOrder > right.queueOrder
 	}
