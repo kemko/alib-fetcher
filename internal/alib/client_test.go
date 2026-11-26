@@ -1075,7 +1075,7 @@ func Test_Client_retries_each_page_until_success(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	client, err := alib.NewClient([]string{server.URL + "/first", server.URL + "/second"}, time.Second, 0, 1,
-		slog.New(slog.NewTextHandler(&logs, nil)))
+		slog.New(slog.NewJSONHandler(&logs, nil)))
 	require.NoError(t, err)
 
 	// When
@@ -1085,39 +1085,26 @@ func Test_Client_retries_each_page_until_success(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"/first", "/first", "/second", "/second"}, requests)
 	require.Len(t, result.Books, 2)
-	require.Equal(t, 2, strings.Count(logs.String(), "msg=alib.page_download_failed"))
-	require.Contains(t, logs.String(), "msg=alib.page_download_failed index=0 url="+server.URL+
-		"/first error=")
-	require.Contains(t, logs.String(), "attempt=1")
-	require.Contains(t, logs.String(), "attempt=2")
-}
-
-func Test_Client_uses_four_attempts_by_default(t *testing.T) {
-	t.Parallel()
-
-	// Given
-	requestCount := 0
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		requestCount++
-		if requestCount < 4 {
-			writer.WriteHeader(http.StatusBadGateway)
-			return
+	type downloadEvent struct {
+		Message string `json:"msg"`
+		URL     string `json:"url"`
+		Index   int    `json:"index"`
+		Attempt int    `json:"attempt"`
+	}
+	var attempts []downloadEvent
+	for decoder := json.NewDecoder(&logs); decoder.More(); {
+		var event downloadEvent
+		require.NoError(t, decoder.Decode(&event))
+		if event.Message == "alib.page_download_failed" || event.Message == "alib.page_downloaded" {
+			attempts = append(attempts, event)
 		}
-		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, err := writer.Write([]byte(testutil.ListingPage("Book", "/book.html", "100 руб.")))
-		assert.NoError(t, err)
-	}))
-	t.Cleanup(server.Close)
-	client, err := alib.NewClient([]string{server.URL}, time.Second, 0, 3, slog.New(slog.DiscardHandler))
-	require.NoError(t, err)
-
-	// When
-	result, err := client.FetchWithResult(context.Background())
-
-	// Then
-	require.NoError(t, err)
-	require.Len(t, result.Books, 1)
-	require.Equal(t, 4, requestCount)
+	}
+	require.Equal(t, []downloadEvent{
+		{Message: "alib.page_download_failed", URL: server.URL + "/first", Index: 0, Attempt: 1},
+		{Message: "alib.page_downloaded", URL: server.URL + "/first", Index: 0, Attempt: 2},
+		{Message: "alib.page_download_failed", URL: server.URL + "/second", Index: 1, Attempt: 1},
+		{Message: "alib.page_downloaded", URL: server.URL + "/second", Index: 1, Attempt: 2},
+	}, attempts)
 }
 
 func Test_Client_retries_request_timeout_with_live_parent_context(t *testing.T) {

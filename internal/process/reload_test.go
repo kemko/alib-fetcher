@@ -72,7 +72,11 @@ func TestRunReloadable_answers_callbacks_while_draining_old_delivery(t *testing.
 	require.NoError(t, err)
 	require.NoError(t, state.Close())
 	require.Empty(t, pending)
-	require.Less(t, bytes.Index(logs.Bytes(), []byte("digest.completed")), bytes.Index(logs.Bytes(), []byte("config.reloaded")))
+	events := logs.Bytes()
+	completed := bytes.Index(events, []byte(`"msg":"digest.completed"`))
+	reloaded := bytes.Index(events, []byte(`"msg":"config.reloaded"`))
+	require.NotEqual(t, -1, completed)
+	require.Less(t, completed, reloaded)
 }
 
 func TestRunReloadable_reuses_one_shared_poller_and_applies_new_schedule(t *testing.T) {
@@ -84,7 +88,7 @@ func TestRunReloadable_reuses_one_shared_poller_and_applies_new_schedule(t *test
 	var logs synchronizedBuffer
 	logger := slog.New(slog.NewJSONHandler(&logs, nil))
 	var initialFetches atomic.Int32
-	var candidateFetches atomic.Int32
+	var firstFetches, secondFetches atomic.Int32
 	client := &recordingCallbackClient{}
 	initial := reloadTestSnapshot(t, "first", countingFetcher{calls: &initialFetches}, false)
 	initial.Settings.CronSpec = "@every 1h"
@@ -95,11 +99,12 @@ func TestRunReloadable_reuses_one_shared_poller_and_applies_new_schedule(t *test
 	initial.Recipients = append(initial.Recipients, secondInitial)
 	initial.Key = "initial"
 
-	candidate := reloadTestSnapshot(t, "first", countingFetcher{calls: &candidateFetches}, false)
+	candidate := reloadTestSnapshot(t, "first", countingFetcher{calls: &firstFetches}, false)
 	candidate.Settings.CronSpec = "@every 1s"
 	candidate.Recipients[0].Callbacks = client
 	secondCandidate := candidate.Recipients[0]
 	secondCandidate.ChatID = "second"
+	secondCandidate.Dependencies.Fetcher = countingFetcher{calls: &secondFetches}
 	secondCandidate.StatePath = filepath.Join(t.TempDir(), "second-candidate.db")
 	candidate.Recipients = append(candidate.Recipients, secondCandidate)
 	candidate.Key = "candidate"
@@ -111,13 +116,13 @@ func TestRunReloadable_reuses_one_shared_poller_and_applies_new_schedule(t *test
 		done <- RunReloadable(ctx, initial, reloader.Load, logger)
 	}()
 	waitForLog(t, &logs, "config.reloaded")
-	waitForAtomicAtLeast(t, &candidateFetches, 2)
+	waitForAtomicAtLeast(t, &firstFetches, 1)
+	waitForAtomicAtLeast(t, &secondFetches, 1)
 	cancel()
 
 	// Then
 	require.NoError(t, waitForRun(t, done))
 	require.Zero(t, initialFetches.Load())
-	require.GreaterOrEqual(t, candidateFetches.Load(), int32(2))
 	require.Equal(t, int32(2), client.listens.Load())
 }
 
