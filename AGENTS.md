@@ -172,7 +172,7 @@ Preserve these semantics:
   values are JSON records containing the full semantic `alib.Book`, observed
   timestamp, pending queue order, sent status, and sent timestamp for delivered
   records. `alib.Book` has a narrow decoder for persisted legacy fragment fields.
-- `internal/telegram`: adapter backed by `github.com/go-telegram/bot` v1.23.0
+- `internal/telegram`: adapter backed by `github.com/go-telegram/bot`
   for `SendRichMessage`, callback polling, `AnswerCallbackQuery`, and
   `EditMessageReplyMarkup`; digest messages use `rich_message.html`. The SDK
   owns Bot API endpoints, request/response models, serialization, allowed

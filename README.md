@@ -160,8 +160,8 @@ The file is checked every second and rechecked after active digests finish.
 Polling keeps answering and skipping refresh presses during that wait.
 Unchanged settings, including comment-only edits, do not restart work.
 Existing chats do not repeat startup digests; newly added chats follow
-`run_on_startup`. Retained tokens keep their polling offsets and queued callbacks,
-including when `http_timeout` changes. Changing a state path switches databases
+`run_on_startup`. Retained tokens keep their polling offsets when `http_timeout` changes.
+Polling resumes at the first update the SDK has yet to dispatch. Changing a state path switches databases
 without moving history; removed chats keep their files.
 
 To migrate the former single database, change an old `STATE_PATH=/path/state.db`

@@ -89,7 +89,7 @@ func newClient(config ClientConfig, client *http.Client) (*Client, error) {
 	return telegramClient, nil
 }
 
-// SetTimeout updates the SDK polling timeout while preserving its offset and queued updates.
+// SetTimeout updates the SDK polling timeout while preserving its offset.
 // Callers must first stop polling and wait for all client requests to finish.
 func (c *Client) SetTimeout(timeout time.Duration) error {
 	if timeout <= 0 {
