@@ -52,7 +52,7 @@ type reloadAlibRequest struct {
 	Path string
 }
 
-func Test_run_wires_once_mode_from_environment(t *testing.T) {
+func Test_run_wires_once_mode_from_config(t *testing.T) {
 	currentYear := time.Now().In(time.UTC).Year()
 	// Keep fixtures valid if UTC year changes before run captures the cycle time.
 	freshYear := currentYear - 4
@@ -60,18 +60,15 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 	testCases := map[string]struct {
 		freshBooks string
 		freshEmoji string
-		configured bool
 	}{
 		"unset": {},
 		"age": {
 			freshBooks: "age:5",
 			freshEmoji: "✨ ",
-			configured: true,
 		},
 		"since": {
 			freshBooks: fmt.Sprintf("since:%d", freshYear),
 			freshEmoji: "✨ ",
-			configured: true,
 		},
 	}
 
@@ -79,11 +76,6 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			// Given
 			useOnceMode(t)
-			if testCase.configured {
-				t.Setenv("FRESH_BOOKS", testCase.freshBooks)
-			} else {
-				unsetEnvironment(t, "FRESH_BOOKS")
-			}
 
 			alibServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 				assert.Equal(t, http.MethodGet, request.Method)
@@ -119,7 +111,7 @@ func Test_run_wires_once_mode_from_environment(t *testing.T) {
 			}))
 			t.Cleanup(telegramServer.Close)
 
-			setRunEnvironment(t, telegramServer.URL, filepath.Join(t.TempDir(), "state.db"))
+			setRunEnvironment(t, telegramServer.URL, filepath.Join(t.TempDir(), "state.db"), testCase.freshBooks)
 			var logs bytes.Buffer
 			logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
@@ -218,7 +210,7 @@ func Test_run_once_sends_truncated_description_through_rich_message(t *testing.T
 	t.Cleanup(telegramServer.Close)
 
 	statePath := filepath.Join(t.TempDir(), "state.db")
-	setRunEnvironment(t, telegramServer.URL, statePath)
+	setRunEnvironment(t, telegramServer.URL, statePath, "")
 	t.Setenv("MESSAGE_LIMIT", strconv.Itoa(messageLimit))
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -281,7 +273,7 @@ func Test_run_once_uses_default_rich_message_limit_and_listing_block_chunks(t *t
 	t.Cleanup(telegramServer.Close)
 
 	statePath := filepath.Join(t.TempDir(), "state.db")
-	setRunEnvironment(t, telegramServer.URL, statePath)
+	setRunEnvironment(t, telegramServer.URL, statePath, "")
 	unsetEnvironment(t, "MESSAGE_LIMIT")
 
 	// When
@@ -334,7 +326,7 @@ func Test_run_once_retries_only_unacknowledged_html_byte_limited_chunk(t *testin
 	t.Cleanup(telegramServer.Close)
 
 	statePath := filepath.Join(t.TempDir(), "state.db")
-	setRunEnvironment(t, telegramServer.URL, statePath)
+	setRunEnvironment(t, telegramServer.URL, statePath, "")
 	unsetEnvironment(t, "MESSAGE_LIMIT")
 	logger := slog.New(slog.DiscardHandler)
 
@@ -1290,24 +1282,7 @@ categories = ["detektivy", "poisk"]
 
 	reloadPending := make(chan struct{})
 	logger := slog.New(slog.NewJSONHandler(&reloadLogSignal{pending: reloadPending}, nil))
-	settings, err := config.Load(configPath)
-	require.NoError(t, err)
-	factory := newRuntimeFactory(logger)
-	initial, err := factory.snapshot(settings, "")
-	require.NoError(t, err)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	done := make(chan error, 1)
-	go func() {
-		done <- process.RunReloadable(ctx, initial, func(loadCtx context.Context) (process.ReloadSnapshot, error) {
-			latest, loadErr := config.Load(configPath)
-			if loadErr != nil {
-				return process.ReloadSnapshot{}, loadErr
-			}
-
-			return factory.snapshot(latest, "")
-		}, logger)
-	}()
+	stop := startReloadableTestService(t, configPath, logger)
 	select {
 	case <-oldSendStarted:
 	case <-time.After(5 * time.Second):
@@ -1328,19 +1303,96 @@ categories = ["detektivy", "poisk"]
 	select {
 	case <-newSendStarted:
 	case <-time.After(8 * time.Second):
-		cancel()
-		t.Fatalf("reloaded digest did not reach Telegram (service result: %v)", <-done)
+		t.Fatal("reloaded digest did not reach Telegram")
 	}
-	cancel()
+	stop()
 
 	// Then
-	require.NoError(t, <-done)
 	alibPathsMu.Lock()
 	gotAlibRequests := append([]reloadAlibRequest(nil), alibRequests...)
 	alibPathsMu.Unlock()
 	assertReloadedDownloadDelay(t, gotAlibRequests)
 	require.FileExists(t, filepath.Join(root, "old.db"))
 	require.FileExists(t, filepath.Join(root, "new.db"))
+}
+
+func Test_service_reload_preserves_poll_offset_and_updates_timeout_for_retained_token(t *testing.T) {
+	const configText = `run_on_startup = false
+http_timeout = "%s"
+state_path = %q
+[[chats]]
+chat_id = "-1001"
+telegram_token = "same-token"
+categories = ["tramka"]
+`
+	root := t.TempDir()
+	path := writeMainConfig(t, fmt.Sprintf(configText, "10s", root))
+	type poll struct{ offset, timeout string }
+	polls := make(chan poll, 3)
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/botsame-token/getUpdates", r.URL.Path)
+		if !assert.NoError(t, r.ParseMultipartForm(1<<20)) {
+			return
+		}
+		select {
+		case polls <- poll{r.FormValue("offset"), r.FormValue("timeout")}:
+		case <-r.Context().Done():
+			return
+		}
+		if calls.Add(1) == 1 {
+			writeTelegramResponse(t, w, `{"ok":true,"result":[{"update_id":100}]}`)
+			return
+		}
+		<-r.Context().Done()
+	}))
+	t.Cleanup(server.Close)
+	routeTelegramRequestsTo(t, server.URL)
+	startReloadableTestService(t, path, slog.New(slog.DiscardHandler))
+	expectPoll := func(want poll) {
+		t.Helper()
+		select {
+		case got := <-polls:
+			require.Equal(t, want, got)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for poll %+v", want)
+		}
+	}
+	expectPoll(poll{offset: "1", timeout: "9"})
+	expectPoll(poll{offset: "101", timeout: "9"})
+
+	require.NoError(t, os.WriteFile(path+".tmp", []byte(fmt.Sprintf(configText, "15s", root)), 0o600))
+	require.NoError(t, os.Rename(path+".tmp", path))
+
+	expectPoll(poll{offset: "101", timeout: "14"})
+}
+
+func startReloadableTestService(t *testing.T, path string, logger *slog.Logger) func() {
+	t.Helper()
+	factory := newRuntimeFactory(logger)
+	load := func(context.Context) (process.ReloadSnapshot, error) {
+		settings, err := config.Load(path)
+		if err != nil {
+			return process.ReloadSnapshot{}, err
+		}
+		return factory.snapshot(settings, "")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	initial, err := load(ctx)
+	require.NoError(t, err)
+	done := make(chan error, 1)
+	go func() { done <- process.RunReloadable(ctx, initial, load, logger) }()
+	stop := sync.OnceFunc(func() {
+		cancel()
+		select {
+		case runErr := <-done:
+			require.NoError(t, runErr)
+		case <-time.After(5 * time.Second):
+			t.Fatal("reloadable test service did not stop")
+		}
+	})
+	t.Cleanup(stop)
+	return stop
 }
 
 func assertReloadedDownloadDelay(t *testing.T, requests []reloadAlibRequest) {
@@ -1695,11 +1747,11 @@ func Test_run_once_fetches_categories_and_series_in_order_and_sends_partial_dedu
 	t.Cleanup(telegramServer.Close)
 
 	statePath := filepath.Join(t.TempDir(), "state.db")
-	setRunEnvironment(t, telegramServer.URL, statePath)
+	setRunEnvironment(t, telegramServer.URL, statePath, "")
 	t.Setenv("ALIB_CATEGORIES", "first,broken")
 	t.Setenv("ALIB_SERIES", `"Серия, тома",changed`)
 	t.Setenv("MESSAGE_LIMIT", strconv.Itoa(messageLimit))
-	writeEnvironmentConfig(t, os.Getenv("ALIB_TEST_CONFIG"))
+	writeEnvironmentConfig(t, os.Getenv("ALIB_TEST_CONFIG"), "")
 	settings, err := config.Load(os.Getenv("ALIB_TEST_CONFIG"))
 	require.NoError(t, err)
 	require.Equal(t, []string{
@@ -1832,7 +1884,7 @@ func Test_run_once_sends_notification_for_all_correct_empty_pages(t *testing.T) 
 	t.Cleanup(telegramServer.Close)
 
 	statePath := filepath.Join(t.TempDir(), "state.db")
-	setRunEnvironment(t, telegramServer.URL, statePath)
+	setRunEnvironment(t, telegramServer.URL, statePath, "")
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
@@ -1891,7 +1943,7 @@ func Test_run_once_recovers_from_transient_alib_error(t *testing.T) {
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(telegramServer.Close)
-	setRunEnvironment(t, telegramServer.URL, filepath.Join(t.TempDir(), "state.db"))
+	setRunEnvironment(t, telegramServer.URL, filepath.Join(t.TempDir(), "state.db"), "")
 	t.Setenv("ALIB_MAX_RETRIES", "1")
 
 	// When
@@ -1932,7 +1984,7 @@ func Test_run_once_fails_after_requesting_and_logging_all_failed_pages(t *testin
 	t.Cleanup(telegramServer.Close)
 
 	statePath := filepath.Join(t.TempDir(), "state.db")
-	setRunEnvironment(t, telegramServer.URL, statePath)
+	setRunEnvironment(t, telegramServer.URL, statePath, "")
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
@@ -2001,7 +2053,7 @@ func runWithAlibURLs(t *testing.T, logger *slog.Logger, endpoints ...string) err
 		configPath = filepath.Join(t.TempDir(), "config.toml")
 		t.Setenv("ALIB_TEST_CONFIG", configPath)
 	}
-	writeEnvironmentConfig(t, configPath)
+	writeEnvironmentConfig(t, configPath, "")
 	settings, err := config.Load(configPath)
 	require.NoError(t, err)
 	settings.Chats[0].AlibURLs = append([]string(nil), endpoints...)
@@ -2050,7 +2102,11 @@ func routeAlibRequestsTo(t *testing.T, base string) {
 		routedURL.Host = target.Host
 		routedRequest.URL = &routedURL
 
-		return originalTransport.RoundTrip(routedRequest)
+		response, roundTripErr := originalTransport.RoundTrip(routedRequest)
+		if roundTripErr == nil {
+			response.Request = request
+		}
+		return response, roundTripErr
 	})
 }
 
@@ -2100,7 +2156,6 @@ func setEnvironmentAbsentDigestConfiguration(t *testing.T) {
 		"HTTP_TIMEOUT",
 		"MESSAGE_LIMIT",
 		"RUN_ON_STARTUP",
-		"FRESH_BOOKS",
 		"ALIB_MAX_RETRIES",
 	} {
 		unsetEnvironment(t, key)
@@ -2147,7 +2202,7 @@ func writeTelegramResponse(t *testing.T, writer http.ResponseWriter, body string
 	require.NoError(t, err)
 }
 
-func setRunEnvironment(t *testing.T, telegramAPIBase, statePath string) {
+func setRunEnvironment(t *testing.T, telegramAPIBase, statePath, freshBooks string) {
 	t.Helper()
 
 	t.Setenv("TELEGRAM_BOT_TOKEN", "test-token")
@@ -2165,11 +2220,11 @@ func setRunEnvironment(t *testing.T, telegramAPIBase, statePath string) {
 	t.Setenv("MESSAGE_LIMIT", "4000")
 	configPath := filepath.Join(t.TempDir(), "config.toml")
 	t.Setenv("ALIB_TEST_CONFIG", configPath)
-	writeEnvironmentConfig(t, configPath)
+	writeEnvironmentConfig(t, configPath, freshBooks)
 	os.Args = append(os.Args, "-config", configPath)
 }
 
-func writeEnvironmentConfig(t *testing.T, configPath string) {
+func writeEnvironmentConfig(t *testing.T, configPath, freshBooks string) {
 	t.Helper()
 	statePath := os.Getenv("STATE_PATH")
 	stateDir, stateFile := filepath.Dir(statePath), filepath.Base(statePath)
@@ -2196,7 +2251,7 @@ func writeEnvironmentConfig(t *testing.T, configPath string) {
 		_, err = fmt.Fprintf(&builder, "message_limit = %s\n", value)
 		require.NoError(t, err)
 	}
-	if freshBooks := os.Getenv("FRESH_BOOKS"); freshBooks != "" {
+	if freshBooks != "" {
 		_, err = fmt.Fprintf(&builder, "fresh_books = %s\n", strconv.Quote(freshBooks))
 		require.NoError(t, err)
 	}

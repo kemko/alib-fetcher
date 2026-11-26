@@ -49,7 +49,8 @@ year, and the previous year in January, get 🔥; future and unknown years get
 Publication years are the last four-digit bibliography year followed by `г`,
 `г.`, or `гг`/`гг.`; spaces and a dot before the suffix are accepted.
 
-Alib accepts only a final HTTP 200 response after redirects. Every
+Alib accepts only a final HTTP 200 response after redirects. Relative listing links
+resolve against the final response URL. Every
 `alib.page_downloaded`, `alib.page_download_failed`, `alib.page_parsed`, and
 `alib.page_parse_failed` event includes numeric `status_code`; it is `0` when
 no HTTP response was received.
@@ -151,7 +152,9 @@ no Telegram token or search source and performs no HTTP requests.
 
 The service runs startup and scheduled work independently for each chat and
 uses one Telegram SDK client/poller for chats sharing a token. It keeps
-pending books and retention state per database. Refresh callbacks, retries,
+pending books and retention state per database. Legacy pending records without a queue number
+come first in discovery order, sorted by observation time and then buy URL.
+Numbered records follow in queue order. Refresh callbacks, retries,
 graceful shutdown, message limits, and delivery ordering follow the same
 policy as previous releases. A valid TOML change pauses new work, lets active
 digests finish with their old settings, then applies the complete new snapshot;

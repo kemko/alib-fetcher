@@ -16,11 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLoad_applies_defaults_and_preserves_explicit_zero_and_false(t *testing.T) {
-	configPath := writeConfig(t, `alib_max_retries = 0
-run_on_startup = false
-
-[[chats]]
+func TestLoad_applies_defaults(t *testing.T) {
+	configPath := writeConfig(t, `[[chats]]
 chat_id = "-100123"
 telegram_token = "secret"
 categories = ["tramka"]
@@ -35,8 +32,8 @@ categories = ["tramka"]
 	require.Equal(t, 30*time.Second, loaded.HTTPTimeout)
 	require.Zero(t, loaded.AlibDownloadDelay)
 	require.Equal(t, 32000, loaded.MessageLimit)
-	require.Zero(t, loaded.AlibMaxRetries)
-	require.False(t, loaded.RunOnStartup)
+	require.Equal(t, 3, loaded.AlibMaxRetries)
+	require.True(t, loaded.RunOnStartup)
 	require.Nil(t, loaded.FreshBooks)
 	require.Equal(t, "-100123", loaded.Chats[0].ChatID)
 	require.Equal(t, filepath.Join("/var/lib/alib-fetcher", "-100123.db"), loaded.Chats[0].StatePath)
@@ -45,6 +42,8 @@ categories = ["tramka"]
 func TestLoad_decodes_search_model_and_normalizes_recipients(t *testing.T) {
 	configPath := writeConfig(t, `state_path = "data"
 cron_schedule = "@every 6h"
+alib_max_retries = 0
+run_on_startup = false
 timezone = "UTC"
 http_timeout = "1s"
 message_limit = 1000
@@ -69,6 +68,8 @@ fotoonly = "da"
 	loaded, err := config.Load(configPath)
 
 	require.NoError(t, err)
+	require.Zero(t, loaded.AlibMaxRetries)
+	require.False(t, loaded.RunOnStartup)
 	require.Equal(t, filepath.Join(filepath.Dir(configPath), "data"), loaded.StatePath)
 	require.Equal(t, "123", loaded.Chats[0].ChatID)
 	require.Equal(t, filepath.Join(loaded.StatePath, "old.db"), loaded.Chats[0].StatePath)

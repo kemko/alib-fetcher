@@ -231,6 +231,32 @@ func Test_Service_marks_each_chunk_only_after_delivery(t *testing.T) {
 	require.Equal(t, []bool{false, true}, sender.attachRefresh)
 }
 
+func Test_Service_stops_delivery_when_acknowledging_second_chunk_fails(t *testing.T) {
+	t.Parallel()
+
+	books := []alib.Book{
+		{Title: "Первая", BuyURL: "https://example.com/1"},
+		{Title: strings.Repeat("Вторая ", 5), BuyURL: "https://example.com/2"},
+		{Title: strings.Repeat("Третья ", 5), BuyURL: "https://example.com/3"},
+	}
+	markErr := errors.New("state write failed")
+	state := &fakeState{pending: books, failMarkURL: books[1].BuyURL, markErr: markErr}
+	sender := &fakeSender{}
+	service := app.NewService(app.Dependencies{
+		Fetcher: fakeFetcher{}, State: state, Sender: sender, MessageLimit: 60, Now: time.Now,
+	})
+
+	result, err := service.Run(t.Context())
+
+	require.ErrorIs(t, err, markErr)
+	require.Equal(t, 1, result.Sent)
+	require.Equal(t, books[:1], state.marked)
+	require.Len(t, sender.messages, 2)
+	require.Contains(t, sender.messages[0], books[0].BuyURL)
+	require.Contains(t, sender.messages[1], books[1].BuyURL)
+	require.NotContains(t, strings.Join(sender.messages, ""), books[2].BuyURL)
+}
+
 func Test_Service_sends_single_chunk_with_sound(t *testing.T) {
 	t.Parallel()
 
@@ -1262,6 +1288,8 @@ func (f fakeFetcher) FetchWithResult(context.Context) (alib.FetchResult, error) 
 }
 
 type fakeState struct {
+	markErr      error
+	failMarkURL  string
 	pending      []alib.Book
 	marked       []alib.Book
 	recorded     []alib.Book
@@ -1314,6 +1342,9 @@ func (f *fakeState) Pending(context.Context) ([]alib.Book, error) {
 func (f *fakeState) MarkSent(ctx context.Context, books []alib.Book, sentAt time.Time) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if len(books) > 0 && books[0].BuyURL == f.failMarkURL && f.markErr != nil {
+		return f.markErr
 	}
 	f.marked = append(f.marked, books...)
 	f.markedAt = sentAt

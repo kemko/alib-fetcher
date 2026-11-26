@@ -26,6 +26,7 @@ func Test_RunRecipients_once_runs_all_recipients_and_joins_errors(t *testing.T) 
 	var firstCalls atomic.Int32
 	var secondCalls atomic.Int32
 	firstErr := errors.New("first recipient failed")
+	secondErr := errors.New("second recipient failed")
 	recipients := []Recipient{
 		{
 			ChatID:    "-1001",
@@ -41,7 +42,7 @@ func Test_RunRecipients_once_runs_all_recipients_and_joins_errors(t *testing.T) 
 			ChatID:    "-1002",
 			StatePath: filepath.Join(t.TempDir(), "second.db"),
 			Dependencies: app.Dependencies{
-				Fetcher:      countingFetcher{calls: &secondCalls},
+				Fetcher:      countedErrorFetcher{calls: &secondCalls, err: secondErr},
 				Sender:       noopSender{},
 				MessageLimit: 4096,
 				Now:          time.Now,
@@ -54,6 +55,7 @@ func Test_RunRecipients_once_runs_all_recipients_and_joins_errors(t *testing.T) 
 
 	// Then
 	require.ErrorIs(t, err, firstErr)
+	require.ErrorIs(t, err, secondErr)
 	require.Equal(t, int32(1), firstCalls.Load())
 	require.Equal(t, int32(1), secondCalls.Load())
 }

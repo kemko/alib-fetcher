@@ -297,17 +297,22 @@ func Test_Store_prunes_only_entries_older_than_cutoff(t *testing.T) {
 	require.True(t, recordExists(t, path, boundaryBook.BuyURL))
 }
 
-func Test_Store_mark_sent_rejects_missing_record(t *testing.T) {
+func Test_Store_mark_sent_rolls_back_chunk_with_missing_record(t *testing.T) {
 	t.Parallel()
 
 	// Given
 	path := filepath.Join(t.TempDir(), "state.db")
 	db, err := store.Open(path, time.Now())
 	require.NoError(t, err)
+	existing := fullBook("https://example.com/existing")
+	recordDiscovered(t, db, []alib.Book{existing}, time.Now())
 	book := alib.Book{BuyURL: "https://example.com/missing"}
 
 	// When
-	err = db.MarkSent(context.Background(), []alib.Book{book}, time.Now())
+	err = db.MarkSent(context.Background(), []alib.Book{existing, book}, time.Now())
+	pending, pendingErr := db.Pending(t.Context())
+	require.NoError(t, pendingErr)
+	require.Equal(t, []alib.Book{existing}, pending)
 	require.NoError(t, db.Close())
 
 	// Then
@@ -466,7 +471,7 @@ func Test_Store_delete_latest_uses_observed_at_and_key_for_equal_queue_order(t *
 	require.False(t, recordExists(t, path, newerTieURL))
 }
 
-func Test_Store_delete_latest_orders_queue_ordered_records_before_missing_records(t *testing.T) {
+func Test_Store_pending_and_delete_latest_agree_on_mixed_queue_order(t *testing.T) {
 	t.Parallel()
 
 	for _, urls := range [][]string{
@@ -487,6 +492,9 @@ func Test_Store_delete_latest_orders_queue_ordered_records_before_missing_record
 		require.NoError(t, err)
 
 		// When
+		pending, err := db.Pending(t.Context())
+		require.NoError(t, err)
+		require.Equal(t, []alib.Book{records[1].Book, records[0].Book, records[2].Book}, pending)
 		deleted, err := db.DeleteLatest(context.Background(), 2)
 		require.NoError(t, db.Close())
 

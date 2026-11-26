@@ -49,7 +49,9 @@ Preserve these semantics:
 - Pending books are sent even when the current fetch finds no new books.
 - `State.Pending` returns records in first-discovery/source order, not bbolt key
   sort order; the digest sends year `0` records first, then recognized years in
-  descending order, with stable first-discovery order within each group.
+  descending order, with stable first-discovery order within each group. Legacy
+  pending records without a queue number precede numbered records, ordered by
+  observation time and then buy URL.
 - Each rendered Telegram message has three independent limits: `message_limit`
   displayed Unicode runes, 34996 UTF-8 bytes of source HTML, and 500 Rich
   Message blocks (ordinary chunks have at most 250 listings). Formatting tags
@@ -326,7 +328,8 @@ page emits one `alib.page_parsed` or `alib.page_parse_failed` event; pages whose
 download attempts are exhausted emit no parse event.
 Every event has the zero-based `index` and full configured endpoint `url`,
 including GET parameters and fragments; parsed events also have `books`, and
-failed events have `error`. Generated endpoints are written verbatim to logs
+failed events have `error`. Relative listing links resolve against the final response
+URL after redirects. Generated endpoints are written verbatim to logs
 and page errors. Every page event has numeric `status_code`; it is `0` when no
 HTTP response is available. The
 SDK-backed Telegram adapter accepts only HTTP(S), caps

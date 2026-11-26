@@ -51,6 +51,7 @@ type Client struct {
 
 type downloadedPage struct {
 	endpoint    *url.URL
+	baseURL     *url.URL
 	contentType string
 	body        []byte
 	index       int
@@ -132,7 +133,7 @@ func (c *Client) FetchWithResult(ctx context.Context) (FetchResult, error) {
 		if err := ctx.Err(); err != nil {
 			return FetchResult{}, err
 		}
-		pageResult, parseErr := ParseWithResult(bytes.NewReader(page.body), page.endpoint, page.contentType)
+		pageResult, parseErr := ParseWithResult(bytes.NewReader(page.body), page.baseURL, page.contentType)
 		if contextErr := ctx.Err(); contextErr != nil {
 			return FetchResult{}, contextErr
 		}
@@ -299,11 +300,19 @@ func (c *Client) downloadPageAttempt(ctx context.Context, index int, endpoint *u
 
 	return downloadedPage{
 		endpoint:    endpoint,
+		baseURL:     responseBaseURL(response, endpoint),
 		body:        body,
 		contentType: response.Header.Get("Content-Type"),
 		index:       index,
 		statusCode:  statusCode,
 	}, statusCode, nil
+}
+
+func responseBaseURL(response *http.Response, fallback *url.URL) *url.URL {
+	if response.Request != nil && response.Request.URL != nil {
+		return response.Request.URL
+	}
+	return fallback
 }
 
 type redactedURLError struct {
