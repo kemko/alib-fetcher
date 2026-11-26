@@ -87,7 +87,12 @@ func parseCommandLineArgs(args []string, writer, errWriter io.Writer) (commandOp
 		Flags: []cli.Flag{
 			&cli.BoolFlag{Name: "service", Usage: "run the scheduled service"},
 			&cli.BoolFlag{Name: "once", Usage: "fetch and send one digest, then exit"},
-			&cli.StringFlag{Name: "config", Value: "./config.toml", Usage: "path to TOML configuration"},
+			&cli.StringFlag{
+				Name:    "config",
+				Value:   "./config.toml",
+				Usage:   "path to TOML configuration",
+				Sources: cli.EnvVars("ALIB_FETCHER_CONFIG"),
+			},
 			&cli.StringFlag{Name: "chat", Usage: "recipient chat ID"},
 			&cli.IntFlag{
 				Name:   "forget-latest",

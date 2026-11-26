@@ -425,7 +425,7 @@ func Test_run_rejects_non_positive_forget_latest(t *testing.T) {
 }
 
 func Test_parseCommandLine_accepts_each_mode(t *testing.T) {
-	t.Parallel()
+	unsetEnvironment(t, "ALIB_FETCHER_CONFIG")
 
 	testCases := map[string]struct {
 		arguments []string
@@ -606,7 +606,7 @@ func Test_parseCommandLine_rejects_invalid_arguments(t *testing.T) {
 }
 
 func Test_parseCommandLine_normalizes_chat_and_tracks_explicit_values(t *testing.T) {
-	t.Parallel()
+	unsetEnvironment(t, "ALIB_FETCHER_CONFIG")
 
 	testCases := map[string]struct {
 		arguments []string
@@ -670,6 +670,98 @@ func Test_parseCommandLine_normalizes_chat_and_tracks_explicit_values(t *testing
 	}
 }
 
+func Test_parseCommandLine_reads_config_path_from_environment(t *testing.T) {
+	testCases := map[string]struct {
+		arguments   []string
+		environment *string
+		want        commandOptions
+	}{
+		"once": {
+			arguments:   []string{"alib-fetcher", "-once"},
+			environment: stringPointer("environment.toml"),
+			want: commandOptions{
+				configPath: "environment.toml",
+				once:       true,
+			},
+		},
+		"service": {
+			arguments:   []string{"alib-fetcher", "-service"},
+			environment: stringPointer("environment.toml"),
+			want: commandOptions{
+				configPath: "environment.toml",
+				service:    true,
+			},
+		},
+		"forget latest": {
+			arguments:   []string{"alib-fetcher", "-forget-latest", "1", "-chat", "-100123"},
+			environment: stringPointer("environment.toml"),
+			want: commandOptions{
+				configPath: "environment.toml",
+				chatID:     "-100123",
+				forgetLatest: forgetLatestOption{
+					value: 1,
+					set:   true,
+				},
+			},
+		},
+		"short flag overrides environment": {
+			arguments:   []string{"alib-fetcher", "-once", "-config", "short.toml"},
+			environment: stringPointer("environment.toml"),
+			want: commandOptions{
+				configPath: "short.toml",
+				once:       true,
+			},
+		},
+		"long flag overrides environment": {
+			arguments:   []string{"alib-fetcher", "-once", "--config", "long.toml"},
+			environment: stringPointer("environment.toml"),
+			want: commandOptions{
+				configPath: "long.toml",
+				once:       true,
+			},
+		},
+		"absent environment uses default": {
+			arguments: []string{"alib-fetcher", "-once"},
+			want: commandOptions{
+				configPath: "./config.toml",
+				once:       true,
+			},
+		},
+		"empty environment leaves loader default": {
+			arguments:   []string{"alib-fetcher", "-once"},
+			environment: stringPointer(""),
+			want: commandOptions{
+				once: true,
+			},
+		},
+		"empty flag overrides environment": {
+			arguments:   []string{"alib-fetcher", "-once", "-config", ""},
+			environment: stringPointer("environment.toml"),
+			want: commandOptions{
+				once: true,
+			},
+		},
+	}
+
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			if testCase.environment == nil {
+				unsetEnvironment(t, "ALIB_FETCHER_CONFIG")
+			} else {
+				t.Setenv("ALIB_FETCHER_CONFIG", *testCase.environment)
+			}
+			var output, errors bytes.Buffer
+
+			got, err := parseCommandLineArgs(testCase.arguments, &output, &errors)
+
+			require.NoError(t, err)
+			require.Equal(t, testCase.want, got)
+			require.Empty(t, output.String())
+			require.Empty(t, errors.String())
+		})
+	}
+}
+
 func Test_parseCommandLine_rejects_empty_or_invalid_chat(t *testing.T) {
 	t.Parallel()
 
@@ -712,6 +804,21 @@ func Test_parseCommandLine_help_is_available_without_configuration(t *testing.T)
 			require.Empty(t, errors.String())
 		})
 	}
+}
+
+func Test_parseCommandLine_help_includes_config_environment(t *testing.T) {
+	// Given
+	t.Setenv("ALIB_FETCHER_CONFIG", filepath.Join(t.TempDir(), "missing.toml"))
+	var output, errors bytes.Buffer
+
+	// When
+	options, err := parseCommandLineArgs([]string{"alib-fetcher", "-help"}, &output, &errors)
+
+	// Then
+	require.NoError(t, err)
+	require.True(t, options.help)
+	require.Contains(t, output.String(), "ALIB_FETCHER_CONFIG")
+	require.Empty(t, errors.String())
 }
 
 func Test_main_subprocess_exit_codes(t *testing.T) {
@@ -832,7 +939,9 @@ func Test_run_without_arguments_only_prints_help(t *testing.T) {
 }
 
 func Test_run_help_does_not_read_configuration(t *testing.T) {
-	useCommandLine(t, "-help", "-config", filepath.Join(t.TempDir(), "missing.toml"))
+	missingConfig := filepath.Join(t.TempDir(), "missing.toml")
+	t.Setenv("ALIB_FETCHER_CONFIG", missingConfig)
+	useCommandLine(t, "-help")
 
 	require.NoError(t, run(slog.New(slog.DiscardHandler)))
 }
@@ -1220,8 +1329,7 @@ categories = ["detektivy", "poisk"]
 	case <-newSendStarted:
 	case <-time.After(8 * time.Second):
 		cancel()
-		<-done
-		t.Fatal("reloaded digest did not reach Telegram")
+		t.Fatalf("reloaded digest did not reach Telegram (service result: %v)", <-done)
 	}
 	cancel()
 
@@ -1270,7 +1378,7 @@ func Test_run_forget_latest_only_requires_state_path(t *testing.T) {
 	// Given
 	statePath := filepath.Join(t.TempDir(), "state.db")
 	setEnvironmentAbsentDigestConfiguration(t)
-	setMaintenanceConfig(t, statePath, "-100123")
+	setMaintenanceConfig(t, statePath)
 	useCommandLine(t, "-forget-latest", "1", "-chat", "-100123", "-config", os.Getenv("ALIB_TEST_CONFIG"))
 	state, err := store.Open(statePath, time.Now())
 	require.NoError(t, err)
@@ -1292,11 +1400,94 @@ func Test_run_forget_latest_only_requires_state_path(t *testing.T) {
 	require.Empty(t, pending)
 }
 
+func Test_run_forget_latest_uses_config_from_environment(t *testing.T) {
+	// Given
+	statePath := filepath.Join(t.TempDir(), "state.db")
+	setEnvironmentAbsentDigestConfiguration(t)
+	setMaintenanceConfig(t, statePath)
+	t.Setenv("ALIB_FETCHER_CONFIG", os.Getenv("ALIB_TEST_CONFIG"))
+	useCommandLine(t, "-forget-latest", "1", "-chat", "-100123")
+	state, err := store.Open(statePath, time.Now())
+	require.NoError(t, err)
+	book := alib.Book{BuyURL: "https://example.com/book"}
+	_, err = state.RecordDiscovered(context.Background(), []alib.Book{book}, time.Now())
+	require.NoError(t, err)
+	require.NoError(t, state.Close())
+
+	// When
+	err = run(slog.New(slog.DiscardHandler))
+
+	// Then
+	require.NoError(t, err)
+	reopened, err := store.Open(statePath, time.Now())
+	require.NoError(t, err)
+	pending, err := reopened.Pending(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, reopened.Close())
+	require.Empty(t, pending)
+}
+
+func Test_run_returns_environment_config_error(t *testing.T) {
+	// Given
+	missingConfig := filepath.Join(t.TempDir(), "missing.toml")
+	t.Setenv("ALIB_FETCHER_CONFIG", missingConfig)
+	useCommandLine(t, "-once")
+
+	// When
+	err := run(slog.New(slog.DiscardHandler))
+
+	// Then
+	require.ErrorIs(t, err, os.ErrNotExist)
+	require.ErrorContains(t, err, missingConfig)
+}
+
+func Test_run_empty_config_path_loads_default_file(t *testing.T) {
+	testCases := map[string]struct {
+		environment string
+		arguments   []string
+	}{
+		"empty environment": {},
+		"empty flag overrides environment": {
+			environment: "missing.toml",
+			arguments:   []string{"-config", ""},
+		},
+	}
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			// Given
+			statePath := filepath.Join(t.TempDir(), "state.db")
+			setMaintenanceConfig(t, statePath)
+			t.Chdir(filepath.Dir(os.Getenv("ALIB_TEST_CONFIG")))
+			t.Setenv("ALIB_FETCHER_CONFIG", testCase.environment)
+			arguments := append([]string{"-forget-latest", "1", "-chat", "-100123"}, testCase.arguments...)
+			useCommandLine(t, arguments...)
+			state, err := store.Open(statePath, time.Now())
+			require.NoError(t, err)
+			book := alib.Book{BuyURL: "https://example.com/book"}
+			_, err = state.RecordDiscovered(context.Background(), []alib.Book{book}, time.Now())
+			require.NoError(t, err)
+			require.NoError(t, state.Close())
+
+			// When
+			err = run(slog.New(slog.DiscardHandler))
+
+			// Then
+			require.NoError(t, err)
+			reopened, err := store.Open(statePath, time.Now())
+			require.NoError(t, err)
+			pending, err := reopened.Pending(context.Background())
+			require.NoError(t, err)
+			require.NoError(t, reopened.Close())
+			require.Empty(t, pending)
+		})
+	}
+}
+
 func Test_run_forget_latest_documented_cli_scenario_deletes_latest_records_without_http(t *testing.T) {
 	// Given
 	statePath := filepath.Join(t.TempDir(), "state.db")
 	setEnvironmentAbsentDigestConfiguration(t)
-	setMaintenanceConfig(t, statePath, "-100123")
+	setMaintenanceConfig(t, statePath)
 	books := make([]alib.Book, 8)
 	for index := range books {
 		books[index] = alib.Book{BuyURL: fmt.Sprintf("https://example.com/book-%d", index)}
@@ -1335,11 +1526,11 @@ func Test_run_rejects_missing_Alib_tracking_configuration_before_http(t *testing
 	require.ErrorContains(t, err, "categories, filters, and queries")
 }
 
-func setMaintenanceConfig(t *testing.T, statePath, chatID string) {
+func setMaintenanceConfig(t *testing.T, statePath string) {
 	t.Helper()
 	configPath := filepath.Join(t.TempDir(), "config.toml")
-	content := fmt.Sprintf("state_path = %q\n\n[[chats]]\nchat_id = %q\nstate_file = %q\n",
-		filepath.Dir(statePath), chatID, filepath.Base(statePath))
+	content := fmt.Sprintf("state_path = %q\n\n[[chats]]\nchat_id = \"-100123\"\nstate_file = %q\n",
+		filepath.Dir(statePath), filepath.Base(statePath))
 	require.NoError(t, os.WriteFile(configPath, []byte(content), 0o600))
 	t.Setenv("ALIB_TEST_CONFIG", configPath)
 }
@@ -2051,6 +2242,10 @@ func valueOr(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func stringPointer(value string) *string {
+	return &value
 }
 
 func unsetEnvironment(t *testing.T, key string) {
