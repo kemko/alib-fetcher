@@ -328,7 +328,8 @@ page emits one `alib.page_parsed` or `alib.page_parse_failed` event; pages whose
 download attempts are exhausted emit no parse event.
 Every event has the zero-based `index` and full configured endpoint `url`,
 including GET parameters and fragments; parsed events also have `books`, and
-failed events have `error`. Generated endpoints are written verbatim to logs
+failed events have `error`. Relative listing links resolve against the final response
+URL after redirects. Generated endpoints are written verbatim to logs
 and page errors. Every page event has numeric `status_code`; it is `0` when no
 HTTP response is available. The
 SDK-backed Telegram adapter accepts only HTTP(S), caps

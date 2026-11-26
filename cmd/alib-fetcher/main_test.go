@@ -2073,7 +2073,11 @@ func routeTelegramRequestsTo(t *testing.T, base string) {
 		routedURL.Host = target.Host
 		routedRequest.URL = &routedURL
 
-		return originalTransport.RoundTrip(routedRequest)
+		response, roundTripErr := originalTransport.RoundTrip(routedRequest)
+		if roundTripErr == nil {
+			response.Request = request
+		}
+		return response, roundTripErr
 	})
 }
 

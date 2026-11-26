@@ -81,19 +81,21 @@ func Test_Client_rejects_non_200_statuses(t *testing.T) {
 	}
 }
 
-func Test_Client_logs_final_status_after_redirect(t *testing.T) {
+func Test_Client_resolves_redirected_links_and_logs_configured_endpoint(t *testing.T) {
 	t.Parallel()
 
 	// Given
 	var logs bytes.Buffer
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path == "/redirect" {
-			http.Redirect(writer, request, "/listing", http.StatusFound)
+			http.Redirect(writer, request, "/archive/listing", http.StatusFound)
 
 			return
 		}
 		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, err := writer.Write([]byte(testutil.ListingPage("Book", "/book.html", "100 руб.")))
+		_, err := writer.Write([]byte(`<p><b>Book</b><br><a href="bs.php4?bs=Seller">BS - Seller</a>
+Цена: 100 руб. <a href="book.html">Купить</a><br>
+Смотрите: <a href="foto.php4?id=1">Обложка</a></p>`))
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
@@ -108,6 +110,9 @@ func Test_Client_logs_final_status_after_redirect(t *testing.T) {
 	// Then
 	require.NoError(t, err)
 	require.Len(t, books, 1)
+	require.Equal(t, server.URL+"/archive/book.html", books[0].BuyURL)
+	require.Equal(t, server.URL+"/archive/bs.php4?bs=Seller", books[0].SellerURL)
+	require.Equal(t, []alib.Photo{{URL: server.URL + "/archive/foto.php4?id=1", Caption: "Обложка"}}, books[0].Photos)
 	require.Contains(t, logs.String(), "msg=alib.page_downloaded index=0 url="+server.URL+"/redirect attempt=1 status_code=200")
 	require.Contains(t, logs.String(), "msg=alib.page_parsed index=0 url="+server.URL+"/redirect books=1 status_code=200")
 }
