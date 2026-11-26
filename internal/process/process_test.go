@@ -302,8 +302,8 @@ func Test_Run_service_mode_listens_for_callbacks_runs_startup_and_waits_for_list
 	waitForSignal(t, callbacks.started)
 	waitForSignal(t, callbacks.contextDone)
 	select {
-	case <-done:
-		t.Fatal("process stopped before callback listener")
+	case runErr := <-done:
+		t.Fatalf("process stopped before callback listener: %v", runErr)
 	default:
 	}
 	close(listenerRelease)
@@ -418,8 +418,8 @@ func Test_Run_waits_for_refresh_runner_after_listener_stops(t *testing.T) {
 	waitForSignal(t, digestStarted)
 	cancel()
 	select {
-	case <-done:
-		t.Fatal("process stopped before refresh runner")
+	case runErr := <-done:
+		t.Fatalf("process stopped before refresh runner: %v", runErr)
 	default:
 	}
 	close(releaseDigest)

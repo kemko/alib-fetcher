@@ -1329,8 +1329,7 @@ categories = ["detektivy", "poisk"]
 	case <-newSendStarted:
 	case <-time.After(8 * time.Second):
 		cancel()
-		<-done
-		t.Fatal("reloaded digest did not reach Telegram")
+		t.Fatalf("reloaded digest did not reach Telegram (service result: %v)", <-done)
 	}
 	cancel()
 

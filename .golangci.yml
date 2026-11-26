@@ -57,7 +57,7 @@ linters:
       default-signifies-exhaustive: false
       check:
         - switch
-        - map
+        - mapliteral
     funlen:
       lines: 90
       statements: 60
