@@ -196,7 +196,7 @@ same directory, edit it, and repeat the group, mode, and rename steps.
 
 ## Development
 
-Go 1.27.1 is supported. Run the canonical quality gate:
+Use the Go version pinned in the Dockerfile. The minimum version is in `go.mod`. Run the canonical quality gate:
 
 ```bash
 make verify
@@ -225,11 +225,9 @@ images, development tools and the vulnerability database still require network
 access. The final image uses distroless static Debian with no shell or package
 manager, retaining HTTPS certificates, timezone data and the nonroot user.
 
-Dependabot alerts and security updates are enabled in the GitHub repository
-settings. Security updates create PRs for vulnerable Go modules and GitHub
-Actions; Go vendoring is maintained automatically. `.github/dependabot.yml`
-checks ordinary GitHub Actions version updates every Saturday at 09:00
-Europe/Moscow. Its numeric limit of 1000 open version-update PRs effectively
-removes the cap for this repository. Ordinary Go module and Docker version
-updates remain disabled. This does not scan OS packages inside Docker images
-or automatically merge security PRs.
+Dependabot checks Go modules and the Go builder image daily and opens PRs for
+new versions. Go module updates include the vendored sources. CI reads the Go
+version from the builder image tag for tests, lint and vulnerability scanning.
+GitHub Actions updates run every Saturday at 09:00 Europe/Moscow with a limit
+of 1000 open version-update PRs. Dependabot alerts and security updates are
+enabled in the repository settings.

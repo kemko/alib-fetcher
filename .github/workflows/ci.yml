@@ -15,9 +15,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Read Go version from the Docker build image
+        id: toolchain
+        run: |
+          version=$(sed -nE 's/^FROM golang:([0-9]+\.[0-9]+\.[0-9]+)-.* AS build$/\1/p' Dockerfile)
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          go-version: ${{ steps.toolchain.outputs.version }}
           cache: true
       - name: Install golangci-lint
         uses: golangci/golangci-lint-action@v9
@@ -29,8 +35,7 @@ jobs:
       - name: Scan Go vulnerabilities
         uses: golang/govulncheck-action@v1
         with:
-          go-version-input: ''
-          go-version-file: go.mod
+          go-version-input: ${{ steps.toolchain.outputs.version }}
           repo-checkout: false
           go-package: ./...
 

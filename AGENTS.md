@@ -8,7 +8,7 @@ bbolt database, renders pending books as Telegram HTML messages, sends them to
 configured chats, and records successful deliveries in each chat's database.
 
 The module is `github.com/kemko/alib-fetcher`. The executable entry point is
-`./cmd/alib-fetcher`. Go 1.27.1 is the supported toolchain; `make tools`
+`./cmd/alib-fetcher`. The Dockerfile pins the supported Go toolchain (minimum in `go.mod`); `make tools`
 installs the pinned golangci-lint v2 and govulncheck releases.
 
 ## Runtime flow and invariants
@@ -191,9 +191,10 @@ Preserve these semantics:
   requests never log in or push; a successful `master` push publishes
   `ghcr.io/${github.repository}:latest` from its single image build. Ordinary
   quality commands must not be duplicated in CI. Local `make verify` retains all checks.
-- `.github/dependabot.yml`: GitHub Actions version updates run weekly on Saturday
-  at 09:00 Europe/Moscow, with a numeric limit of 1000 open PRs. Ordinary Go module
-  and Docker version updates are disabled; security updates use repository settings.
+- `.github/dependabot.yml`: Dependabot checks Go modules and the Go builder image
+  daily. CI uses the Dockerfile's Go version for checks and vulnerability scanning.
+  GitHub Actions updates run on Saturday at 09:00 Europe/Moscow with a limit of
+  1000 open version-update PRs. Security updates use repository settings.
 
 ## Configuration contract
 
